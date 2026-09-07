@@ -1,36 +1,31 @@
-import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { createQueryClient } from '@/app/query-client';
-import { routeTree } from '@/routeTree.gen';
-
-function renderApp(initialPath = '/') {
-  const queryClient = createQueryClient();
-  const router = createRouter({
-    routeTree,
-    context: { queryClient },
-    history: createMemoryHistory({ initialEntries: [initialPath] }),
-  });
-
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
-}
+import { renderRouterApp } from '@/test/router-test-utils';
 
 describe('root route', () => {
   it('renders the placeholder home page', async () => {
-    renderApp('/');
+    renderRouterApp('/');
 
     expect(await screen.findByText(/TODO: projects list/i)).toBeInTheDocument();
   });
 
-  it('renders the placeholder project page for a dynamic route', async () => {
-    renderApp('/p/demo-project');
+  it('renders the studio shell for a known project', async () => {
+    renderRouterApp('/p/book-consensus-quantum-2026');
 
-    expect(await screen.findByText(/demo-project/i)).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', {
+        name: /Distributed Consensus & Quantum Fault Tolerance/i,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Outline tree coming soon/i)).toBeInTheDocument();
+  });
+
+  it('renders the not-found view for an unknown project id', async () => {
+    renderRouterApp('/p/does-not-exist');
+
+    expect(
+      await screen.findByText(/This project doesn't exist or was removed/i),
+    ).toBeInTheDocument();
   });
 });
