@@ -260,6 +260,29 @@ async def test_create_project_rejects_max_outline_levels_out_of_bounds(
     assert too_high.status_code == 422
 
 
+async def test_create_project_with_too_deep_wizard_outline_leaves_no_orphaned_project(
+    client: AsyncClient,
+) -> None:
+    # `maxOutlineLevels=1` but the outline nests two levels deep - rejected by
+    # `OutlineService.replace` as `ValidationFailed` (422), after the project
+    # row itself has already been committed by `ProjectService.create`. The
+    # 422 must not leave that project (or its sources) behind (issue #49).
+    too_deep_outline = [
+        {
+            "title": "Chapter 1",
+            "children": [{"title": "Section 1.1", "children": []}],
+        }
+    ]
+    response = await client.post(
+        "/api/v1/projects",
+        json={**MINIMAL_PAYLOAD, "maxOutlineLevels": 1, "outline": too_deep_outline},
+    )
+    assert response.status_code == 422, response.text
+
+    list_response = await client.get("/api/v1/projects")
+    assert list_response.json()["total"] == 0
+
+
 async def test_update_project_rejects_bounds_violations(client: AsyncClient) -> None:
     created = await _create_project(client)
 

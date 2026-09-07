@@ -62,7 +62,15 @@ ENV_ALLOWLIST: tuple[str, ...] = (
 # UTF-8/unbuffered output that subprocess_runner.py can stream line by line.
 FORCED_ENV: dict[str, str] = {
     "AUTOGENBOOK_NONINTERACTIVE": "1",
-    "AUTOGENBOOK_ASSUME_YES": "1",
+    # Deliberately NOT `AUTOGENBOOK_ASSUME_YES=1` (issue #79): that makes
+    # `_ask_yes_no` answer *yes* everywhere, including
+    # `book_pipeline.py`'s "Nahradit puvodni JSON touto revizi?"
+    # (default "n") - so an `outline: "generate"` run silently replaces the
+    # LLM's generated structure with its own redundancy-revision pass, with
+    # no run option exposed for it and no event recording the decision.
+    # `AUTOGENBOOK_NONINTERACTIVE` alone already makes every `_ask_yes_no`/
+    # `_ask_text`/`_ask_choice` call fall through to its own default
+    # instead of blocking on stdin.
     "MCP_GATEWAY_ENABLE": "0",
     "PYTHONUNBUFFERED": "1",
     "PYTHONUTF8": "1",
@@ -81,6 +89,8 @@ def build_command(
     work_dir: str | Path,
     options: RunOptions,
     settings: "Settings",
+    *,
+    author: str = "",
 ) -> tuple[list[str], dict[str, str], str]:
     """Build `(argv, env, cwd)` for one book-mode CLI subprocess run.
 
@@ -158,5 +168,16 @@ def build_command(
     # Content-hash-keyed cache of extracted (pre-chunking) document text, shared across
     # every run/project on this deployment; see `rag_kb.py`'s `extract_cache_dir`.
     env["AUTOGENBOOK_KB_EXTRACT_CACHE_DIR"] = settings.kb_extract_cache_dir
+    if author.strip():
+        # Issue #78: `project.authors` was never reaching the CLI -
+        # `book_pipeline.py` only ever reads `g.graph["author"]` (empty for a
+        # fresh graph) or falls back to an interactive prompt that
+        # `AUTOGENBOOK_NONINTERACTIVE=1` turns into `""`. This env var is a
+        # fallback `book_pipeline.py` checks before that prompt, so every
+        # generated book/chapter carries the project's authors regardless of
+        # `RunOptions.outline` (works for both `--use-json` and `--use-txt`,
+        # unlike writing straight into `book_structure.json`, which only the
+        # `--use-json` path would ever read).
+        env["AUTOGENBOOK_BOOK_AUTHOR"] = author.strip()
 
     return argv, env, str(settings.repo_root)

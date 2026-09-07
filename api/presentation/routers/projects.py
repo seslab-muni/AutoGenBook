@@ -113,21 +113,24 @@ async def create_project(
 ) -> Project:
     payload = body.model_dump(exclude={"sources", "outline"})
     project = await service.create(owner_id=owner_id, **payload)
-    if body.sources:
-        # Best-effort atomicity: if any source fails validation (unknown file,
-        # not KB-eligible, duplicate), roll back the just-created project so
-        # the client never sees a half-populated one.
-        try:
-            await _add_sources(project.id, body.sources, source_service)
-        except Exception:
-            await service.delete(project.id)
-            raise
-    wizard_outline = body.outline
     outline: list[OutlineNodeTree] = []
-    if wizard_outline is not None:
-        tree = [entry.model_dump() for entry in wizard_outline]
-        await outline_service.replace(project.id, tree)
-        outline = await _outline_tree(project.id, outline_service)
+    try:
+        # Best-effort atomicity: if a source fails validation (unknown file,
+        # not KB-eligible, duplicate) or the wizard outline fails validation
+        # (e.g. deeper than `maxOutlineLevels`, raised by
+        # `OutlineService.replace` as `ValidationFailed` -> 422), roll back
+        # the just-created project (and any sources already inserted) so the
+        # client never sees a half-populated / orphaned one on a 422 (issue #49).
+        if body.sources:
+            await _add_sources(project.id, body.sources, source_service)
+        wizard_outline = body.outline
+        if wizard_outline is not None:
+            tree = [entry.model_dump() for entry in wizard_outline]
+            await outline_service.replace(project.id, tree)
+            outline = await _outline_tree(project.id, outline_service)
+    except Exception:
+        await service.delete(project.id)
+        raise
     return await _to_schema(project, source_service, outline)
 
 

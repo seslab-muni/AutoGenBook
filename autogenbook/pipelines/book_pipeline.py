@@ -445,7 +445,15 @@ def run_book(args: Any, run_ctx: Optional[RunContext], logger: Any) -> int:
 
         author = str(g.graph.get("author", "") or "").strip()
         if not author:
+            # Non-interactive callers (the API/worker, `AUTOGENBOOK_NONINTERACTIVE=1`)
+            # have no prompt to answer, so `_ask_text` below would silently
+            # return "" and every generated book would be authorless. This
+            # lets a caller that knows the author up front (the API, from
+            # `Project.authors`) supply it without needing a TTY.
+            author = os.environ.get("AUTOGENBOOK_BOOK_AUTHOR", "").strip()
+        if not author:
             author = _ask_text("Zadejte autora knihy", required=True)
+        if author and author != str(g.graph.get("author", "") or "").strip():
             g.graph["author"] = author
             save_graph_json(g, progress_path)
 

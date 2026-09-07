@@ -87,6 +87,58 @@ async def test_create_run_409_when_project_already_has_active_run(client: AsyncC
     assert response.status_code == 409
 
 
+async def test_create_run_rejects_legacy_tex_with_markdown_output(client: AsyncClient) -> None:
+    # `legacyTex` + `outputFormat: "markdown"` used to "succeed" with no
+    # document at all: `content_format="latex"` disables the Markdown
+    # assembly path, and no `tex`/`pdf` output was requested either
+    # (issue #79).
+    project = await _create_project(client, outputFormat="markdown")
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/runs",
+        json={"legacyTex": True, "outputFormat": "markdown"},
+    )
+    assert response.status_code == 422, response.text
+
+    list_response = await client.get(f"/api/v1/projects/{project['id']}/runs")
+    assert list_response.json()["total"] == 0
+
+
+async def test_create_run_rejects_legacy_tex_defaulting_to_project_markdown_format(
+    client: AsyncClient,
+) -> None:
+    project = await _create_project(client, outputFormat="markdown")
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/runs", json={"legacyTex": True}
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_create_run_rejects_audit_book_with_markdown_output(client: AsyncClient) -> None:
+    # `auditBook` needs a `tex_path` the markdown assembly path never
+    # produces - the option used to be silently ignored (issue #79).
+    project = await _create_project(client, outputFormat="markdown")
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/runs",
+        json={"auditBook": True, "outputFormat": "markdown"},
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_create_run_allows_legacy_tex_and_audit_book_with_latex_output(
+    client: AsyncClient,
+) -> None:
+    project = await _create_project(client, outputFormat="markdown")
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/runs",
+        json={"legacyTex": True, "auditBook": True, "outputFormat": "latex"},
+    )
+    assert response.status_code == 202, response.text
+
+
 async def test_get_run(client: AsyncClient) -> None:
     project = await _create_project(client)
     created = await _create_run(client, project["id"])

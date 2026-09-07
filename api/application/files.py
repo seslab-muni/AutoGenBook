@@ -73,7 +73,15 @@ class FileService:
         self._storage = storage
         self._max_bytes = settings.max_upload_mb * 1024 * 1024
 
-    async def upload(self, upload: UploadFile) -> File:
+    async def upload(self, upload: UploadFile, content_length: int | None = None) -> File:
+        # `content_length` is the request's `Content-Length` header (the whole
+        # multipart body, not just this field, so it over-counts by the
+        # boundary/other-fields overhead) - a cheap upper-bound check that
+        # rejects an oversized upload before touching storage at all, instead
+        # of only catching it mid-stream via `_HashingLimitedStream` below.
+        if content_length is not None and content_length > self._max_bytes:
+            raise PayloadTooLarge(f"upload exceeds the {self._max_bytes} byte limit")
+
         filename = _sanitize_filename(upload.filename or "file")
         content_type = upload.content_type
         if not content_type or content_type == "application/octet-stream":

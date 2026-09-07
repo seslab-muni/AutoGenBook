@@ -21,6 +21,12 @@ services:
   web:
     build:
       context: ./app
+    environment:
+      # Consumed by `app/nginx.conf.template`'s `client_max_body_size`
+      # (issue #47) - keep this equal to the API's own `MAX_UPLOAD_MB` above,
+      # or nginx will reject uploads the API would otherwise accept (or the
+      # reverse, uploads nginx admits that the API's own limit still 413s).
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
     ports:
       # `/api/v1` has no authentication (issue #50) - bind to localhost by
       # default so the stack isn't reachable from the network out of the

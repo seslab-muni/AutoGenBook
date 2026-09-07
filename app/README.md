@@ -49,7 +49,7 @@ Copy `.env.example` to `.env` to override the defaults:
 - `VITE_API_PROXY_TARGET` — target for the Vite dev-server's `/api/*` proxy
   (`vite.config.ts`), so `pnpm dev` can talk to a locally running `api/` service.
   Defaults to `http://localhost:8080`. In the Docker Compose stack, nginx
-  (`nginx.conf`) proxies `/api/` to the `api` container instead.
+  (`nginx.conf.template`) proxies `/api/` to the `api` container instead.
 - `VITE_USE_MOCKS` — set to `1` to run `pnpm dev` entirely against the in-browser
   MSW mock API (`src/mocks/`) instead of a real backend; unset/`0` uses
   `VITE_API_PROXY_TARGET`.
