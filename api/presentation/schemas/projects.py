@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field
 
 from api.domain.models import OutputFormat, TargetAudience
 from api.presentation.schemas.common import BaseSchema
+from api.presentation.schemas.outline import OutlineNodeTree, OutlineTreeReplace
 
 
 class ProjectCreate(BaseSchema):
@@ -22,6 +23,10 @@ class ProjectCreate(BaseSchema):
     output_format: OutputFormat = OutputFormat.MARKDOWN
     max_outline_levels: int = Field(default=3, ge=1, le=5)
     additional_requirements: str | None = None
+    # Wizard-only: author the outline atomically with the project (issue #6).
+    # Popped off by the router before `ProjectService.create` sees the rest
+    # of the payload - `ProjectService` itself only knows project metadata.
+    outline: OutlineTreeReplace | None = None
 
 
 class ProjectUpdate(BaseSchema):
@@ -58,7 +63,7 @@ class Project(BaseSchema):
     max_outline_levels: int
     additional_requirements: str | None = None
     sources: list[dict] = Field(default_factory=list)
-    outline: list[dict] = Field(default_factory=list)
+    outline: list[OutlineNodeTree] = Field(default_factory=list)
     last_run_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
