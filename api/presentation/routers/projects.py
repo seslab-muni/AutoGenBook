@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.application.projects import ProjectService
+from api.application.sources import SourceService
 from api.core.db import get_session
 from api.domain.models import Project as ProjectDomain
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.presentation.routers.sources import get_source_service
 from api.presentation.schemas.common import Page, PageParams
 from api.presentation.schemas.projects import (
     Project,
@@ -16,6 +18,7 @@ from api.presentation.schemas.projects import (
     ProjectSummary,
     ProjectUpdate,
 )
+from api.presentation.schemas.sources import source_to_schema
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -29,7 +32,8 @@ def get_project_service(session: AsyncSession = Depends(get_session)) -> Project
     return ProjectService(SqlAlchemyProjectRepository(session))
 
 
-def _to_schema(project: ProjectDomain) -> Project:
+async def _to_schema(project: ProjectDomain, source_service: SourceService) -> Project:
+    rows = await source_service.list_for_embed(project.id)
     return Project(
         id=project.id,
         title=project.title,
@@ -44,12 +48,28 @@ def _to_schema(project: ProjectDomain) -> Project:
         output_format=project.output_format,
         max_outline_levels=project.max_outline_levels,
         additional_requirements=project.additional_requirements,
-        sources=[],
+        sources=[source_to_schema(source, file) for source, file in rows],
         outline=[],
         last_run_id=project.last_run_id,
         created_at=project.created_at,
         updated_at=project.updated_at,
     )
+
+
+async def _add_sources(
+    project_id: uuid.UUID, sources: list, source_service: SourceService
+) -> None:
+    for source_input in sources:
+        await source_service.add(
+            project_id,
+            file_id=source_input.file_id,
+            source_type=source_input.type,
+            authors=source_input.authors,
+            year=source_input.year,
+            doi=source_input.doi,
+            url=source_input.url,
+            description=source_input.description,
+        )
 
 
 @router.get("", response_model=Page[ProjectSummary])
@@ -71,18 +91,30 @@ async def create_project(
     body: ProjectCreate,
     owner_id: uuid.UUID | None = Depends(current_owner),
     service: ProjectService = Depends(get_project_service),
+    source_service: SourceService = Depends(get_source_service),
 ) -> Project:
-    project = await service.create(owner_id=owner_id, **body.model_dump())
-    return _to_schema(project)
+    payload = body.model_dump(exclude={"sources"})
+    project = await service.create(owner_id=owner_id, **payload)
+    if body.sources:
+        # Best-effort atomicity: if any source fails validation (unknown file,
+        # not KB-eligible, duplicate), roll back the just-created project so
+        # the client never sees a half-populated one.
+        try:
+            await _add_sources(project.id, body.sources, source_service)
+        except Exception:
+            await service.delete(project.id)
+            raise
+    return await _to_schema(project, source_service)
 
 
 @router.get("/{project_id}", response_model=Project)
 async def get_project(
     project_id: uuid.UUID,
     service: ProjectService = Depends(get_project_service),
+    source_service: SourceService = Depends(get_source_service),
 ) -> Project:
     project = await service.get(project_id)
-    return _to_schema(project)
+    return await _to_schema(project, source_service)
 
 
 @router.patch("/{project_id}", response_model=Project)
@@ -90,10 +122,11 @@ async def update_project(
     project_id: uuid.UUID,
     body: ProjectUpdate,
     service: ProjectService = Depends(get_project_service),
+    source_service: SourceService = Depends(get_source_service),
 ) -> Project:
     changes = body.model_dump(exclude_unset=True)
     project = await service.update(project_id, changes)
-    return _to_schema(project)
+    return await _to_schema(project, source_service)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -111,6 +144,19 @@ async def delete_project(
 async def duplicate_project(
     project_id: uuid.UUID,
     service: ProjectService = Depends(get_project_service),
+    source_service: SourceService = Depends(get_source_service),
 ) -> Project:
+    original_sources = await source_service.list_for_embed(project_id)
     project = await service.duplicate(project_id)
-    return _to_schema(project)
+    for source, _file in original_sources:
+        await source_service.add(
+            project.id,
+            file_id=source.file_id,
+            source_type=source.source_type,
+            authors=source.authors,
+            year=source.year,
+            doi=source.doi,
+            url=source.url,
+            description=source.description,
+        )
+    return await _to_schema(project, source_service)

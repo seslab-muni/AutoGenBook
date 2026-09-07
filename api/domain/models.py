@@ -61,6 +61,44 @@ class ProjectSummary:
     updated_at: datetime
 
 
+class SourceType(str, enum.Enum):
+    pdf = "pdf"
+    doc = "doc"
+    ppt = "ppt"
+    md = "md"
+    txt = "txt"
+    slides = "slides"
+    arxiv = "arxiv"
+    notes = "notes"
+    bibtex = "bibtex"
+    latex = "latex"
+    url = "url"
+    book = "book"
+    dataset = "dataset"
+
+
+class SourceStatus(str, enum.Enum):
+    ready = "ready"
+    indexed = "indexed"
+    error = "error"
+
+
+@dataclass
+class Source:
+    id: uuid.UUID
+    project_id: uuid.UUID
+    file_id: uuid.UUID
+    source_type: SourceType
+    authors: str | None
+    year: str | None
+    doi: str | None
+    url: str | None
+    description: str | None
+    chunks_count: int | None
+    status: SourceStatus
+    created_at: datetime
+
+
 class FileKind(str, enum.Enum):
     upload = "upload"
     artifact = "artifact"

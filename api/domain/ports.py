@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import BinaryIO, Protocol
 
-from api.domain.models import File, Project
+from api.domain.models import File, Project, Source
 
 
 class ProjectRepository(Protocol):
@@ -51,3 +51,23 @@ class FileRepository(Protocol):
     async def delete(self, file: File) -> None: ...
 
     async def is_referenced(self, file_id: uuid.UUID) -> bool: ...
+
+
+class SourceRepository(Protocol):
+    async def add(self, source: Source) -> Source: ...
+
+    async def get(self, project_id: uuid.UUID, source_id: uuid.UUID) -> Source | None: ...
+
+    async def get_by_project_and_file(
+        self, project_id: uuid.UUID, file_id: uuid.UUID
+    ) -> Source | None: ...
+
+    async def list(
+        self, project_id: uuid.UUID, limit: int, offset: int
+    ) -> tuple[list[Source], int]: ...
+
+    async def list_all(self, project_id: uuid.UUID) -> list[Source]: ...
+
+    async def update(self, source: Source) -> Source: ...
+
+    async def delete(self, source: Source) -> None: ...

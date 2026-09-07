@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.domain.models import File
+from api.infrastructure.db.models import SourceRecord
 
 
 class SqlAlchemyFileRepository:
@@ -33,6 +34,8 @@ class SqlAlchemyFileRepository:
         await self._session.commit()
 
     async def is_referenced(self, file_id: uuid.UUID) -> bool:
-        # Extended by later issues (project sources, run artifacts) once those
-        # tables exist; nothing references files yet.
-        return False
+        # Extended by later issues (run artifacts) once those tables exist.
+        result = await self._session.scalar(
+            select(SourceRecord.id).where(SourceRecord.file_id == file_id).limit(1)
+        )
+        return result is not None
