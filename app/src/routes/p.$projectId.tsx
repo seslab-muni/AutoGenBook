@@ -9,6 +9,7 @@ import { AppHeader } from '@/components/layout/app-header';
 import { NotFoundView } from '@/components/layout/not-found-view';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ProjectSettingsDialog } from '@/features/projects/components/project-settings-dialog';
+import { SourcesDialog } from '@/features/sources/components/sources-dialog';
 
 export interface ProjectSearch {
   node?: string;
@@ -66,6 +67,7 @@ function ProjectLayout() {
       <AppHeader project={current} />
       <Outlet />
       <ProjectSettingsDialog project={current} />
+      <SourcesDialog projectId={projectId} />
     </div>
   );
 }

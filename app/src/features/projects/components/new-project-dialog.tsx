@@ -18,12 +18,15 @@ import {
   formValuesToCreate,
   isProjectFormValid,
 } from '@/features/projects/lib/project-form';
+import { SourcePicker } from '@/features/sources/components/source-picker';
+import type { PendingSource } from '@/features/sources/lib/pending-source';
+import { toSourceCreate } from '@/features/sources/lib/pending-source';
 import { useUiStore } from '@/stores/ui-store';
 
 /**
  * Mounted once at the root layout so it's reachable both from the projects hub and from
- * `AppHeader`'s "New Project" action while inside a project. Out of scope (issue #17):
- * attaching sources or authoring an outline at creation time — those land with #18/#19.
+ * `AppHeader`'s "New Project" action while inside a project. Outline authoring at creation time
+ * is still out of scope (lands with #19); sources can now be attached via `SourcePicker` (#18).
  */
 export function NewProjectDialog() {
   const activeModal = useUiStore((state) => state.activeModal);
@@ -31,6 +34,7 @@ export function NewProjectDialog() {
   const open = activeModal === 'new-project';
   const navigate = useNavigate();
   const [values, setValues] = useState(DEFAULT_PROJECT_FORM_VALUES);
+  const [pendingSources, setPendingSources] = useState<PendingSource[]>([]);
   const createMutation = useCreateProjectMutation();
 
   // Reset the form every time the dialog opens (adjusting state during render, per
@@ -41,19 +45,23 @@ export function NewProjectDialog() {
     setWasOpen(open);
     if (open) {
       setValues(DEFAULT_PROJECT_FORM_VALUES);
+      setPendingSources([]);
     }
   }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!isProjectFormValid(values)) return;
-    createMutation.mutate(formValuesToCreate(values), {
-      onSuccess: (project) => {
-        toast.success(`"${project.title}" created`);
-        closeModal();
-        void navigate({ to: '/p/$projectId', params: { projectId: project.id } });
+    createMutation.mutate(
+      { ...formValuesToCreate(values), sources: toSourceCreate(pendingSources) },
+      {
+        onSuccess: (project) => {
+          toast.success(`"${project.title}" created`);
+          closeModal();
+          void navigate({ to: '/p/$projectId', params: { projectId: project.id } });
+        },
       },
-    });
+    );
   }
 
   return (
@@ -62,8 +70,8 @@ export function NewProjectDialog() {
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
-            Set up the generation parameters. Sources and outline can be added once the project
-            exists.
+            Set up the generation parameters and optionally attach sources. The outline can be added
+            once the project exists.
           </DialogDescription>
         </DialogHeader>
         <form id="new-project-form" onSubmit={handleSubmit}>
@@ -73,6 +81,10 @@ export function NewProjectDialog() {
             onChange={(patch) => setValues((current) => ({ ...current, ...patch }))}
           />
         </form>
+        <div className="space-y-1.5 border-t pt-4">
+          <p className="text-xs font-semibold text-foreground">Sources (optional)</p>
+          <SourcePicker value={pendingSources} onChange={setPendingSources} />
+        </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={closeModal}>
             Cancel
