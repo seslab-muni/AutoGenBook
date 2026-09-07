@@ -1,5 +1,14 @@
 import { memo, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, FileText, Lock, Plus, Settings2, Trash2 } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Loader2,
+  Lock,
+  Plus,
+  Settings2,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
@@ -35,6 +44,8 @@ interface OutlineRowProps {
   maxOutlineLevels: number;
   selectedNodeId: string | null;
   isCollapsed: (nodeId: string) => boolean;
+  /** Whether the active run (if any) is still drafting this node — shows a spinner (issue #21). */
+  isGenerating?: (node: OutlineNode) => boolean;
   actions: OutlineRowActions;
 }
 
@@ -51,6 +62,7 @@ function OutlineRowComponent({
   maxOutlineLevels,
   selectedNodeId,
   isCollapsed,
+  isGenerating,
   actions,
 }: OutlineRowProps) {
   const { node, children } = entry;
@@ -58,6 +70,7 @@ function OutlineRowComponent({
   const collapsed = isCollapsed(node.id);
   const isSelected = selectedNodeId === node.id;
   const canAddChild = node.level < maxOutlineLevels;
+  const generating = isGenerating?.(node) ?? false;
   const rowRef = useRef<HTMLDivElement>(null);
   const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
 
@@ -214,6 +227,12 @@ function OutlineRowComponent({
               </button>
             </div>
 
+            {generating ? (
+              <Loader2
+                className="size-3 shrink-0 animate-spin text-primary"
+                aria-label="Generating"
+              />
+            ) : null}
             <StatusBadge status={node.status} className="ml-0.5 shrink-0" />
           </div>
         </ContextMenuTrigger>
@@ -264,6 +283,7 @@ function OutlineRowComponent({
               maxOutlineLevels={maxOutlineLevels}
               selectedNodeId={selectedNodeId}
               isCollapsed={isCollapsed}
+              {...(isGenerating ? { isGenerating } : {})}
               actions={actions}
             />
           ))}

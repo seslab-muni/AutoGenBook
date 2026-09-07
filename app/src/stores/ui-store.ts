@@ -10,7 +10,8 @@ import { persist } from 'zustand/middleware';
  * `app/providers.tsx` and `components/layout/theme-toggle.tsx`), which
  * already persists it and drives the `sonner` toaster's theme.
  */
-export type ModalKind = 'new-project' | 'settings' | 'sources' | 'export';
+export type ModalKind =
+  'new-project' | 'settings' | 'sources' | 'export' | 'start-run' | 'run-history';
 
 interface UiState {
   outlineOpen: boolean;

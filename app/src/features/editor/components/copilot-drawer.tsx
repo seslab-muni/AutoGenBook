@@ -1,16 +1,17 @@
-import { Bot } from 'lucide-react';
-
-import type { OutlineNode } from '@/api/types';
+import type { OutlineNode, Project } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CitationsPanel } from '@/features/editor/components/citations-panel';
 import { ReviewPanel } from '@/features/editor/components/review-panel';
+import { CopilotPanel } from '@/features/runs/components/copilot-panel';
 
 export type CopilotTab = 'copilot' | 'citations' | 'review';
 
 interface CopilotDrawerProps {
+  projectId: string;
+  project: Project;
   node: OutlineNode | null | undefined;
   tab: CopilotTab;
   onTabChange: (tab: CopilotTab) => void;
@@ -18,12 +19,18 @@ interface CopilotDrawerProps {
 }
 
 /**
- * The right-hand drawer's tab shell. The `copilot` tab is #21's territory
- * (run-triggering quick actions over SSE) — left as the existing placeholder
- * here; this only wires up `citations`/`review`, bound to the selected
- * node's real `ragCitations`/`reviewerScore`/`reviewerNotes`.
+ * The right-hand drawer's tab shell: `copilot` hosts #21's run-triggering
+ * quick actions/event log (`CopilotPanel`), `citations`/`review` are bound to
+ * the selected node's real `ragCitations`/`reviewerScore`/`reviewerNotes`.
  */
-export function CopilotDrawer({ node, tab, onTabChange, onOpenSource }: CopilotDrawerProps) {
+export function CopilotDrawer({
+  projectId,
+  project,
+  node,
+  tab,
+  onTabChange,
+  onOpenSource,
+}: CopilotDrawerProps) {
   return (
     <Tabs
       value={tab}
@@ -39,11 +46,7 @@ export function CopilotDrawer({ node, tab, onTabChange, onOpenSource }: CopilotD
       </PaneToolbar>
 
       <TabsContent value="copilot" className="min-h-0 overflow-auto">
-        <EmptyState
-          icon={Bot}
-          title="Multi-agent stream coming soon"
-          description="Agent logs and quick actions land here in issue #21."
-        />
+        <CopilotPanel projectId={projectId} project={project} selectedNodeId={node?.id ?? null} />
       </TabsContent>
 
       <TabsContent value="citations" className="min-h-0 overflow-auto">

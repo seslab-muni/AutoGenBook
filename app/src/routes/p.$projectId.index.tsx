@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
 import { outline } from '@/api/queries/outline';
+import { projects } from '@/api/queries/projects';
 import { StudioLayout } from '@/components/layout/studio-layout';
 import { CopilotDrawer, type CopilotTab } from '@/features/editor/components/copilot-drawer';
 import { EditorPane } from '@/features/editor/components/editor-pane';
@@ -18,7 +19,11 @@ export const Route = createFileRoute('/p/$projectId/')({
 function StudioPage() {
   const { projectId } = Route.useParams();
   const { node, tab } = ProjectRoute.useSearch();
-  const { project } = ProjectRoute.useLoaderData();
+  const { project: loaderProject } = ProjectRoute.useLoaderData();
+  // Re-subscribe (rather than relying on the loader snapshot alone) so a run finishing — which
+  // sets/updates `lastRunId` — is reflected here without a full route reload; see `p.$projectId.tsx`.
+  const { data: liveProject } = useQuery(projects.detail(projectId));
+  const project = liveProject ?? loaderProject;
   const navigate = useNavigate({ from: Route.fullPath });
   useDocumentTitle(project.title);
 
@@ -65,6 +70,8 @@ function StudioPage() {
       }
       copilotPane={
         <CopilotDrawer
+          projectId={projectId}
+          project={project}
           node={selectedNode}
           tab={tab === 'settings' ? 'copilot' : (tab ?? 'copilot')}
           onTabChange={handleTabChange}

@@ -1,20 +1,228 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { AlertTriangle, ArrowLeft, RotateCw, Square } from 'lucide-react';
+import { toast } from 'sonner';
 
+import { ApiError } from '@/api/client';
+import { runs as runQueries, useCancelRunMutation } from '@/api/queries/runs';
+import type { RunEvent } from '@/api/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
+import { RunEventLog } from '@/features/runs/components/run-event-log';
+import {
+  formatCost,
+  formatDuration,
+  formatElapsed,
+  formatTokens,
+  RUN_KIND_LABELS,
+  RUN_STATUS_CLASSES,
+  RUN_STATUS_LABELS,
+} from '@/features/runs/lib/run-format';
+import { useRunStream } from '@/features/runs/hooks/use-run-stream';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 export const Route = createFileRoute('/p/$projectId/runs/$runId')({
   component: RunPage,
 });
 
+const RUNNING_STATUSES = new Set(['queued', 'running']);
+const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+
+function mergeEvents(pages: RunEvent[], live: RunEvent[]): RunEvent[] {
+  const byId = new Map<number, RunEvent>();
+  for (const event of pages) byId.set(event.seq, event);
+  for (const event of live) byId.set(event.seq, event);
+  return [...byId.values()].sort((a, b) => a.seq - b.seq);
+}
+
 function RunPage() {
-  const { runId } = Route.useParams();
-  useDocumentTitle(`Run ${runId}`);
+  const { projectId, runId } = Route.useParams();
+  const navigate = useNavigate();
+  const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+
+  const { data: run, isPending } = useQuery(runQueries.detail(runId));
+  useDocumentTitle(run ? `${RUN_KIND_LABELS[run.kind]} · Run` : `Run ${runId}`);
+
+  // Fetches the run's full history once (a generous limit rather than "load more" paging via
+  // afterSeq — the mock's simulated runs top out at a few dozen events; see `RunEventLog`'s
+  // note on the same simplification for the live view) and merges it with whatever
+  // `useRunStream` has appended live, so a run opened after it already finished still shows
+  // its complete log.
+  const { data: historyPage } = useQuery(runQueries.events(runId, { limit: 500 }));
+  const { events: liveEvents } = useRunStream(runId, projectId);
+  const events = useMemo(
+    () => mergeEvents(historyPage?.items ?? [], liveEvents),
+    [historyPage, liveEvents],
+  );
+
+  const { data: artifacts } = useQuery(runQueries.artifacts(runId));
+
+  const cancelMutation = useCancelRunMutation();
+
+  function handleCancel() {
+    if (!run) return;
+    cancelMutation.mutate(run.id, {
+      onSuccess: () => {
+        toast.success('Run cancelled');
+        setConfirmCancelOpen(false);
+      },
+      onError: (error) => {
+        const problem = error instanceof ApiError ? error.problem : undefined;
+        toast.error(problem?.detail ?? problem?.title ?? 'Could not cancel the run');
+        setConfirmCancelOpen(false);
+      },
+    });
+  }
+
+  if (isPending) {
+    return (
+      <div className="space-y-3 p-6">
+        <Skeleton className="h-6 w-64" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    );
+  }
+
+  if (!run) {
+    return <EmptyState title="Run not found" description={`No run with id ${runId}.`} />;
+  }
+
+  const isRunning = RUNNING_STATUSES.has(run.status);
+  const isTerminal = TERMINAL_STATUSES.has(run.status);
+  const duration = isTerminal ? formatDuration(run.startedAt, run.finishedAt) : formatElapsed(run);
+  // Captured as a local so the closure below narrows to `string` (a `run.targetNodeId` property
+  // access wouldn't narrow across the closure boundary under `exactOptionalPropertyTypes`).
+  const regenerateAgainNodeId = run.kind === 'regenerate_section' ? run.targetNodeId : null;
 
   return (
-    <EmptyState
-      title="Run detail coming soon"
-      description={`The run timeline and artifacts for ${runId} land in issue #21.`}
-    />
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b p-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Back to project"
+            onClick={() => void navigate({ to: '/p/$projectId', params: { projectId } })}
+          >
+            <ArrowLeft />
+          </Button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="truncate text-sm font-bold text-foreground">
+                {RUN_KIND_LABELS[run.kind]}
+              </h1>
+              <span
+                className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-medium ${RUN_STATUS_CLASSES[run.status]}`}
+              >
+                {RUN_STATUS_LABELS[run.status]}
+              </span>
+              {run.resumable ? <Badge variant="outline">Resumable</Badge> : null}
+            </div>
+            <p className="truncate text-xs text-muted-foreground">
+              {run.targetNodeId ? `Target node ${run.targetNodeId} · ` : ''}
+              Queued {new Date(run.queuedAt).toLocaleString()}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {regenerateAgainNodeId ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                void navigate({
+                  to: '/p/$projectId',
+                  params: { projectId },
+                  search: { node: regenerateAgainNodeId },
+                })
+              }
+            >
+              <RotateCw />
+              Regenerate again
+            </Button>
+          ) : null}
+          {isRunning ? (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => setConfirmCancelOpen(true)}
+            >
+              <Square />
+              Cancel
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {run.error ? (
+        <div className="m-4 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span>{run.error}</span>
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 overflow-hidden p-4 md:grid-cols-[2fr_1fr]">
+        <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border">
+          <div className="border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
+            Event log
+          </div>
+          <RunEventLog events={events} className="flex-1 p-2" />
+        </div>
+
+        <div className="space-y-4 overflow-y-auto">
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg border p-3 text-xs">
+            <dt className="text-muted-foreground">Duration</dt>
+            <dd className="text-right font-mono">{duration ?? '—'}</dd>
+            <dt className="text-muted-foreground">Tokens</dt>
+            <dd className="text-right font-mono">{formatTokens(run.totalTokens) ?? '—'}</dd>
+            <dt className="text-muted-foreground">Cost</dt>
+            <dd className="text-right font-mono">{formatCost(run.totalCostUsd) ?? '—'}</dd>
+            <dt className="text-muted-foreground">Exit code</dt>
+            <dd className="text-right font-mono">{run.exitCode ?? '—'}</dd>
+          </dl>
+
+          <div className="rounded-lg border">
+            <div className="border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
+              Artifacts
+            </div>
+            <div className="p-3">
+              {artifacts && artifacts.items.length > 0 ? (
+                <ul className="space-y-1.5 text-xs">
+                  {artifacts.items.map((artifact) => (
+                    <li key={artifact.fileId} className="flex items-center justify-between gap-2">
+                      <span className="truncate">{artifact.filename}</span>
+                      <span className="shrink-0 text-muted-foreground">{artifact.kind}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-muted-foreground">No artifacts yet.</p>
+              )}
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                Downloading artifacts lands in issue #22.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={confirmCancelOpen}
+        onOpenChange={setConfirmCancelOpen}
+        title="Cancel this run?"
+        description="The CLI process is stopped; any sections it already drafted stay as they are."
+        confirmLabel="Cancel run"
+        cancelLabel="Keep running"
+        onConfirm={handleCancel}
+      />
+    </div>
   );
 }

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ListTree, Plus } from 'lucide-react';
+import { ListTree, Plus, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
-import { outline, useCreateOutlineNodeMutation, useDeleteOutlineNodeMutation } from '@/api/queries/outline';
+import {
+  outline,
+  useCreateOutlineNodeMutation,
+  useDeleteOutlineNodeMutation,
+} from '@/api/queries/outline';
 import type { OutlineNode } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
@@ -15,7 +19,9 @@ import { NodePropertiesSheet } from '@/features/outline/components/node-properti
 import { OutlineDraftEditor } from '@/features/outline/components/outline-draft-editor';
 import { OutlineRow, type OutlineRowActions } from '@/features/outline/components/outline-row';
 import { ancestorIds, buildTree, type OutlineTree } from '@/features/outline/model';
+import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { useOutlineStore } from '@/stores/outline-store';
+import { useUiStore } from '@/stores/ui-store';
 
 interface OutlinePaneProps {
   projectId: string;
@@ -45,6 +51,18 @@ export function OutlinePane({
 
   const createMutation = useCreateOutlineNodeMutation(projectId);
   const deleteMutation = useDeleteOutlineNodeMutation(projectId);
+  const openModal = useUiStore((state) => state.openModal);
+  const { activeRun, sectionNodeIds } = useActiveRun(projectId);
+
+  const isGenerating = useCallback(
+    (node: OutlineNode) => {
+      if (!activeRun) return false;
+      if (activeRun.kind === 'regenerate_section') return activeRun.targetNodeId === node.id;
+      if (activeRun.kind === 'full') return !sectionNodeIds.has(node.cliKey ?? node.id);
+      return false;
+    },
+    [activeRun, sectionNodeIds],
+  );
 
   // Auto-expand the path to the selected node whenever the selection changes.
   useEffect(() => {
@@ -162,11 +180,27 @@ export function OutlinePane({
           <EmptyState
             icon={ListTree}
             title="No outline yet"
-            description="Add a chapter, or author the whole outline at once."
+            description="Add a chapter, author the whole outline at once, or let a full run plan and draft it."
             action={
-              <Button type="button" variant="outline" size="sm" onClick={() => setDraftEditorOpen(true)}>
-                Paste or author an outline
-              </Button>
+              <div className="flex flex-col items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDraftEditorOpen(true)}
+                >
+                  Paste or author an outline
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openModal('start-run')}
+                >
+                  <Sparkles className="size-3.5" />
+                  Plan outline with AutoGenBook
+                </Button>
+              </div>
             }
           />
         ) : (
@@ -180,6 +214,7 @@ export function OutlinePane({
               maxOutlineLevels={maxOutlineLevels}
               selectedNodeId={selectedNodeId}
               isCollapsed={isCollapsed}
+              isGenerating={isGenerating}
               actions={actions}
             />
           ))
