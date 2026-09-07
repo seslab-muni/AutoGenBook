@@ -431,6 +431,7 @@ class KnowledgeBase:
             if ext not in SUPPORTED_EXTS:
                 continue
 
+            chunks_before = len(chunks)
             try:
                 source_id = _source_id_from_path(file_path, dir_path)
                 file_cache_path = None
@@ -526,6 +527,23 @@ class KnowledgeBase:
                                     cite_key=cite_key,
                                 )
                             )
+                if len(chunks) == chunks_before:
+                    # A matching extension that still contributed nothing is silent
+                    # otherwise: no exception is raised (this isn't the except branch
+                    # below), so without this the file just vanishes from the KB with
+                    # no trace beyond the generic "RAG bude prázdný" warning below (or,
+                    # if other files did produce chunks, no trace at all).
+                    if ext == ".pdf":
+                        hint = (
+                            " Pravděpodobně jde o naskenovaný/obrázkový PDF bez textové vrstvy - "
+                            "zkuste povolit OCR pomocí AUTOGENBOOK_KB_OCR=1."
+                        )
+                    else:
+                        hint = " Soubor je pravděpodobně prázdný."
+                    print(
+                        f"[KB] Varování: soubor {file_path} neobsahoval žádný extrahovatelný text "
+                        f"(0 chunků).{hint}"
+                    )
             except Exception as e:
                 # Continue on errors (e.g., scanned PDFs with no text).
                 # You can inspect and add OCR later if needed.
