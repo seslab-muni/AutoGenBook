@@ -65,6 +65,7 @@ Runs are single-process and synchronous; scale by running multiple independent C
 
 - Preserve `--out-dir` to keep section files, structure graphs, and logs. (`autogenbook/state.py:RunContext`, `book_builder.py:generate_contents`)
 - Preserve `.kb_cache` inside `--out-dir` to avoid rebuilding KBs. (`rag_kb.py:KnowledgeBase.build_from_directory`)
+- In the Docker stack, also preserve the separate `kb_extract_cache` volume (`/app/kb_cache`) — the content-hash-keyed cache of extracted document text, shared across every project/run rather than scoped to one `--out-dir`. (`docker-compose.yml`, `rag_kb.py:KnowledgeBase.build_from_directory`)
 
 ## Security hardening checklist
 

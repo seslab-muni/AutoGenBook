@@ -7,9 +7,10 @@ import os
 import pickle
 import re
 import unicodedata
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple
 
 from rank_bm25 import BM25Okapi
 from autogenbook.retrieval.sanitize import sanitize_context_text
@@ -187,30 +188,97 @@ def _file_sha256(path: Path, block_size: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+# Bump when the on-disk payload shape or the semantics of a cached extraction
+# change, so old entries already sitting in a long-lived, cross-deployment cache
+# volume are transparently invalidated instead of silently going on serving
+# pre-fix output forever.
+_EXTRACTION_CACHE_VERSION = 1
+
+
 def _extraction_cache_path(cache_dir: Path, file_sha256: str, params_tag: str) -> Path:
-    key = hashlib.sha256(f"{file_sha256}:{params_tag}".encode("utf-8")).hexdigest()[:40]
+    key = hashlib.sha256(
+        f"v{_EXTRACTION_CACHE_VERSION}:{file_sha256}:{params_tag}".encode("utf-8")
+    ).hexdigest()[:40]
     return cache_dir / f"extract_{key}.json"
 
 
-def _load_extraction_cache(cache_path: Path) -> Optional[dict]:
+def _load_extraction_cache(cache_path: Path, required_key: str) -> Optional[dict]:
+    """
+    Loads a cached extraction payload, but only if it parses *and* has the shape
+    the caller expects. A cache is only ever allowed to make extraction faster,
+    never less correct than having no cache at all — so any corruption, permission
+    error, or schema mismatch (an older/newer payload format, e.g. after a future
+    change to this function) is treated as an ordinary cache miss rather than
+    raising and silently dropping the whole file from the knowledge base.
+    """
     if not cache_path.exists():
         return None
     try:
-        return json.loads(cache_path.read_text(encoding="utf-8"))
-    except Exception:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[KB] Varování: poškozená cache položka {cache_path} ({e}). Ignoruji cache.")
         return None
+    if not isinstance(payload, dict) or required_key not in payload:
+        print(f"[KB] Varování: neočekávaný formát cache položky {cache_path}. Ignoruji cache.")
+        return None
+    if required_key == "text":
+        return payload if isinstance(payload["text"], str) else None
+    pages = payload.get("pages")
+    if not isinstance(pages, list) or not all(
+        isinstance(p, dict) and isinstance(p.get("loc"), str) and isinstance(p.get("text"), str)
+        for p in pages
+    ):
+        return None
+    return payload
 
 
 def _store_extraction_cache(cache_path: Path, payload: dict) -> None:
-    # Write-then-rename so a run reading this entry concurrently with another
-    # run writing it never sees a partial file (os.replace is atomic on the
-    # same filesystem, unlike writing cache_path directly).
+    # Write-then-rename so a run reading this entry concurrently with another run
+    # writing it never sees a partial file (os.replace is atomic on the same
+    # filesystem, unlike writing cache_path directly). The temp suffix mixes a PID
+    # with a UUID: the PID alone can collide across independently PID-namespaced
+    # worker containers sharing this same cache volume.
+    tmp_path = cache_path.with_name(cache_path.name + f".tmp-{os.getpid()}-{uuid.uuid4().hex}")
     try:
-        tmp_path = cache_path.with_name(cache_path.name + f".tmp-{os.getpid()}")
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp_path, cache_path)
     except Exception:
-        pass
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _cached_text_extraction(
+    file_cache_path: Optional[Path], force_rebuild: bool, extractor: Callable[[], str]
+) -> str:
+    """Shared cache-or-extract path for extractors returning one text blob (.txt/.md, .docx)."""
+    if file_cache_path is not None and not force_rebuild:
+        cached = _load_extraction_cache(file_cache_path, "text")
+        if cached is not None:
+            return cached["text"]
+    text = extractor()
+    if file_cache_path is not None:
+        _store_extraction_cache(file_cache_path, {"text": text})
+    return text
+
+
+def _cached_pages_extraction(
+    file_cache_path: Optional[Path],
+    force_rebuild: bool,
+    extractor: Callable[[], List[Tuple[str, str]]],
+) -> List[Tuple[str, str]]:
+    """Shared cache-or-extract path for extractors returning (loc, text) pairs (.pdf pages, .pptx slides)."""
+    if file_cache_path is not None and not force_rebuild:
+        cached = _load_extraction_cache(file_cache_path, "pages")
+        if cached is not None:
+            return [(p["loc"], p["text"]) for p in cached["pages"]]
+    pages = extractor()
+    if file_cache_path is not None:
+        _store_extraction_cache(
+            file_cache_path, {"pages": [{"loc": loc, "text": text} for loc, text in pages]}
+        )
+    return pages
 
 
 def _dir_fingerprint(dir_path: Path) -> str:
@@ -306,7 +374,19 @@ class KnowledgeBase:
         cache_dir = cache_dir or (Path.cwd() / ".autogenbook_kb_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Resolved before the whole-directory cache lookup below so a change to any of
+        # them (independent of the directory's own contents) correctly invalidates that
+        # cache instead of it silently returning a `KnowledgeBase` built under the old
+        # settings.
+        enable_ocr = enable_ocr if enable_ocr is not None else _env_bool("AUTOGENBOOK_KB_OCR", False)
+        heading_chunks = (
+            heading_chunks if heading_chunks is not None else _env_bool("AUTOGENBOOK_KB_HEADING_CHUNKS", False)
+        )
+        ocr_lang = ocr_lang or _env_str("AUTOGENBOOK_KB_OCR_LANG", "eng")
+
         fp = _dir_fingerprint(dir_path)
+        config_tag = f"ocr={int(enable_ocr)}:lang={ocr_lang}:heading={int(heading_chunks)}"
+        combined_fp = hashlib.sha256(f"{fp}:{config_tag}".encode("utf-8")).hexdigest()
         cache_key = hashlib.sha256(str(dir_path).encode("utf-8")).hexdigest()[:16]
         meta_path = cache_dir / f"kb_{cache_key}.meta.json"
         data_path = cache_dir / f"kb_{cache_key}.pkl"
@@ -314,7 +394,7 @@ class KnowledgeBase:
         if not force_rebuild and meta_path.exists() and data_path.exists():
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                if meta.get("fingerprint") == fp:
+                if meta.get("fingerprint") == combined_fp:
                     with open(data_path, "rb") as f:
                         obj = pickle.load(f)
                     if isinstance(obj, KnowledgeBase):
@@ -323,12 +403,6 @@ class KnowledgeBase:
             except Exception:
                 # fall through to rebuild
                 pass
-
-        enable_ocr = enable_ocr if enable_ocr is not None else _env_bool("AUTOGENBOOK_KB_OCR", False)
-        heading_chunks = (
-            heading_chunks if heading_chunks is not None else _env_bool("AUTOGENBOOK_KB_HEADING_CHUNKS", False)
-        )
-        ocr_lang = ocr_lang or _env_str("AUTOGENBOOK_KB_OCR_LANG", "eng")
 
         # Per-file extraction cache: keyed by file *content* hash rather than path, so the
         # same document re-uploaded under a different name, or attached to a different
@@ -340,7 +414,14 @@ class KnowledgeBase:
             configured = _env_str("AUTOGENBOOK_KB_EXTRACT_CACHE_DIR", "")
             extract_cache_dir = Path(configured).expanduser().resolve() if configured else None
         if extract_cache_dir is not None:
-            extract_cache_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                extract_cache_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                print(
+                    f"[KB] Varování: nelze vytvořit extract cache adresář {extract_cache_dir} "
+                    f"({e}). Extract cache je pro tento běh vypnutá."
+                )
+                extract_cache_dir = None
 
         chunks: List[Chunk] = []
         for file_path in sorted(dir_path.rglob("*")):
@@ -353,25 +434,21 @@ class KnowledgeBase:
             try:
                 source_id = _source_id_from_path(file_path, dir_path)
                 file_cache_path = None
-                if extract_cache_dir is not None:
+                # PDF+OCR is excluded: OCR is an external, non-deterministic process
+                # (rendering pages to images, then Tesseract), and a transient failure
+                # there must not be baked into this persistent, cross-run/cross-project
+                # cache forever — unlike the other extractors, which are pure functions
+                # of the file's bytes and always safe to cache.
+                cache_eligible = extract_cache_dir is not None and not (ext == ".pdf" and enable_ocr)
+                if cache_eligible:
                     file_sha256 = _file_sha256(file_path)
-                    params_tag = (
-                        f"pdf:ocr={int(enable_ocr)}:lang={ocr_lang}" if ext == ".pdf" else ext
-                    )
+                    params_tag = f"{ext}:ocr={int(enable_ocr)}:lang={ocr_lang}" if ext == ".pdf" else ext
                     file_cache_path = _extraction_cache_path(extract_cache_dir, file_sha256, params_tag)
 
                 if ext in {".txt", ".md"}:
-                    cached = (
-                        _load_extraction_cache(file_cache_path)
-                        if file_cache_path and not force_rebuild
-                        else None
+                    text = _cached_text_extraction(
+                        file_cache_path, force_rebuild, lambda: _read_txt_md(file_path)
                     )
-                    if cached is not None:
-                        text = cached["text"]
-                    else:
-                        text = _read_txt_md(file_path)
-                        if file_cache_path is not None:
-                            _store_extraction_cache(file_cache_path, {"text": text})
                     if heading_chunks and ext == ".md":
                         parts = _chunk_text_by_headings(text, chunk_chars, overlap_chars)
                     else:
@@ -392,20 +469,11 @@ class KnowledgeBase:
                         )
 
                 elif ext == ".pdf":
-                    cached = (
-                        _load_extraction_cache(file_cache_path)
-                        if file_cache_path and not force_rebuild
-                        else None
+                    pages = _cached_pages_extraction(
+                        file_cache_path,
+                        force_rebuild,
+                        lambda: _read_pdf(file_path, enable_ocr=enable_ocr, ocr_lang=ocr_lang)[1],
                     )
-                    if cached is not None:
-                        pages = [(p["loc"], p["text"]) for p in cached["pages"]]
-                    else:
-                        _, pages = _read_pdf(file_path, enable_ocr=enable_ocr, ocr_lang=ocr_lang)
-                        if file_cache_path is not None:
-                            _store_extraction_cache(
-                                file_cache_path,
-                                {"pages": [{"loc": loc, "text": text} for loc, text in pages]},
-                            )
                     for loc, page_text in pages:
                         for j, chunk in enumerate(_chunk_text(page_text, chunk_chars, overlap_chars), start=1):
                             rid = _make_rid(source_id, loc, j)
@@ -422,17 +490,9 @@ class KnowledgeBase:
                             )
 
                 elif ext == ".docx":
-                    cached = (
-                        _load_extraction_cache(file_cache_path)
-                        if file_cache_path and not force_rebuild
-                        else None
+                    text = _cached_text_extraction(
+                        file_cache_path, force_rebuild, lambda: _read_docx(file_path)
                     )
-                    if cached is not None:
-                        text = cached["text"]
-                    else:
-                        text = _read_docx(file_path)
-                        if file_cache_path is not None:
-                            _store_extraction_cache(file_cache_path, {"text": text})
                     for j, chunk in enumerate(_chunk_text(text, chunk_chars, overlap_chars), start=1):
                         loc_base = "chunk"
                         rid = _make_rid(source_id, loc_base, j)
@@ -449,20 +509,9 @@ class KnowledgeBase:
                         )
 
                 elif ext == ".pptx":
-                    cached = (
-                        _load_extraction_cache(file_cache_path)
-                        if file_cache_path and not force_rebuild
-                        else None
+                    slides = _cached_pages_extraction(
+                        file_cache_path, force_rebuild, lambda: _read_pptx(file_path)
                     )
-                    if cached is not None:
-                        slides = [(p["loc"], p["text"]) for p in cached["pages"]]
-                    else:
-                        slides = _read_pptx(file_path)
-                        if file_cache_path is not None:
-                            _store_extraction_cache(
-                                file_cache_path,
-                                {"pages": [{"loc": loc, "text": text} for loc, text in slides]},
-                            )
                     for loc, slide_text in slides:
                         for j, chunk in enumerate(_chunk_text(slide_text, chunk_chars, overlap_chars), start=1):
                             rid = _make_rid(source_id, loc, j)
@@ -492,7 +541,7 @@ class KnowledgeBase:
             with open(data_path, "wb") as f:
                 pickle.dump(kb, f)
             meta_path.write_text(
-                json.dumps({"dir": str(dir_path), "fingerprint": fp}, ensure_ascii=False, indent=2),
+                json.dumps({"dir": str(dir_path), "fingerprint": combined_fp}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         except Exception:
