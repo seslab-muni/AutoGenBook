@@ -150,3 +150,26 @@ async def test_list_run_events_empty_for_freshly_created_run(client: AsyncClient
 async def test_list_run_events_404_for_missing_run(client: AsyncClient) -> None:
     response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/events")
     assert response.status_code == 404
+
+
+async def test_list_run_artifacts_empty_for_freshly_created_run(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    response = await client.get(f"/api/v1/runs/{created['id']}/artifacts")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+
+
+async def test_list_run_artifacts_404_for_missing_run(client: AsyncClient) -> None:
+    response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/artifacts")
+    assert response.status_code == 404
+
+
+async def test_get_run_resumable_false_before_execution(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    assert created["resumable"] is False

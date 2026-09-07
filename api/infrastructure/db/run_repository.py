@@ -14,6 +14,7 @@ from api.domain.models import Run, RunEvent, RunOptions, RunStatus
 from api.infrastructure.db.models import RunEventRecord, RunRecord
 
 _ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
+_TERMINAL_STATUSES = (RunStatus.succeeded, RunStatus.failed, RunStatus.cancelled)
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -131,6 +132,16 @@ class SqlAlchemyRunRepository:
         await self._session.commit()
         await self._session.refresh(record)
         return run_to_domain(record)
+
+    async def list_terminal_before(self, cutoff: datetime) -> list[Run]:
+        result = await self._session.execute(
+            select(RunRecord).where(
+                RunRecord.status.in_(_TERMINAL_STATUSES),
+                RunRecord.finished_at.is_not(None),
+                RunRecord.finished_at < cutoff,
+            )
+        )
+        return [run_to_domain(record) for record in result.scalars().all()]
 
 
 def _event_to_domain(record: RunEventRecord) -> RunEvent:

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.core.db import Base
 from api.domain.models import (
+    ArtifactKind,
     MathLevel,
     NodeStatus,
     OutputFormat,
@@ -301,6 +302,30 @@ class RunRecord(Base):
     )
     total_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     total_cost_usd: Mapped[float | None] = mapped_column(sa.Numeric, nullable=True)
+
+
+class RunArtifactRecord(Base):
+    __tablename__ = "run_artifacts"
+    __table_args__ = (
+        sa.UniqueConstraint("run_id", "relative_path", name="uq_run_artifacts_run_id_path"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+    )
+    file_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("files.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[ArtifactKind] = mapped_column(
+        sa.Enum(
+            ArtifactKind,
+            name="artifact_kind",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+    )
+    relative_path: Mapped[str] = mapped_column(sa.Text, nullable=False)
 
 
 class RunEventRecord(Base):

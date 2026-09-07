@@ -6,12 +6,13 @@ import os
 import signal
 import socket
 
-from api.application.runs import GenerationService
+from api.application.runs import GenerationService, sweep_stale_work_dirs
 from api.core.db import get_sessionmaker
 from api.core.settings import get_settings
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
 from api.infrastructure.db.run_repository import (
     SqlAlchemyRunEventRepository,
     SqlAlchemyRunRepository,
@@ -47,6 +48,7 @@ async def _claim_and_execute(session_factory, storage, settings, worker_id: str)
             source_repository=SqlAlchemySourceRepository(session),
             file_repository=SqlAlchemyFileRepository(session),
             file_storage=storage,
+            run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
             settings=settings,
         )
         try:
@@ -66,7 +68,7 @@ async def _worker_slot(slot: int, session_factory, storage, settings, stop_event
             logger.exception("worker slot %s: error while polling/claiming", slot)
             claimed = False
 
-        # Only one slot needs to sweep for stale runs each cycle.
+        # Only one slot needs to sweep for stale runs / old work dirs each cycle.
         if slot == 0 and not claimed:
             try:
                 async with session_factory() as session:
@@ -75,6 +77,16 @@ async def _worker_slot(slot: int, session_factory, storage, settings, stop_event
                     logger.info("requeued %s stale run(s)", requeued)
             except Exception:  # noqa: BLE001
                 logger.exception("worker slot %s: error while requeuing stale runs", slot)
+
+            try:
+                async with session_factory() as session:
+                    removed = await sweep_stale_work_dirs(
+                        SqlAlchemyRunRepository(session), settings.runs_retention_days
+                    )
+                if removed:
+                    logger.info("removed %s stale work dir(s)", removed)
+            except Exception:  # noqa: BLE001
+                logger.exception("worker slot %s: error while sweeping stale work dirs", slot)
 
         if not claimed and not stop_event.is_set():
             try:

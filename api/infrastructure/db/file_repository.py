@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.domain.models import File
-from api.infrastructure.db.models import SourceRecord
+from api.infrastructure.db.models import RunArtifactRecord, SourceRecord
 
 
 class SqlAlchemyFileRepository:
@@ -34,12 +34,22 @@ class SqlAlchemyFileRepository:
         await self._session.commit()
 
     async def is_referenced(self, file_id: uuid.UUID) -> bool:
-        # Extended by later issues (run artifacts) once those tables exist.
         # A soft-deleted source row (`deleted_at` set) no longer counts as a
-        # reference, so the file becomes deletable again once removed.
+        # reference, so the file becomes deletable again once removed. Run
+        # artifacts are never soft-deleted - a run's artifact rows only
+        # disappear via `RunArtifactRepository.delete_by_run` (re-upload) or
+        # the `runs` cascade (run deletion), both of which already remove
+        # the reference before the file itself could be deleted.
         result = await self._session.scalar(
             select(SourceRecord.id)
             .where(SourceRecord.file_id == file_id, SourceRecord.deleted_at.is_(None))
+            .limit(1)
+        )
+        if result is not None:
+            return True
+        result = await self._session.scalar(
+            select(RunArtifactRecord.id)
+            .where(RunArtifactRecord.file_id == file_id)
             .limit(1)
         )
         return result is not None

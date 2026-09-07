@@ -95,16 +95,45 @@ def main(argv: list[str] | None = None) -> int:
     sections_dir = out_dir / "sections"
     sections_dir.mkdir(parents=True, exist_ok=True)
 
+    # One chunk per file, shaped like `autogenbook.retrieval.kb_citations.
+    # build_kb_index`'s real `kb_sources.json` (`cite_keys`/`rids`/`chunks`),
+    # not the CLI's own richer per-chunk splitting - close enough for the API
+    # to exercise its `kb_sources.json` parsing (source chunk counts, ragCitations).
+    kb_chunks: list[dict] = []
     if args.kb_dir:
         kb_dir = Path(args.kb_dir).expanduser().resolve()
         print(f"[KB] Buduji/nactivam znalostni databazi z: {kb_dir}")
         time.sleep(STEP_SLEEP_S)
-        sources = sorted(p.name for p in kb_dir.glob("*") if p.is_file()) if kb_dir.is_dir() else []
+        # Sources are downloaded one file per `kb/<source_id>/<filename>`
+        # subdirectory (`api.application.runs.GenerationService._download_sources`).
+        files = sorted(kb_dir.glob("*/*")) if kb_dir.is_dir() else []
+        cite_keys: dict[str, dict] = {}
+        rids: dict[str, dict] = {}
+        for index, path in enumerate(files, start=1):
+            if not path.is_file():
+                continue
+            rid = f"kb{index}"
+            cite_key = f"kb{index}"
+            entry = {
+                "source_path": str(path),
+                "loc": "chunk 1",
+                "rid": rid,
+                "cite_key": cite_key,
+                "excerpt": f"Fake excerpt from {path.name}",
+            }
+            kb_chunks.append(entry)
+            summary_entry = {"source_path": entry["source_path"], "loc": entry["loc"], "excerpt": entry["excerpt"]}
+            cite_keys[cite_key] = summary_entry
+            rids[rid] = summary_entry
         (out_dir / "kb_sources.json").write_text(
-            json.dumps({"sources": sources}, ensure_ascii=False, indent=2),
+            json.dumps(
+                {"cite_keys": cite_keys, "rids": rids, "page_keys": {}, "chunks": kb_chunks},
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
-        print(f"[KB] Hotovo. Pocet zdroju: {len(sources)}")
+        print(f"[KB] Hotovo. Pocet chunku: {len(kb_chunks)}")
     else:
         print("[KB] --kb-dir nebyl zadan. RAG bude vypnut.")
 
@@ -125,17 +154,46 @@ def main(argv: list[str] | None = None) -> int:
         json_path.write_text(json.dumps(book_json, ensure_ascii=False, indent=2), encoding="utf-8")
 
     title = book_json.get("title") or "Fake Book"
-    chapters = book_json.get("chapters") or [
-        {"key": "ch1", "title": "Chapter One"},
-        {"key": "ch2", "title": "Chapter Two"},
-    ]
+    summary = book_json.get("summary") or ""
 
-    nodes: dict[str, dict] = {"book": {"title": title}}
+    nodes: dict[str, dict] = {"book": {"title": title, "summary": summary}}
     edges: list[list[str]] = []
-    for chapter in chapters:
-        key = chapter["key"]
-        nodes[key] = {"title": chapter.get("title", key)}
-        edges.append(["book", key])
+
+    # `childs` (nested, dash-keyed "1", "1-2", ...) is the shape
+    # `StructureBuilder.build` produces for `--use-json` runs - mirrors
+    # `book_builder.py:build_graph_from_book_json`'s key scheme exactly, so
+    # a key here matches the outline's own `assign_positions` cli_key. Falls
+    # back to the older flat "chapters" mock shape (`_default_book_json`)
+    # when there's no real outline behind this run.
+    def add_children(parent_key: str, children: list[dict]) -> None:
+        for i, child in enumerate(children, start=1):
+            key = str(i) if parent_key == "book" else f"{parent_key}-{i}"
+            nodes[key] = {
+                "title": str(child.get("title", key)).strip(),
+                "summary": str(child.get("summary", "")).strip(),
+            }
+            edges.append([parent_key, key])
+            nested = [c for c in (child.get("childs") or []) if isinstance(c, dict)]
+            if nested:
+                add_children(key, nested)
+
+    childs = [c for c in (book_json.get("childs") or []) if isinstance(c, dict)]
+    if childs:
+        add_children("book", childs)
+    else:
+        chapters = book_json.get("chapters") or [
+            {"key": "ch1", "title": "Chapter One"},
+            {"key": "ch2", "title": "Chapter Two"},
+        ]
+        for chapter in chapters:
+            key = chapter["key"]
+            nodes[key] = {"title": chapter.get("title", key)}
+            edges.append(["book", key])
+
+    # Leaves are the only nodes that get generated content - anything else
+    # is a parent kept only for the tree shape, exactly like the real CLI.
+    parent_keys = {parent for parent, _ in edges}
+    leaf_keys = [key for key in nodes if key != "book" and key not in parent_keys]
 
     graph_path = out_dir / "structure_graph.json"
 
@@ -148,26 +206,25 @@ def main(argv: list[str] | None = None) -> int:
     save_graph()
     print("[SUBDIVIDE] Trvani: 0.0s")
 
-    total = len(chapters)
+    total = len(leaf_keys)
     md_parts = [f"# {title}\n"]
-    for i, chapter in enumerate(chapters, start=1):
-        key = chapter["key"]
-        chapter_title = chapter.get("title", key)
+    for i, key in enumerate(leaf_keys, start=1):
+        node_title = nodes[key].get("title", key)
         section_path = sections_dir / f"{key}.md"
 
         if args.resume and section_path.exists():
-            print(f"[RESUME] Preskakuji jiz vygenerovanou sekci '{chapter_title}'")
+            print(f"[RESUME] Preskakuji jiz vygenerovanou sekci '{node_title}'")
         else:
-            print(f"[GEN] Generuji obsah sekci: {chapter_title}")
+            print(f"[GEN] Generuji obsah sekci: {node_title}")
             time.sleep(STEP_SLEEP_S)
-            section_path.write_text(
-                f"## {chapter_title}\n\nFake generated content for {key}.\n",
-                encoding="utf-8",
-            )
+            content = f"## {node_title}\n\nFake generated content for {key}.\n"
+            if i == 1 and kb_chunks:
+                content += f"\nSee [{kb_chunks[0]['cite_key']}] for details.\n"
+            section_path.write_text(content, encoding="utf-8")
 
         nodes[key]["content_file_path"] = str(section_path)
         save_graph()
-        print(f"[GEN] {i}/{total} Generated section '{chapter_title}'")
+        print(f"[GEN] {i}/{total} Generated section '{node_title}'")
         md_parts.append(section_path.read_text(encoding="utf-8"))
 
     print("[MD] Skladam finalni Markdown vystup")

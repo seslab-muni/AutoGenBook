@@ -1,0 +1,156 @@
+"""Walk a finished run's `out/` directory, classify every file the CLI
+produced, and upload it to object storage as a `File` (`kind=artifact`)
+indexed by a `RunArtifact` row - issue #10.
+
+Only `work_dir/out/` is walked, never `work_dir` itself: `work_dir/kb/` is a
+copy of the run's downloaded sources (not an output) and `work_dir/
+book_input.txt` / `book_structure.json` are inputs the API itself wrote, not
+something the CLI produced. Within `out/`, `.kb_cache/` (BM25 pickles) and
+`*.bak` backups (`autogenbook/graph/doc_graph.py:save_graph_json`) are
+skipped - neither is a useful downloadable artifact.
+
+Re-running `upload_artifacts` for the same run is idempotent: it deletes
+whatever it previously uploaded for that run first, so a run whose work
+directory changed between two calls (there's no such case today, but retry
+safety is cheap) never accumulates duplicate rows or orphaned blobs.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import mimetypes
+import re
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+
+from api.domain.models import ArtifactKind, File, FileKind, RunArtifact
+from api.domain.ports import FileRepository, FileStorage, RunArtifactRepository
+
+_SKIP_DIR_PREFIXES = (".kb_cache",)
+_SKIP_SUFFIXES = (".bak",)
+
+_AUTHOR_LINE_RE = re.compile(r"^\*\*Author:\*\*.*$", re.MULTILINE)
+
+
+def _classify(relative_path: PurePosixPath) -> ArtifactKind:
+    parts = relative_path.parts
+    suffix = relative_path.suffix.lower()
+
+    if parts[0] == "sections" and suffix == ".md":
+        return ArtifactKind.section
+    if parts[0] == "section_reviews" and suffix == ".json":
+        return ArtifactKind.section_review
+    if parts[0] == "logs":
+        return ArtifactKind.log
+    if len(parts) == 1:
+        if relative_path.name == "structure_graph.json":
+            return ArtifactKind.structure_graph
+        if relative_path.name == "book_structure.json":
+            return ArtifactKind.book_structure
+        if relative_path.name == "kb_sources.json":
+            return ArtifactKind.kb_sources
+        if relative_path.name == "run_meta.json":
+            return ArtifactKind.run_meta
+        if relative_path.name == "llm_usage.jsonl":
+            return ArtifactKind.llm_usage
+        if relative_path.name == "audit_report.json":
+            return ArtifactKind.audit_report
+        if suffix == ".bib":
+            return ArtifactKind.bib
+        if suffix == ".md":
+            return ArtifactKind.markdown
+        if suffix == ".tex":
+            return ArtifactKind.tex
+        if suffix == ".pdf":
+            return ArtifactKind.pdf
+    return ArtifactKind.other
+
+
+def _should_skip(relative_path: PurePosixPath) -> bool:
+    if relative_path.parts[0] in _SKIP_DIR_PREFIXES:
+        return True
+    if relative_path.suffix.lower() in _SKIP_SUFFIXES:
+        return True
+    return False
+
+
+def collect_artifact_paths(out_dir: Path) -> list[tuple[PurePosixPath, ArtifactKind]]:
+    """`(relative_path, kind)` for every artifact file under `out_dir`,
+    sorted for deterministic output. Pure filesystem walk - no I/O beyond
+    listing, kept separate from `upload_artifacts` so classification can be
+    unit tested without a database or storage backend."""
+    if not out_dir.is_dir():
+        return []
+    collected: list[tuple[PurePosixPath, ArtifactKind]] = []
+    for path in out_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = PurePosixPath(path.relative_to(out_dir).as_posix())
+        if _should_skip(relative):
+            continue
+        collected.append((relative, _classify(relative)))
+    collected.sort(key=lambda item: str(item[0]))
+    return collected
+
+
+def _rewrite_author_line(content: str, authors: list[str]) -> str:
+    if not authors or not _AUTHOR_LINE_RE.search(content):
+        return content
+    return _AUTHOR_LINE_RE.sub(f"**Author:** {', '.join(authors)}", content, count=1)
+
+
+async def upload_artifacts(
+    out_dir: Path,
+    run_id: uuid.UUID,
+    file_repository: FileRepository,
+    run_artifact_repository: RunArtifactRepository,
+    storage: FileStorage,
+    *,
+    authors: list[str] | None = None,
+) -> list[RunArtifact]:
+    existing, _ = await run_artifact_repository.list(run_id, limit=10_000, offset=0)
+    for artifact in existing:
+        file = await file_repository.get(artifact.file_id)
+        if file is not None:
+            await storage.delete(file.storage_key)
+            await file_repository.delete(file)
+    if existing:
+        await run_artifact_repository.delete_by_run(run_id)
+
+    created: list[RunArtifact] = []
+    for relative_path, kind in collect_artifact_paths(out_dir):
+        absolute_path = out_dir / relative_path
+        data = absolute_path.read_bytes()
+        if kind is ArtifactKind.markdown and authors:
+            data = _rewrite_author_line(data.decode("utf-8"), authors).encode("utf-8")
+
+        content_type, _ = mimetypes.guess_type(absolute_path.name)
+        content_type = content_type or "application/octet-stream"
+
+        file = File(
+            id=uuid.uuid4(),
+            storage_key=f"runs/{run_id}/{relative_path}",
+            filename=absolute_path.name,
+            content_type=content_type,
+            size_bytes=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+            kind=FileKind.artifact,
+            kb_eligible=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        await storage.put(file.storage_key, io.BytesIO(data), file.content_type)
+        await file_repository.add(file)
+
+        saved = await run_artifact_repository.add(
+            RunArtifact(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                file_id=file.id,
+                kind=kind,
+                relative_path=str(relative_path),
+            )
+        )
+        created.append(saved)
+    return created

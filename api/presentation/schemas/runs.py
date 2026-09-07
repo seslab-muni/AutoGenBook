@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from pydantic import ConfigDict
 
+from api.domain.models import ArtifactKind
+from api.domain.models import File as FileDomain
 from api.domain.models import Run as RunDomain
+from api.domain.models import RunArtifact as RunArtifactDomain
 from api.domain.models import RunEvent as RunEventDomain
 from api.domain.models import RunKind, RunStatus
 from api.presentation.schemas.common import BaseSchema
@@ -61,6 +65,11 @@ class Run(BaseSchema):
     queued_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    # `False` once the work directory has been swept by
+    # `api.application.runs.sweep_stale_work_dirs` (`RUNS_RETENTION_DAYS`
+    # after the run finished) - a `regenerate`/`export` run (issue #11) can
+    # no longer reuse this run as its base.
+    resumable: bool
 
 
 class RunEvent(BaseSchema):
@@ -88,6 +97,7 @@ def run_to_schema(run: RunDomain) -> Run:
         queued_at=run.queued_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
+        resumable=Path(run.work_dir).is_dir(),
     )
 
 
@@ -99,4 +109,24 @@ def event_to_schema(event: RunEventDomain) -> RunEvent:
         stage=event.stage,
         message=event.message,
         payload=event.payload,
+    )
+
+
+class RunArtifact(BaseSchema):
+    kind: ArtifactKind
+    relative_path: str
+    file_id: uuid.UUID
+    filename: str
+    size_bytes: int
+    content_type: str
+
+
+def artifact_to_schema(artifact: RunArtifactDomain, file: FileDomain) -> RunArtifact:
+    return RunArtifact(
+        kind=artifact.kind,
+        relative_path=artifact.relative_path,
+        file_id=file.id,
+        filename=file.filename,
+        size_bytes=file.size_bytes,
+        content_type=file.content_type,
     )

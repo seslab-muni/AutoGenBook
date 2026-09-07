@@ -29,6 +29,7 @@ from api.domain.models import (
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
 from api.infrastructure.db.run_repository import SqlAlchemyRunEventRepository, SqlAlchemyRunRepository
 from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
 from api.infrastructure.queue.postgres import SqlAlchemyRunQueue
@@ -111,6 +112,7 @@ def _make_service(session: AsyncSession, storage: InMemoryFileStorage, settings:
         source_repository=SqlAlchemySourceRepository(session),
         file_repository=SqlAlchemyFileRepository(session),
         file_storage=storage,
+        run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
         settings=settings,
         drain_poll_interval_s=0.05,
         **kwargs,
