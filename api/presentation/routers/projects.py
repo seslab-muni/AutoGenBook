@@ -5,13 +5,17 @@ import uuid
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.application.outline import OutlineService
 from api.application.projects import ProjectService
 from api.application.sources import SourceService
 from api.core.db import get_session
 from api.domain.models import Project as ProjectDomain
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.presentation.deps import get_outline_service
+from api.presentation.routers.outline import tree_to_schema
 from api.presentation.routers.sources import get_source_service
 from api.presentation.schemas.common import Page, PageParams
+from api.presentation.schemas.outline import OutlineNodeTree
 from api.presentation.schemas.projects import (
     Project,
     ProjectCreate,
@@ -32,7 +36,18 @@ def get_project_service(session: AsyncSession = Depends(get_session)) -> Project
     return ProjectService(SqlAlchemyProjectRepository(session))
 
 
-async def _to_schema(project: ProjectDomain, source_service: SourceService) -> Project:
+async def _outline_tree(
+    project_id: uuid.UUID, outline_service: OutlineService
+) -> list[OutlineNodeTree]:
+    tree, _total = await outline_service.list(project_id, format="tree")
+    return [tree_to_schema(entry) for entry in tree]
+
+
+async def _to_schema(
+    project: ProjectDomain,
+    source_service: SourceService,
+    outline: list[OutlineNodeTree],
+) -> Project:
     rows = await source_service.list_for_embed(project.id)
     return Project(
         id=project.id,
@@ -49,7 +64,7 @@ async def _to_schema(project: ProjectDomain, source_service: SourceService) -> P
         max_outline_levels=project.max_outline_levels,
         additional_requirements=project.additional_requirements,
         sources=[source_to_schema(source, file) for source, file in rows],
-        outline=[],
+        outline=outline,
         last_run_id=project.last_run_id,
         created_at=project.created_at,
         updated_at=project.updated_at,
@@ -92,8 +107,9 @@ async def create_project(
     owner_id: uuid.UUID | None = Depends(current_owner),
     service: ProjectService = Depends(get_project_service),
     source_service: SourceService = Depends(get_source_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
-    payload = body.model_dump(exclude={"sources"})
+    payload = body.model_dump(exclude={"sources", "outline"})
     project = await service.create(owner_id=owner_id, **payload)
     if body.sources:
         # Best-effort atomicity: if any source fails validation (unknown file,
@@ -104,7 +120,13 @@ async def create_project(
         except Exception:
             await service.delete(project.id)
             raise
-    return await _to_schema(project, source_service)
+    wizard_outline = body.outline
+    outline: list[OutlineNodeTree] = []
+    if wizard_outline is not None:
+        tree = [entry.model_dump() for entry in wizard_outline]
+        await outline_service.replace(project.id, tree)
+        outline = await _outline_tree(project.id, outline_service)
+    return await _to_schema(project, source_service, outline)
 
 
 @router.get("/{project_id}", response_model=Project)
@@ -112,9 +134,11 @@ async def get_project(
     project_id: uuid.UUID,
     service: ProjectService = Depends(get_project_service),
     source_service: SourceService = Depends(get_source_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     project = await service.get(project_id)
-    return await _to_schema(project, source_service)
+    outline = await _outline_tree(project_id, outline_service)
+    return await _to_schema(project, source_service, outline)
 
 
 @router.patch("/{project_id}", response_model=Project)
@@ -123,10 +147,12 @@ async def update_project(
     body: ProjectUpdate,
     service: ProjectService = Depends(get_project_service),
     source_service: SourceService = Depends(get_source_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     changes = body.model_dump(exclude_unset=True)
     project = await service.update(project_id, changes)
-    return await _to_schema(project, source_service)
+    outline = await _outline_tree(project_id, outline_service)
+    return await _to_schema(project, source_service, outline)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -145,6 +171,7 @@ async def duplicate_project(
     project_id: uuid.UUID,
     service: ProjectService = Depends(get_project_service),
     source_service: SourceService = Depends(get_source_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     original_sources = await source_service.list_for_embed(project_id)
     project = await service.duplicate(project_id)
@@ -159,4 +186,6 @@ async def duplicate_project(
             url=source.url,
             description=source.description,
         )
-    return await _to_schema(project, source_service)
+    await outline_service.duplicate_from(project_id, project.id)
+    outline = await _outline_tree(project.id, outline_service)
+    return await _to_schema(project, source_service, outline)

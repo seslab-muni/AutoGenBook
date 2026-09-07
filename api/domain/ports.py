@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import BinaryIO, Protocol
 
-from api.domain.models import File, Project, Source
+from api.domain.models import File, OutlineNode, Project, Source
 
 
 class ProjectRepository(Protocol):
@@ -74,3 +74,30 @@ class SourceRepository(Protocol):
     # for audit purposes and to keep the file's `is_referenced` check honest
     # about what's still attached. Project deletion still hard-deletes every
     # row (soft-deleted or not) via the ORM cascade on `ProjectRecord`.
+
+
+class OutlineRepository(Protocol):
+    async def list(self, project_id: uuid.UUID) -> list[OutlineNode]: ...
+
+    async def get(self, node_id: uuid.UUID) -> OutlineNode | None: ...
+
+    async def add(self, node: OutlineNode) -> OutlineNode: ...
+
+    async def update(self, node: OutlineNode) -> OutlineNode: ...
+
+    async def delete_subtree(
+        self, project_id: uuid.UUID, node_ids: Sequence[uuid.UUID]
+    ) -> None: ...
+
+    async def replace_all(
+        self, project_id: uuid.UUID, nodes: Sequence[OutlineNode]
+    ) -> list[OutlineNode]: ...
+
+    async def reorder(
+        self,
+        project_id: uuid.UUID,
+        parent_id: uuid.UUID | None,
+        ordered_ids: Sequence[uuid.UUID],
+    ) -> None: ...
+
+    async def count(self, project_id: uuid.UUID) -> int: ...

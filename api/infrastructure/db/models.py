@@ -8,7 +8,14 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.core.db import Base
-from api.domain.models import OutputFormat, SourceStatus, SourceType, TargetAudience
+from api.domain.models import (
+    MathLevel,
+    NodeStatus,
+    OutputFormat,
+    SourceStatus,
+    SourceType,
+    TargetAudience,
+)
 
 
 def _jsonb() -> sa.types.TypeEngine:
@@ -132,6 +139,87 @@ class SourceRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+
+class OutlineNodeRecord(Base):
+    __tablename__ = "outline_nodes"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "equation_density_level BETWEEN 1 AND 5",
+            name="ck_outline_nodes_equation_density_level",
+        ),
+        # Partial (not deferrable - Postgres doesn't allow that on an index)
+        # so a soft-deleted row can keep occupying its old
+        # (project_id, parent_id, order_index) tuple without colliding with
+        # whatever live row now sits there. `OutlineRepository`'s
+        # move/reorder writes use a temporary negative `order_index` to
+        # avoid ever colliding within a single statement, since this
+        # constraint can't defer the check to commit time the way a
+        # deferrable table constraint could.
+        sa.Index(
+            "uq_outline_nodes_project_parent_order",
+            "project_id",
+            "parent_id",
+            "order_index",
+            unique=True,
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("outline_nodes.id", ondelete="CASCADE"), nullable=True
+    )
+    order_index: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    cli_key: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    title: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    summary: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    status: Mapped[NodeStatus] = mapped_column(
+        sa.Enum(
+            NodeStatus,
+            name="node_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=NodeStatus.NOT_STARTED,
+    )
+    target_pages: Mapped[float] = mapped_column(sa.Numeric(8, 2), nullable=False)
+    word_budget: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    actual_words: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    equation_density_level: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    math_level: Mapped[MathLevel] = mapped_column(
+        sa.Enum(
+            MathLevel,
+            name="math_level",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+    )
+    sub_prompt: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    content_markdown: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    content_latex: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    rag_citations: Mapped[list[dict]] = mapped_column(_jsonb(), nullable=False, default=list)
+    reviewer_score: Mapped[float | None] = mapped_column(sa.Numeric, nullable=True)
+    reviewer_notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    structure_locked: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
+        nullable=False,
+    )
+    # Soft delete: `DELETE /outline/{nodeId}` sets this (recursively, for the
+    # whole subtree) instead of issuing a SQL DELETE. NULL = live.
     deleted_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )

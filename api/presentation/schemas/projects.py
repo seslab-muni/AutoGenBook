@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field
 
 from api.domain.models import OutputFormat, TargetAudience
 from api.presentation.schemas.common import BaseSchema
+from api.presentation.schemas.outline import OutlineNodeTree, OutlineTreeReplace
 from api.presentation.schemas.sources import Source, SourceCreate
 
 
@@ -26,6 +27,10 @@ class ProjectCreate(BaseSchema):
     # Wizard step 2: attach already-uploaded files as sources atomically with
     # project creation (issue #5). Has its own endpoints for later changes.
     sources: list[SourceCreate] | None = None
+    # Wizard-only: author the outline atomically with the project (issue #6).
+    # Popped off by the router before `ProjectService.create` sees the rest
+    # of the payload - `ProjectService` itself only knows project metadata.
+    outline: OutlineTreeReplace | None = None
 
 
 class ProjectUpdate(BaseSchema):
@@ -62,7 +67,7 @@ class Project(BaseSchema):
     max_outline_levels: int
     additional_requirements: str | None = None
     sources: list[Source] = Field(default_factory=list)
-    outline: list[dict] = Field(default_factory=list)
+    outline: list[OutlineNodeTree] = Field(default_factory=list)
     last_run_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
