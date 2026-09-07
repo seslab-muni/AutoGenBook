@@ -1,1984 +1,2573 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: AutoGenBook API
-  version: 0.2.0
-  description: >
-    HTTP API for AutoGenBook, served by the FastAPI app in `api/main.py` and reached
-    through the nginx-fronted Docker Compose stack.
-
-
-    **Contract baseline, not a generated spec.** This file is hand-aligned with
-    backend issues #1-#11 (milestone "Book API v1") so the frontend can generate
-    DTOs (`openapi-typescript`) before every route is implemented. Issue #12 later
-    replaces it with a spec exported from `api.main:create_app` (`app.openapi()`);
-    from that point this file is regenerated, not hand-edited.
-
-
-    Operations tagged `system` are **implemented today** (`x-status: implemented`,
-    issue #1, merged). Every other operation is a **contract baseline**
-    (`x-status: planned`) for a route that does not exist in `api/` yet - see the
-    issue number in each operation's `x-issue` extension for the backend work that
-    implements it. Schema field names, enum values and status codes below are
-    transcribed directly from those issues' task lists, which are canonical; if this
-    file and an issue ever disagree, the issue wins and this file is out of date.
-
-
-    Precedence for any data-shape disagreement across the stack is **CLI > API >
-    FE**: the Python CLI's on-disk artifacts (`book_structure.json`,
-    `structure_graph.json`, `run_meta.json`) are the source of truth the API adapts
-    to, and the frontend's TypeScript types are generated from this file, never
-    hand-written.
-
-
-    No authentication and no CORS middleware exist in the implemented service
-    today; a nullable `ownerId` is reserved on `projects` for later auth work but is
-    not part of the wire contract yet, so this spec intentionally omits
-    `securitySchemes`.
-servers:
-  - url: /
-    description: >
-      Reached through the nginx reverse proxy (`app/nginx.conf`, `location /api/`)
-      in front of the FastAPI service, which mounts every versioned route under
-      `/api/v1` (`api/main.py:create_app`, `APIRouter(prefix="/api/v1")`). Legacy
-      unversioned aliases `/api/health` and `/api/ready` also exist for the compose
-      healthcheck but are excluded from this spec (`include_in_schema=False`).
-tags:
-  - name: system
-    description: Implemented health/readiness endpoints (issue #1).
-  - name: files
-    description: >
-      Implemented (issue #3). Standalone file storage (MinIO-backed); every
-      other resource references files by `fileId` only.
-  - name: projects
-    description: Contract baseline (issue #4). Project (book) CRUD.
-  - name: sources
-    description: >
-      Contract baseline (issue #5). Files attached to a project as RAG sources.
-  - name: outline
-    description: >
-      Contract baseline (issue #6). Outline nodes: flat list with `parentId` is the
-      canonical shape; `?format=tree` is a rendering convenience.
-  - name: runs
-    description: >
-      Contract baseline (issues #9, #10, #11). Generation runs, SSE progress,
-      artifacts, per-node regeneration and format exports.
-
+  description: HTTP API for AutoGenBook, served by this FastAPI app and reached through
+    the nginx-fronted Docker Compose stack. Every route is mounted under /api/v1;
+    there is no authentication and no CORS middleware. Error responses use RFC 9457
+    problem details (application/problem+json); list endpoints return a {items, total,
+    limit, offset} page envelope.
+  version: 0.1.0
 paths:
   /api/v1/health:
     get:
-      tags: [system]
-      operationId: getHealth
-      summary: Liveness check
-      x-status: implemented
-      description: >
-        **Implemented** (`api/presentation/routers/system.py:health`). Always
-        returns `ok`; does not check dependencies.
+      tags:
+      - system
+      summary: Health
+      operationId: system-health
       responses:
-        "200":
-          description: Service is up.
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthStatus"
-
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response System-Health
   /api/v1/ready:
     get:
-      tags: [system]
-      operationId: getReady
-      summary: Readiness check (verifies Postgres connectivity)
-      x-status: implemented
-      description: >
-        **Implemented** (`api/presentation/routers/system.py:ready`). Runs
-        `SELECT 1` through the async session, then calls the object-storage
-        adapter's `healthcheck()` (`api/infrastructure/storage/s3.py`).
+      tags:
+      - system
+      summary: Ready
+      operationId: system-ready
       responses:
-        "200":
-          description: Database and object storage checks both succeeded.
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ReadyStatus"
-        "503":
-          description: >
-            A dependency (database or object storage) is unreachable.
-            `api/core/errors.py:StorageError`.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response System-Ready
   /api/v1/files:
-    get:
-      tags: [files]
-      operationId: listFiles
-      summary: List uploaded/artifact files
-      x-status: implemented
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Page of files.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageOfFile"
     post:
-      tags: [files]
-      operationId: uploadFile
-      summary: Upload a file
-      x-status: implemented
+      tags:
+      - files
+      summary: Upload File
+      operationId: files-upload_file
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
-              type: object
-              properties:
-                file:
-                  type: string
-                  format: binary
-              required: [file]
+              $ref: '#/components/schemas/Body_files-upload_file'
       responses:
-        "201":
-          description: File stored (key `uploads/{fileId}/{filename}`), `kind=upload`.
+        '201':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/File"
-        "413":
-          description: >
-            Upload exceeds `MAX_UPLOAD_MB`. The partial object is deleted; no `File`
-            row is created.
+                $ref: '#/components/schemas/File'
+        '422':
+          description: Validation Error
           content:
-            application/problem+json:
+            application/json:
               schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/files/{fileId}:
-    parameters:
-      - $ref: "#/components/parameters/FileId"
+                $ref: '#/components/schemas/HTTPValidationError'
     get:
-      tags: [files]
-      operationId: getFile
-      summary: Get file metadata
-      x-status: implemented
+      tags:
+      - files
+      summary: List Files
+      operationId: files-list_files
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
       responses:
-        "200":
-          description: File metadata.
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/File"
-        "404":
-          description: File not found.
+                $ref: '#/components/schemas/Page_File_'
+        '422':
+          description: Validation Error
           content:
-            application/problem+json:
+            application/json:
               schema:
-                $ref: "#/components/schemas/Problem"
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/files/{file_id}:
+    get:
+      tags:
+      - files
+      summary: Get File
+      operationId: files-get_file
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: File Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     delete:
-      tags: [files]
-      operationId: deleteFile
-      summary: Delete a file
-      x-status: implemented
+      tags:
+      - files
+      summary: Delete File
+      operationId: files-delete_file
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: File Id
       responses:
-        "204":
-          description: File deleted.
-        "404":
-          description: File not found.
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
           content:
-            application/problem+json:
+            application/json:
               schema:
-                $ref: "#/components/schemas/Problem"
-        "409":
-          description: >
-            File is still referenced by a project source (issue #5) or a run
-            artifact (issue #10).
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/files/{fileId}/content:
-    parameters:
-      - $ref: "#/components/parameters/FileId"
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/files/{file_id}/content:
     get:
-      tags: [files]
-      operationId: getFileContent
-      summary: Download file bytes
-      x-status: implemented
-      description: >
-        Streamed response with `Content-Disposition: attachment`,
-        `Content-Length` and `ETag: "<sha256>"`.
+      tags:
+      - files
+      summary: Get File Content
+      operationId: files-get_file_content
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: File Id
       responses:
-        "200":
-          description: File bytes.
+        '200':
+          description: Successful Response
           content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-        "404":
-          description: File not found.
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
           content:
-            application/problem+json:
+            application/json:
               schema:
-                $ref: "#/components/schemas/Problem"
-
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/projects:
     get:
-      tags: [projects]
-      operationId: listProjects
-      summary: List projects
-      x-status: planned
-      x-issue: 4
-      description: Sorted by `updatedAt` descending.
+      tags:
+      - projects
+      summary: List Projects
+      operationId: projects-list_projects
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Page of project summaries.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageOfProjectSummary"
-    post:
-      tags: [projects]
-      operationId: createProject
-      summary: Create a project
-      x-status: planned
-      x-issue: 4
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ProjectCreate"
-      responses:
-        "201":
-          description: Project created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Project"
-        "422":
-          description: >
-            Validation failed (e.g. `totalPagesBudget` outside 5-2000,
-            `maxOutlineLevels`/`equationFrequencyLevel` outside 1-5).
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    get:
-      tags: [projects]
-      operationId: getProject
-      summary: Get a project
-      x-status: planned
-      x-issue: 4
-      responses:
-        "200":
-          description: Full project, including embedded `sources` and `outline` (tree).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Project"
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    patch:
-      tags: [projects]
-      operationId: updateProject
-      summary: Update project metadata
-      x-status: planned
-      x-issue: 4
-      description: >
-        Metadata fields only. `sources`/`outline` keys are rejected with 422 - they
-        have their own endpoints (issues #5, #6).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ProjectUpdate"
-      responses:
-        "200":
-          description: Updated project.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Project"
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "422":
-          description: Validation failed, or `sources`/`outline` present in the body.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    delete:
-      tags: [projects]
-      operationId: deleteProject
-      summary: Delete a project
-      x-status: planned
-      x-issue: 4
-      description: Cascades to sources, outline nodes and runs via foreign keys.
-      responses:
-        "204":
-          description: Project deleted.
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}/duplicate:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    post:
-      tags: [projects]
-      operationId: duplicateProject
-      summary: Duplicate a project
-      x-status: planned
-      x-issue: 4
-      description: >
-        Title suffixed " (Copy)". Copies sources by reference (same `fileId`s) and
-        deep-copies outline nodes with new ids.
-      responses:
-        "201":
-          description: New, duplicated project.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Project"
-        "404":
-          description: Source project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}/sources:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    get:
-      tags: [sources]
-      operationId: listSources
-      summary: List a project's attached sources
-      x-status: planned
-      x-issue: 5
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Page of sources.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageOfSource"
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    post:
-      tags: [sources]
-      operationId: addSource
-      summary: Attach an already-uploaded file to a project as a source
-      x-status: planned
-      x-issue: 5
-      description: >
-        There is no indexing at upload time - the CLI builds its BM25 index per run
-        (issue #9), so a new source starts `status: ready` with `chunksCount: null`,
-        not the draft contract's `202 indexing`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SourceCreate"
-      responses:
-        "201":
-          description: Source attached.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Source"
-        "404":
-          description: Project or file not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "409":
-          description: This file is already attached to the project.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "422":
-          description: >
-            File is not KB-eligible (`kbEligible: false` - extension outside
-            `.pdf .docx .pptx .md .txt`).
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}/sources/{sourceId}:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-      - $ref: "#/components/parameters/SourceId"
-    get:
-      tags: [sources]
-      operationId: getSource
-      summary: Get a source
-      x-status: planned
-      x-issue: 5
-      responses:
-        "200":
-          description: Source, including `chunksCount`/`status` once indexed by a run.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Source"
-        "404":
-          description: Project or source not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    patch:
-      tags: [sources]
-      operationId: updateSource
-      summary: Update a source's bibliographic metadata
-      x-status: planned
-      x-issue: 5
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SourceUpdate"
-      responses:
-        "200":
-          description: Updated source.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Source"
-        "404":
-          description: Project or source not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    delete:
-      tags: [sources]
-      operationId: removeSource
-      summary: Detach a source from the project
-      x-status: planned
-      x-issue: 5
-      description: Removes the attachment; the underlying file is not deleted.
-      responses:
-        "204":
-          description: Source detached.
-        "404":
-          description: Project or source not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}/outline:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    get:
-      tags: [outline]
-      operationId: listOutlineNodes
-      summary: List outline nodes, flat or nested
-      x-status: planned
-      x-issue: 6
-      parameters:
-        - $ref: "#/components/parameters/OutlineFormat"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: >
-            `items` is the flat node list (default `format=flat`) or the
-            root-level nested nodes (`format=tree`, each with `children`); `total`
-            is always the flat node count.
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: "#/components/schemas/PageOfOutlineNode"
-                  - $ref: "#/components/schemas/PageOfOutlineNodeTree"
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    put:
-      tags: [outline]
-      operationId: replaceOutline
-      summary: Replace the whole outline tree
-      x-status: planned
-      x-issue: 6
-      description: >
-        Deletes and recreates every node from a nested tree without ids (e.g. wizard
-        step 2, or a client-side reorder). Returns the new flat list.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/OutlineTreeReplace"
-      responses:
-        "200":
-          description: New outline, flat.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageOfOutlineNode"
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "422":
-          description: A node's depth exceeds `project.maxOutlineLevels`.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    post:
-      tags: [outline]
-      operationId: createOutlineNode
-      summary: Create one outline node
-      x-status: planned
-      x-issue: 6
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/OutlineNodeCreate"
-      responses:
-        "201":
-          description: New outline node.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OutlineNode"
-        "404":
-          description: Project (or parent node) not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "422":
-          description: Depth would exceed `project.maxOutlineLevels`.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}/outline/{nodeId}:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-      - $ref: "#/components/parameters/NodeId"
-    get:
-      tags: [outline]
-      operationId: getOutlineNode
-      summary: Get an outline node
-      x-status: planned
-      x-issue: 6
-      description: Includes full `contentMarkdown`/`contentLatex`/`ragCitations`.
-      responses:
-        "200":
-          description: Outline node.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OutlineNode"
-        "404":
-          description: Project or node not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    patch:
-      tags: [outline]
-      operationId: updateOutlineNode
-      summary: Update an outline node
-      x-status: planned
-      x-issue: 6
-      description: >
-        Consolidates rename/content-edit/math-level/equation-density/budget/move
-        into one generic PATCH, since they all mutate the same row. Editing
-        `contentMarkdown` recomputes `actualWords` server-side.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/OutlineNodeUpdate"
-      responses:
-        "200":
-          description: Updated outline node.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OutlineNode"
-        "404":
-          description: Project or node not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "422":
-          description: >
-            A server-derived field (`level`, `sectionNumber`, `cliKey`,
-            `actualWords`) was present in the body, or the requested `parentId`
-            move would exceed `project.maxOutlineLevels`.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    delete:
-      tags: [outline]
-      operationId: deleteOutlineNode
-      summary: Delete an outline node (cascades to descendants)
-      x-status: planned
-      x-issue: 6
-      responses:
-        "204":
-          description: Node and its subtree deleted.
-        "404":
-          description: Project or node not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}/outline/{nodeId}/regenerate:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-      - $ref: "#/components/parameters/NodeId"
-    post:
-      tags: [outline]
-      operationId: regenerateOutlineNode
-      summary: Regenerate one node's content, reusing the project's last run
-      x-status: planned
-      x-issue: 11
-      description: >
-        Reuses `project.lastRunId`'s work directory and the CLI's `--resume`
-        semantics; does not re-run structural planning. Sets the node `status` to
-        `drafting` immediately.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RegenerateRequest"
-      responses:
-        "202":
-          description: Regeneration run queued, kind `regenerate_section`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Run"
-        "404":
-          description: Project or node not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "409":
-          description: >
-            No successful prior run to resume from, its work directory is gone, or
-            the project already has an active run.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/projects/{projectId}/runs:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    get:
-      tags: [runs]
-      operationId: listRuns
-      summary: List a project's runs
-      x-status: planned
-      x-issue: 9
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Page of runs.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageOfRun"
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-    post:
-      tags: [runs]
-      operationId: createRun
-      summary: Start a full generation run
-      x-status: planned
-      x-issue: 9
-      requestBody:
+      - name: limit
+        in: query
         required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RunOptions"
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
       responses:
-        "202":
-          description: Run queued, kind `full`. Picked up by a worker within one poll interval.
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Run"
-        "404":
-          description: Project not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "409":
-          description: The project already has a queued or running run.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/runs/{runId}:
-    parameters:
-      - $ref: "#/components/parameters/RunId"
-    get:
-      tags: [runs]
-      operationId: getRun
-      summary: Get a run
-      x-status: planned
-      x-issue: 9
-      responses:
-        "200":
-          description: Run, including `resumable` (false once its work dir has been reaped).
+                $ref: '#/components/schemas/Page_ProjectSummary_'
+        '422':
+          description: Validation Error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Run"
-        "404":
-          description: Run not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/runs/{runId}/cancel:
-    parameters:
-      - $ref: "#/components/parameters/RunId"
+                $ref: '#/components/schemas/HTTPValidationError'
     post:
-      tags: [runs]
-      operationId: cancelRun
-      summary: Cancel a queued or running run
-      x-status: planned
-      x-issue: 9
-      description: >
-        A queued run is cancelled immediately; a running one has
-        `cancelRequested` set and its subprocess is terminated by the worker.
-      responses:
-        "202":
-          description: Cancellation accepted.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Run"
-        "404":
-          description: Run not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "409":
-          description: Run is already in a terminal state (`succeeded`/`failed`/`cancelled`).
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/runs/{runId}/events:
-    parameters:
-      - $ref: "#/components/parameters/RunId"
-    get:
-      tags: [runs]
-      operationId: listRunEvents
-      summary: Poll accumulated run events
-      x-status: planned
-      x-issue: 9
-      description: Polling fallback for clients that don't use the SSE stream.
-      parameters:
-        - name: afterSeq
-          in: query
-          required: false
-          description: Only return events with `seq` greater than this value.
-          schema:
-            type: integer
-            minimum: 0
-        - $ref: "#/components/parameters/Limit"
-      responses:
-        "200":
-          description: Page of run events, ordered by `seq` ascending.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageOfRunEvent"
-        "404":
-          description: Run not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/runs/{runId}/events/stream:
-    parameters:
-      - $ref: "#/components/parameters/RunId"
-    get:
-      tags: [runs]
-      operationId: streamRunEvents
-      summary: Server-Sent Events stream of run progress
-      x-status: planned
-      x-issue: 9
-      description: >
-        SSE chosen over WebSocket because `app/nginx.conf`'s `location /api/` block
-        has no `Upgrade`/`Connection: upgrade` headers, while SSE works over plain
-        HTTP/1.1 unchanged. Event `id:` is the `RunEvent.seq`; the server honours a
-        `Last-Event-ID` request header to resume a dropped connection. Event names:
-        `log` (a `RunEvent` with `level`/`message`), `stage` (pipeline stage
-        change), `section` (a leaf section finished), `done` (terminal, stream
-        closes after). OpenAPI has no way to type per-event-name payloads; each
-        event's `data:` is JSON shaped like `RunEvent` (see `RunEvent` below and
-        `docs/WEB_API_REFERENCE.md` for the full per-event field list). The server
-        polls `run_events` every second.
-      responses:
-        "200":
-          description: Event stream, open until the run reaches a terminal state.
-          content:
-            text/event-stream:
-              schema:
-                type: string
-        "404":
-          description: Run not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/runs/{runId}/artifacts:
-    parameters:
-      - $ref: "#/components/parameters/RunId"
-    get:
-      tags: [runs]
-      operationId: listRunArtifacts
-      summary: List files produced by a run
-      x-status: planned
-      x-issue: 10
-      description: Download each artifact via `GET /api/v1/files/{fileId}/content`.
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-      responses:
-        "200":
-          description: Page of run artifacts.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PageOfRunArtifact"
-        "404":
-          description: Run not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-
-  /api/v1/runs/{runId}/exports:
-    parameters:
-      - $ref: "#/components/parameters/RunId"
-    post:
-      tags: [runs]
-      operationId: exportRun
-      summary: Build a LaTeX/PDF export from a finished run, without regenerating content
-      x-status: planned
-      x-issue: 11
-      description: >
-        Reuses the base run's work directory with `--resume --export-tex`; produces
-        `tex`/`pdf` artifacts (issue #10) without touching any section content.
+      tags:
+      - projects
+      summary: Create Project
+      operationId: projects-create_project
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ExportRequest"
+              $ref: '#/components/schemas/ProjectCreate'
       responses:
-        "202":
-          description: Export run queued, kind `export`.
+        '201':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Run"
-        "404":
-          description: Run not found.
+                $ref: '#/components/schemas/Project'
+        '422':
+          description: Validation Error
           content:
-            application/problem+json:
+            application/json:
               schema:
-                $ref: "#/components/schemas/Problem"
-        "409":
-          description: Base run is not `succeeded`, its work dir is gone, or the project has an active run.
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}:
+    get:
+      tags:
+      - projects
+      summary: Get Project
+      operationId: projects-get_project
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
           content:
-            application/problem+json:
+            application/json:
               schema:
-                $ref: "#/components/schemas/Problem"
-
+                $ref: '#/components/schemas/Project'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - projects
+      summary: Update Project
+      operationId: projects-update_project
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - projects
+      summary: Delete Project
+      operationId: projects-delete_project
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/duplicate:
+    post:
+      tags:
+      - projects
+      summary: Duplicate Project
+      operationId: projects-duplicate_project
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/spec:
+    get:
+      tags:
+      - projects
+      summary: Get Project Spec
+      operationId: projects-get_project_spec
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          pattern: ^(txt|json)$
+          default: txt
+          title: Format
+      - name: includeOutline
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: true
+          title: Includeoutline
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/sources:
+    get:
+      tags:
+      - sources
+      summary: List Sources
+      operationId: sources-list_sources
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_Source_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - sources
+      summary: Add Source
+      operationId: sources-add_source
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/sources/{source_id}:
+    get:
+      tags:
+      - sources
+      summary: Get Source
+      operationId: sources-get_source
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Source Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - sources
+      summary: Update Source
+      operationId: sources-update_source
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Source Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - sources
+      summary: Remove Source
+      operationId: sources-remove_source
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Source Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/outline:
+    get:
+      tags:
+      - outline
+      summary: List Outline Nodes
+      operationId: outline-list_outline_nodes
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          pattern: ^(flat|tree)$
+          default: flat
+          title: Format
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 1
+          default: 1000
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - outline
+      summary: Replace Outline
+      operationId: outline-replace_outline
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/OutlineTreeReplaceNode'
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_OutlineNode_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - outline
+      summary: Create Outline Node
+      operationId: outline-create_outline_node
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutlineNodeCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutlineNode'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/outline/{node_id}:
+    get:
+      tags:
+      - outline
+      summary: Get Outline Node
+      operationId: outline-get_outline_node
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutlineNode'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - outline
+      summary: Update Outline Node
+      operationId: outline-update_outline_node
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutlineNodeUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutlineNode'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - outline
+      summary: Delete Outline Node
+      operationId: outline-delete_outline_node
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/runs:
+    post:
+      tags:
+      - runs
+      summary: Create Run
+      operationId: runs-create_run
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunOptionsIn'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - runs
+      summary: List Runs
+      operationId: runs-list_runs
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_Run_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/outline/{node_id}/regenerate:
+    post:
+      tags:
+      - runs
+      summary: Regenerate Node
+      operationId: runs-regenerate_node
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegenerateRequestIn'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}:
+    get:
+      tags:
+      - runs
+      summary: Get Run
+      operationId: runs-get_run
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}/cancel:
+    post:
+      tags:
+      - runs
+      summary: Cancel Run
+      operationId: runs-cancel_run
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}/exports:
+    post:
+      tags:
+      - runs
+      summary: Export Run
+      operationId: runs-export_run
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportRequestIn'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}/events:
+    get:
+      tags:
+      - runs
+      summary: List Run Events
+      operationId: runs-list_run_events
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      - name: afterSeq
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Afterseq
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 200
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_RunEvent_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}/artifacts:
+    get:
+      tags:
+      - runs
+      summary: List Run Artifacts
+      operationId: runs-list_run_artifacts
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_RunArtifact_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}/events/stream:
+    get:
+      tags:
+      - runs
+      summary: Stream Run Events
+      operationId: runs-stream_run_events
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
-  parameters:
-    Limit:
-      name: limit
-      in: query
-      required: false
-      description: Page size, 1-200 (default 50).
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 200
-        default: 50
-    Offset:
-      name: offset
-      in: query
-      required: false
-      schema:
-        type: integer
-        minimum: 0
-        default: 0
-    ProjectId:
-      name: projectId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    FileId:
-      name: fileId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    SourceId:
-      name: sourceId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    NodeId:
-      name: nodeId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    RunId:
-      name: runId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    OutlineFormat:
-      name: format
-      in: query
-      required: false
-      schema:
-        type: string
-        enum: [flat, tree]
-        default: flat
-
   schemas:
-    Problem:
-      type: object
-      description: >
-        RFC 9457 problem details, `Content-Type: application/problem+json`
-        (`api/core/errors.py`).
-      properties:
-        type:
-          type: string
-          description: Always `"about:blank"` today (no per-error-type documentation URIs yet).
-        title:
-          type: string
-        status:
-          type: integer
-        detail:
-          type: string
-          nullable: true
-        instance:
-          type: string
-          description: The request path that produced the error.
-      required: [type, title, status, instance]
-
-    HealthStatus:
-      type: object
-      description: Response of the implemented `GET /api/v1/health`.
-      properties:
-        status:
-          type: string
-          enum: [ok]
-      required: [status]
-
-    ReadyStatus:
-      type: object
-      description: Response of the implemented `GET /api/v1/ready` on success.
-      properties:
-        status:
-          type: string
-          enum: [ready]
-      required: [status]
-
-    PageOfFile:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/File"
-          required: [items]
-    PageOfProjectSummary:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/ProjectSummary"
-          required: [items]
-    PageOfSource:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Source"
-          required: [items]
-    PageOfOutlineNode:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/OutlineNode"
-          required: [items]
-    PageOfOutlineNodeTree:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/OutlineNodeTree"
-          required: [items]
-    PageOfRun:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Run"
-          required: [items]
-    PageOfRunEvent:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/RunEvent"
-          required: [items]
-    PageOfRunArtifact:
-      allOf:
-        - $ref: "#/components/schemas/PageBase"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/RunArtifact"
-          required: [items]
-
-    PageBase:
-      type: object
-      description: >
-        Common envelope fields (`api/presentation/schemas/common.py:Page`); each
-        `PageOf*` schema adds a typed `items`.
-      properties:
-        total:
-          type: integer
-        limit:
-          type: integer
-        offset:
-          type: integer
-      required: [total, limit, offset]
-
-    FileKind:
-      type: string
-      enum: [upload, artifact]
-
-    File:
-      type: object
-      x-status: implemented
-      properties:
-        id:
-          type: string
-          format: uuid
-        filename:
-          type: string
-        contentType:
-          type: string
-        sizeBytes:
-          type: integer
-        sha256:
-          type: string
-        kind:
-          $ref: "#/components/schemas/FileKind"
-        kbEligible:
-          type: boolean
-          description: >
-            True when the extension is one the CLI's knowledge base indexes
-            (`.pdf .docx .pptx .md .txt` - `rag_kb.py:SUPPORTED_EXTS`).
-        createdAt:
-          type: string
-          format: date-time
-      required: [id, filename, contentType, sizeBytes, sha256, kind, kbEligible, createdAt]
-
-    AudienceLevel:
-      type: string
-      enum: [undergraduate, graduate, phd_researcher, industry_practitioner]
-
-    OutputFormat:
-      type: string
-      enum: [markdown, latex, pdf]
-
-    Project:
-      type: object
-      x-status: planned
-      x-issue: 4
-      properties:
-        id:
-          type: string
-          format: uuid
-        title:
-          type: string
-        subtitle:
-          type: string
-        authors:
-          type: array
-          items:
-            type: string
-        topic:
-          type: string
-        targetAudience:
-          $ref: "#/components/schemas/AudienceLevel"
-        totalPagesBudget:
-          type: integer
-          minimum: 5
-          maximum: 2000
-        equationFrequencyLevel:
-          type: integer
-          minimum: 1
-          maximum: 5
-        doConsiderOutline:
-          type: boolean
-        doConsiderPreviousSections:
-          type: boolean
-        outputFormat:
-          $ref: "#/components/schemas/OutputFormat"
-        maxOutlineLevels:
-          type: integer
-          minimum: 1
-          maximum: 5
-        additionalRequirements:
-          type: string
-          nullable: true
-          description: CLI field with no frontend-mock equivalent (`additional_requirements`).
-        sources:
-          type: array
-          items:
-            $ref: "#/components/schemas/Source"
-        outline:
-          type: array
-          items:
-            $ref: "#/components/schemas/OutlineNodeTree"
-          description: Root-level outline nodes, nested.
-        lastRunId:
-          type: string
-          format: uuid
-          nullable: true
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-      required:
-        - id
-        - title
-        - subtitle
-        - authors
-        - topic
-        - targetAudience
-        - totalPagesBudget
-        - equationFrequencyLevel
-        - doConsiderOutline
-        - doConsiderPreviousSections
-        - outputFormat
-        - maxOutlineLevels
-        - sources
-        - outline
-        - lastRunId
-        - createdAt
-        - updatedAt
-
-    ProjectSummary:
-      type: object
-      x-status: planned
-      x-issue: 4
-      description: Lighter shape for `GET /api/v1/projects` - not a subset type of `Project` in the frontend.
-      properties:
-        id:
-          type: string
-          format: uuid
-        title:
-          type: string
-        subtitle:
-          type: string
-        authors:
-          type: array
-          items:
-            type: string
-        topic:
-          type: string
-        targetAudience:
-          $ref: "#/components/schemas/AudienceLevel"
-        totalPagesBudget:
-          type: integer
-        sourcesCount:
-          type: integer
-        outlineNodeCount:
-          type: integer
-        lastRunId:
-          type: string
-          format: uuid
-          nullable: true
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-      required:
-        - id
-        - title
-        - subtitle
-        - authors
-        - topic
-        - targetAudience
-        - totalPagesBudget
-        - sourcesCount
-        - outlineNodeCount
-        - lastRunId
-        - createdAt
-        - updatedAt
-
-    ProjectCreate:
-      type: object
-      x-status: planned
-      x-issue: 4
-      description: >
-        `Project` fields minus server-assigned ones; optional `sources`/`outline`
-        let the creation wizard attach files and author an outline atomically
-        (issues #5, #6).
-      properties:
-        title:
-          type: string
-        subtitle:
-          type: string
-        authors:
-          type: array
-          items:
-            type: string
-        topic:
-          type: string
-        targetAudience:
-          allOf: [$ref: "#/components/schemas/AudienceLevel"]
-          default: graduate
-        totalPagesBudget:
-          type: integer
-          minimum: 5
-          maximum: 2000
-          default: 350
-        equationFrequencyLevel:
-          type: integer
-          minimum: 1
-          maximum: 5
-          default: 4
-        doConsiderOutline:
-          type: boolean
-          default: true
-        doConsiderPreviousSections:
-          type: boolean
-          default: true
-        outputFormat:
-          allOf: [$ref: "#/components/schemas/OutputFormat"]
-          default: markdown
-        maxOutlineLevels:
-          type: integer
-          minimum: 1
-          maximum: 5
-          default: 3
-        additionalRequirements:
-          type: string
-        sources:
-          type: array
-          items:
-            $ref: "#/components/schemas/SourceCreate"
-        outline:
-          $ref: "#/components/schemas/OutlineTreeReplace"
-      required: [title, subtitle, authors, topic]
-
-    ProjectUpdate:
-      type: object
-      x-status: planned
-      x-issue: 4
-      description: >
-        Partial update of project metadata only. A `sources` or `outline` key in
-        the body is rejected with 422 (they have their own endpoints).
-      properties:
-        title:
-          type: string
-        subtitle:
-          type: string
-        authors:
-          type: array
-          items:
-            type: string
-        topic:
-          type: string
-        targetAudience:
-          $ref: "#/components/schemas/AudienceLevel"
-        totalPagesBudget:
-          type: integer
-          minimum: 5
-          maximum: 2000
-        equationFrequencyLevel:
-          type: integer
-          minimum: 1
-          maximum: 5
-        doConsiderOutline:
-          type: boolean
-        doConsiderPreviousSections:
-          type: boolean
-        outputFormat:
-          $ref: "#/components/schemas/OutputFormat"
-        maxOutlineLevels:
-          type: integer
-          minimum: 1
-          maximum: 5
-        additionalRequirements:
-          type: string
-
-    SourceType:
-      type: string
-      enum: [pdf, doc, ppt, md, txt, slides, arxiv, notes, bibtex, latex, url, book, dataset]
-
-    SourceStatus:
-      type: string
-      enum: [ready, indexed, error]
-      description: >
-        `ready` until a run indexes it (`chunksCount` still `null`); `indexed`/
-        `error` are set from that run's `kb_sources.json` (issue #10).
-
-    RAGCitation:
-      type: object
-      properties:
-        id:
-          type: string
-        sourceDoc:
-          type: string
-        pageNumber:
-          type: integer
-          nullable: true
-        sectionSnippet:
-          type: string
-        relevanceScore:
-          type: number
-        authorYear:
-          type: string
-          nullable: true
-      required: [id, sourceDoc, sectionSnippet, relevanceScore]
-
-    Source:
-      type: object
-      x-status: planned
-      x-issue: 5
-      description: A file attached to a project as a RAG source.
-      properties:
-        id:
-          type: string
-          format: uuid
-        fileId:
-          type: string
-          format: uuid
-        name:
-          type: string
-          description: The file's `filename`.
-        sizeBytes:
-          type: integer
-        type:
-          $ref: "#/components/schemas/SourceType"
-        chunksCount:
-          type: integer
-          nullable: true
-        status:
-          $ref: "#/components/schemas/SourceStatus"
-        uploadDate:
-          type: string
-          format: date-time
-          description: The file's `createdAt`.
-        authors:
-          type: string
-          nullable: true
-        year:
-          type: string
-          nullable: true
-        doi:
-          type: string
-          nullable: true
-        url:
-          type: string
-          nullable: true
-        description:
-          type: string
-          nullable: true
-      required: [id, fileId, name, sizeBytes, type, chunksCount, status, uploadDate]
-
-    SourceCreate:
-      type: object
-      x-status: planned
-      x-issue: 5
-      properties:
-        fileId:
-          type: string
-          format: uuid
-        type:
-          $ref: "#/components/schemas/SourceType"
-        authors:
-          type: string
-        year:
-          type: string
-        doi:
-          type: string
-        url:
-          type: string
-        description:
-          type: string
-      required: [fileId]
-
-    SourceUpdate:
-      type: object
-      x-status: planned
-      x-issue: 5
-      description: Bibliographic metadata only.
-      properties:
-        authors:
-          type: string
-        year:
-          type: string
-        doi:
-          type: string
-        url:
-          type: string
-        description:
-          type: string
-
-    NodeStatus:
-      type: string
-      enum: [not_started, drafting, review_ready, compiled]
-
-    MathLevel:
-      type: string
-      enum: [introductory, rigorous, formal_proof, applied]
-
-    OutlineNode:
-      type: object
-      x-status: planned
-      x-issue: 6
-      description: Flat shape - one row, addressed by `parentId` + `orderIndex`.
-      properties:
-        id:
-          type: string
-          format: uuid
-        parentId:
-          type: string
-          format: uuid
-          nullable: true
-        orderIndex:
-          type: integer
-        cliKey:
-          type: string
-          nullable: true
-          readOnly: true
-          description: >
-            Positional key matching the CLI graph (`"1"`, `"1-2"`, `"1-2-3"` -
-            `autogenbook/graph/doc_graph.py`), assigned once a run has processed
-            this node.
-        title:
-          type: string
-        summary:
-          type: string
-        level:
-          type: integer
-          readOnly: true
-          description: 1 = Chapter, 2 = Section, 3 = Subsection - derived from the tree.
-        sectionNumber:
-          type: string
-          readOnly: true
-          description: e.g. "1.2.1" - derived from the tree.
-        status:
-          $ref: "#/components/schemas/NodeStatus"
-        targetPages:
-          type: number
-        wordBudget:
-          type: integer
-        actualWords:
-          type: integer
-          readOnly: true
-        equationDensityLevel:
-          type: integer
-          minimum: 1
-          maximum: 5
-        mathLevel:
-          $ref: "#/components/schemas/MathLevel"
-        subPrompt:
-          type: string
-          nullable: true
-        contentMarkdown:
-          type: string
-        contentLatex:
-          type: string
-        ragCitations:
-          type: array
-          items:
-            $ref: "#/components/schemas/RAGCitation"
-        reviewerScore:
-          type: number
-          nullable: true
-        reviewerNotes:
-          type: string
-          nullable: true
-        structureLocked:
-          type: boolean
-          description: >
-            False on nodes the CLI subdivided itself (`subdivide_graph`), which
-            re-running a full generation may restructure further.
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-      required:
-        - id
-        - parentId
-        - orderIndex
-        - title
-        - summary
-        - level
-        - sectionNumber
-        - status
-        - targetPages
-        - wordBudget
-        - actualWords
-        - equationDensityLevel
-        - mathLevel
-        - contentMarkdown
-        - contentLatex
-        - ragCitations
-        - structureLocked
-        - createdAt
-        - updatedAt
-
-    OutlineNodeTree:
-      description: "`OutlineNode` with nested `children` instead of `parentId`/`orderIndex`."
-      allOf:
-        - $ref: "#/components/schemas/OutlineNode"
-        - type: object
-          properties:
-            children:
-              type: array
-              items:
-                $ref: "#/components/schemas/OutlineNodeTree"
-          required: [children]
-
-    OutlineNodeCreate:
-      type: object
-      x-status: planned
-      x-issue: 6
-      properties:
-        parentId:
-          type: string
-          format: uuid
-          nullable: true
-        title:
-          type: string
-        orderIndex:
-          type: integer
-          description: Defaults to append (last sibling).
-        summary:
-          type: string
-        targetPages:
-          type: number
-          description: Default 1.
-        subPrompt:
-          type: string
-        mathLevel:
-          allOf: [$ref: "#/components/schemas/MathLevel"]
-          default: rigorous
-        equationDensityLevel:
-          type: integer
-          minimum: 1
-          maximum: 5
-          description: Defaults to the project's `equationFrequencyLevel`.
-      required: [parentId, title]
-
-    OutlineNodeUpdate:
-      type: object
-      x-status: planned
-      x-issue: 6
-      description: >
-        Partial update of mutable fields. `level`, `sectionNumber`, `cliKey` and
-        `actualWords` are server-derived - sending any of them is rejected with
-        422.
-      properties:
-        parentId:
-          type: string
-          format: uuid
-          nullable: true
-        orderIndex:
-          type: integer
-        title:
-          type: string
-        summary:
-          type: string
-        status:
-          $ref: "#/components/schemas/NodeStatus"
-        targetPages:
-          type: number
-        wordBudget:
-          type: integer
-        equationDensityLevel:
-          type: integer
-          minimum: 1
-          maximum: 5
-        mathLevel:
-          $ref: "#/components/schemas/MathLevel"
-        subPrompt:
-          type: string
-        contentMarkdown:
-          type: string
-        contentLatex:
-          type: string
-        reviewerScore:
-          type: number
-        reviewerNotes:
-          type: string
-        structureLocked:
-          type: boolean
-
-    OutlineTreeReplaceNode:
-      type: object
-      x-status: planned
-      x-issue: 6
-      description: >
-        One node of a full outline replacement, nested, without ids (ids are
-        assigned on write). Named separately from `OutlineTreeReplace` (rather
-        than an inline array `items` schema) so `children` can `$ref` it
-        recursively - a `$ref` into another schema's own `items` keyword isn't
-        a resolvable named schema for codegen.
-      properties:
-        title:
-          type: string
-        summary:
-          type: string
-        targetPages:
-          type: number
-        subPrompt:
-          type: string
-        mathLevel:
-          $ref: "#/components/schemas/MathLevel"
-        equationDensityLevel:
-          type: integer
-          minimum: 1
-          maximum: 5
-        children:
-          type: array
-          items:
-            $ref: "#/components/schemas/OutlineTreeReplaceNode"
-      required: [title]
-    OutlineTreeReplace:
-      type: array
-      x-status: planned
-      x-issue: 6
-      description: >
-        Root-level nodes of a full outline replacement, nested, without ids (ids
-        are assigned on write).
-      items:
-        $ref: "#/components/schemas/OutlineTreeReplaceNode"
-
-    RunKind:
-      type: string
-      enum: [full, regenerate_section, export]
-
-    RunStatus:
-      type: string
-      enum: [queued, running, succeeded, failed, cancelled]
-
-    AuditMode:
-      type: string
-      enum: [off, warn, strict]
-      description: Maps to the CLI's `--audit-mode` (`autogenbook/audit/latex_auditor.py`).
-
-    RunOptions:
-      type: object
-      x-status: planned
-      x-issue: 9
-      description: Body of `POST /api/v1/projects/{projectId}/runs`.
-      properties:
-        outline:
-          type: string
-          enum: [project]
-          default: project
-          description: >
-            Only value today: build from the project's current outline rows. A
-            literal spec input may be added later.
-        outputFormat:
-          allOf: [$ref: "#/components/schemas/OutputFormat"]
-          description: Defaults to the project's `outputFormat`.
-        allowSubdivision:
-          type: boolean
-          default: false
-          description: Lets the CLI split oversized leaf sections further.
-        auditBookMode:
-          allOf: [$ref: "#/components/schemas/AuditMode"]
-          default: warn
-
-    Run:
-      type: object
-      x-status: planned
-      x-issue: 9
-      properties:
-        id:
-          type: string
-          format: uuid
-        projectId:
-          type: string
-          format: uuid
-        kind:
-          $ref: "#/components/schemas/RunKind"
-        status:
-          $ref: "#/components/schemas/RunStatus"
-        options:
-          type: object
-          description: >
-            The `RunOptions` this run was created with; for `regenerate_section`
-            and `export` runs also carries internal fields (`resume`,
-            `exportTexOnly`) set by the server, not by the client.
-          additionalProperties: true
-        baseRunId:
-          type: string
-          format: uuid
-          nullable: true
-          description: Set on `regenerate_section`/`export` runs - the run whose work dir is reused.
-        targetNodeId:
-          type: string
-          format: uuid
-          nullable: true
-          description: Set on `regenerate_section` runs.
-        exitCode:
-          type: integer
-          nullable: true
-        error:
-          type: string
-          nullable: true
-        totalTokens:
-          type: integer
-          nullable: true
-        totalCostUsd:
-          type: number
-          nullable: true
-        resumable:
-          type: boolean
-          description: False once this run's work directory has been reaped by retention cleanup.
-        queuedAt:
-          type: string
-          format: date-time
-        startedAt:
-          type: string
-          format: date-time
-          nullable: true
-        finishedAt:
-          type: string
-          format: date-time
-          nullable: true
-      required:
-        - id
-        - projectId
-        - kind
-        - status
-        - options
-        - baseRunId
-        - targetNodeId
-        - exitCode
-        - error
-        - totalTokens
-        - totalCostUsd
-        - resumable
-        - queuedAt
-        - startedAt
-        - finishedAt
-
-    RunEvent:
-      type: object
-      x-status: planned
-      x-issue: 9
-      description: One row of `run_events`; also the JSON payload of the SSE `log` event.
-      properties:
-        seq:
-          type: integer
-        ts:
-          type: string
-          format: date-time
-        level:
-          type: string
-          description: e.g. `"info"`, `"warn"`, `"error"`.
-        stage:
-          type: string
-          nullable: true
-          description: Pipeline stage name, when applicable.
-        message:
-          type: string
-        payload:
-          type: object
-          nullable: true
-          additionalProperties: true
-          description: >
-            Event-specific extra data (e.g. `nodeId`/`cliKey` on a `section`
-            event).
-      required: [seq, ts, level, message]
-
     ArtifactKind:
       type: string
       enum:
-        - markdown
-        - tex
-        - pdf
-        - structure_graph
-        - book_structure
-        - section
-        - section_review
-        - kb_sources
-        - run_meta
-        - llm_usage
-        - audit_report
-        - log
-        - bib
-        - other
-
-    RunArtifact:
+      - markdown
+      - tex
+      - pdf
+      - structure_graph
+      - book_structure
+      - section
+      - section_review
+      - kb_sources
+      - run_meta
+      - llm_usage
+      - audit_report
+      - log
+      - bib
+      - other
+      title: ArtifactKind
+    Body_files-upload_file:
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
       type: object
-      x-status: planned
-      x-issue: 10
+      required:
+      - file
+      title: Body_files-upload_file
+    ExportRequestIn:
+      properties:
+        format:
+          type: string
+          enum:
+          - latex
+          - pdf
+          title: Format
+      additionalProperties: false
+      type: object
+      required:
+      - format
+      title: ExportRequestIn
+      description: Request body of `POST /runs/{id}/exports`.
+    File:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        filename:
+          type: string
+          title: Filename
+        contentType:
+          type: string
+          title: Contenttype
+        sizeBytes:
+          type: integer
+          title: Sizebytes
+        sha256:
+          type: string
+          title: Sha256
+        kind:
+          $ref: '#/components/schemas/FileKind'
+        kbEligible:
+          type: boolean
+          title: Kbeligible
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+      type: object
+      required:
+      - id
+      - filename
+      - contentType
+      - sizeBytes
+      - sha256
+      - kind
+      - kbEligible
+      - createdAt
+      title: File
+    FileKind:
+      type: string
+      enum:
+      - upload
+      - artifact
+      title: FileKind
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    MathLevel:
+      type: string
+      enum:
+      - introductory
+      - rigorous
+      - formal_proof
+      - applied
+      title: MathLevel
+    NodeStatus:
+      type: string
+      enum:
+      - not_started
+      - drafting
+      - review_ready
+      - compiled
+      title: NodeStatus
+    OutlineNode:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+        orderIndex:
+          type: integer
+          title: Orderindex
+        cliKey:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Clikey
+        title:
+          type: string
+          title: Title
+        summary:
+          type: string
+          title: Summary
+        level:
+          type: integer
+          title: Level
+        sectionNumber:
+          type: string
+          title: Sectionnumber
+        status:
+          $ref: '#/components/schemas/NodeStatus'
+        targetPages:
+          type: number
+          title: Targetpages
+        wordBudget:
+          type: integer
+          title: Wordbudget
+        actualWords:
+          type: integer
+          title: Actualwords
+        equationDensityLevel:
+          type: integer
+          maximum: 5.0
+          minimum: 1.0
+          title: Equationdensitylevel
+        mathLevel:
+          $ref: '#/components/schemas/MathLevel'
+        subPrompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Subprompt
+        contentMarkdown:
+          type: string
+          title: Contentmarkdown
+        contentLatex:
+          type: string
+          title: Contentlatex
+        ragCitations:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Ragcitations
+        reviewerScore:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Reviewerscore
+        reviewerNotes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reviewernotes
+        structureLocked:
+          type: boolean
+          title: Structurelocked
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+        updatedAt:
+          type: string
+          format: date-time
+          title: Updatedat
+      type: object
+      required:
+      - id
+      - parentId
+      - orderIndex
+      - title
+      - summary
+      - level
+      - sectionNumber
+      - status
+      - targetPages
+      - wordBudget
+      - actualWords
+      - equationDensityLevel
+      - mathLevel
+      - contentMarkdown
+      - contentLatex
+      - structureLocked
+      - createdAt
+      - updatedAt
+      title: OutlineNode
+      description: 'Flat shape - one row, addressed by `parentId` + `orderIndex`.
+
+
+        `level`, `sectionNumber` and `cliKey` are always derived from the current
+
+        tree shape (`api.domain.outline.assign_positions`) - never persisted
+
+        client-supplied values.'
+    OutlineNodeCreate:
+      properties:
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+        title:
+          type: string
+          title: Title
+        orderIndex:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Orderindex
+        summary:
+          type: string
+          title: Summary
+          default: ''
+        targetPages:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Targetpages
+        subPrompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Subprompt
+        mathLevel:
+          $ref: '#/components/schemas/MathLevel'
+          default: rigorous
+        equationDensityLevel:
+          anyOf:
+          - type: integer
+            maximum: 5.0
+            minimum: 1.0
+          - type: 'null'
+          title: Equationdensitylevel
+      additionalProperties: false
+      type: object
+      required:
+      - title
+      title: OutlineNodeCreate
+    OutlineNodeTree:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+        orderIndex:
+          type: integer
+          title: Orderindex
+        cliKey:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Clikey
+        title:
+          type: string
+          title: Title
+        summary:
+          type: string
+          title: Summary
+        level:
+          type: integer
+          title: Level
+        sectionNumber:
+          type: string
+          title: Sectionnumber
+        status:
+          $ref: '#/components/schemas/NodeStatus'
+        targetPages:
+          type: number
+          title: Targetpages
+        wordBudget:
+          type: integer
+          title: Wordbudget
+        actualWords:
+          type: integer
+          title: Actualwords
+        equationDensityLevel:
+          type: integer
+          maximum: 5.0
+          minimum: 1.0
+          title: Equationdensitylevel
+        mathLevel:
+          $ref: '#/components/schemas/MathLevel'
+        subPrompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Subprompt
+        contentMarkdown:
+          type: string
+          title: Contentmarkdown
+        contentLatex:
+          type: string
+          title: Contentlatex
+        ragCitations:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Ragcitations
+        reviewerScore:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Reviewerscore
+        reviewerNotes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reviewernotes
+        structureLocked:
+          type: boolean
+          title: Structurelocked
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+        updatedAt:
+          type: string
+          format: date-time
+          title: Updatedat
+        children:
+          items:
+            $ref: '#/components/schemas/OutlineNodeTree'
+          type: array
+          title: Children
+      type: object
+      required:
+      - id
+      - parentId
+      - orderIndex
+      - title
+      - summary
+      - level
+      - sectionNumber
+      - status
+      - targetPages
+      - wordBudget
+      - actualWords
+      - equationDensityLevel
+      - mathLevel
+      - contentMarkdown
+      - contentLatex
+      - structureLocked
+      - createdAt
+      - updatedAt
+      title: OutlineNodeTree
+      description: '`OutlineNode` with nested `children` instead of `parentId`/`orderIndex`.'
+    OutlineNodeUpdate:
+      properties:
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+        orderIndex:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Orderindex
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        status:
+          anyOf:
+          - $ref: '#/components/schemas/NodeStatus'
+          - type: 'null'
+        targetPages:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Targetpages
+        wordBudget:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Wordbudget
+        equationDensityLevel:
+          anyOf:
+          - type: integer
+            maximum: 5.0
+            minimum: 1.0
+          - type: 'null'
+          title: Equationdensitylevel
+        mathLevel:
+          anyOf:
+          - $ref: '#/components/schemas/MathLevel'
+          - type: 'null'
+        subPrompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Subprompt
+        contentMarkdown:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Contentmarkdown
+        contentLatex:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Contentlatex
+        reviewerScore:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Reviewerscore
+        reviewerNotes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reviewernotes
+        structureLocked:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Structurelocked
+      additionalProperties: false
+      type: object
+      title: OutlineNodeUpdate
+      description: 'Partial update of mutable fields. `level`, `sectionNumber`, `cliKey`
+
+        and `actualWords` are server-derived - sending any of them (or any other
+
+        unknown key) is rejected with 422.'
+    OutlineTreeReplaceNode:
+      properties:
+        title:
+          type: string
+          title: Title
+        summary:
+          type: string
+          title: Summary
+          default: ''
+        targetPages:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Targetpages
+        subPrompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Subprompt
+        mathLevel:
+          $ref: '#/components/schemas/MathLevel'
+          default: rigorous
+        equationDensityLevel:
+          anyOf:
+          - type: integer
+            maximum: 5.0
+            minimum: 1.0
+          - type: 'null'
+          title: Equationdensitylevel
+        children:
+          items:
+            $ref: '#/components/schemas/OutlineTreeReplaceNode'
+          type: array
+          title: Children
+      additionalProperties: false
+      type: object
+      required:
+      - title
+      title: OutlineTreeReplaceNode
+      description: 'One node of a full outline replacement, nested, without ids (ids
+        are
+
+        assigned on write).'
+    OutputFormat:
+      type: string
+      enum:
+      - markdown
+      - latex
+      - pdf
+      title: OutputFormat
+    Page_File_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/File'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[File]
+    Page_OutlineNode_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/OutlineNode'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[OutlineNode]
+    Page_ProjectSummary_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ProjectSummary'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[ProjectSummary]
+    Page_RunArtifact_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RunArtifact'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[RunArtifact]
+    Page_RunEvent_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RunEvent'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[RunEvent]
+    Page_Run_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Run'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[Run]
+    Page_Source_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Source'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[Source]
+    Project:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        title:
+          type: string
+          title: Title
+        subtitle:
+          type: string
+          title: Subtitle
+        authors:
+          items:
+            type: string
+          type: array
+          title: Authors
+        topic:
+          type: string
+          title: Topic
+        targetAudience:
+          $ref: '#/components/schemas/TargetAudience'
+        totalPagesBudget:
+          type: integer
+          title: Totalpagesbudget
+        equationFrequencyLevel:
+          type: integer
+          title: Equationfrequencylevel
+        doConsiderOutline:
+          type: boolean
+          title: Doconsideroutline
+        doConsiderPreviousSections:
+          type: boolean
+          title: Doconsiderprevioussections
+        outputFormat:
+          $ref: '#/components/schemas/OutputFormat'
+        maxOutlineLevels:
+          type: integer
+          title: Maxoutlinelevels
+        additionalRequirements:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Additionalrequirements
+        sources:
+          items:
+            $ref: '#/components/schemas/Source'
+          type: array
+          title: Sources
+        outline:
+          items:
+            $ref: '#/components/schemas/OutlineNodeTree'
+          type: array
+          title: Outline
+        lastRunId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Lastrunid
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+        updatedAt:
+          type: string
+          format: date-time
+          title: Updatedat
+      type: object
+      required:
+      - id
+      - title
+      - subtitle
+      - authors
+      - topic
+      - targetAudience
+      - totalPagesBudget
+      - equationFrequencyLevel
+      - doConsiderOutline
+      - doConsiderPreviousSections
+      - outputFormat
+      - maxOutlineLevels
+      - createdAt
+      - updatedAt
+      title: Project
+    ProjectCreate:
+      properties:
+        title:
+          type: string
+          title: Title
+        subtitle:
+          type: string
+          title: Subtitle
+        authors:
+          items:
+            type: string
+          type: array
+          title: Authors
+        topic:
+          type: string
+          title: Topic
+        targetAudience:
+          $ref: '#/components/schemas/TargetAudience'
+          default: graduate
+        totalPagesBudget:
+          type: integer
+          maximum: 2000.0
+          minimum: 5.0
+          title: Totalpagesbudget
+          default: 350
+        equationFrequencyLevel:
+          type: integer
+          maximum: 5.0
+          minimum: 1.0
+          title: Equationfrequencylevel
+          default: 4
+        doConsiderOutline:
+          type: boolean
+          title: Doconsideroutline
+          default: true
+        doConsiderPreviousSections:
+          type: boolean
+          title: Doconsiderprevioussections
+          default: true
+        outputFormat:
+          $ref: '#/components/schemas/OutputFormat'
+          default: markdown
+        maxOutlineLevels:
+          type: integer
+          maximum: 5.0
+          minimum: 1.0
+          title: Maxoutlinelevels
+          default: 3
+        additionalRequirements:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Additionalrequirements
+        sources:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/SourceCreate'
+            type: array
+          - type: 'null'
+          title: Sources
+        outline:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/OutlineTreeReplaceNode'
+            type: array
+          - type: 'null'
+          title: Outline
+      type: object
+      required:
+      - title
+      - subtitle
+      - authors
+      - topic
+      title: ProjectCreate
+    ProjectSummary:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        title:
+          type: string
+          title: Title
+        subtitle:
+          type: string
+          title: Subtitle
+        authors:
+          items:
+            type: string
+          type: array
+          title: Authors
+        topic:
+          type: string
+          title: Topic
+        targetAudience:
+          $ref: '#/components/schemas/TargetAudience'
+        totalPagesBudget:
+          type: integer
+          title: Totalpagesbudget
+        sourcesCount:
+          type: integer
+          title: Sourcescount
+        outlineNodeCount:
+          type: integer
+          title: Outlinenodecount
+        lastRunId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Lastrunid
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+        updatedAt:
+          type: string
+          format: date-time
+          title: Updatedat
+      type: object
+      required:
+      - id
+      - title
+      - subtitle
+      - authors
+      - topic
+      - targetAudience
+      - totalPagesBudget
+      - sourcesCount
+      - outlineNodeCount
+      - createdAt
+      - updatedAt
+      title: ProjectSummary
+    ProjectUpdate:
+      properties:
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        subtitle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Subtitle
+        authors:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Authors
+        topic:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Topic
+        targetAudience:
+          anyOf:
+          - $ref: '#/components/schemas/TargetAudience'
+          - type: 'null'
+        totalPagesBudget:
+          anyOf:
+          - type: integer
+            maximum: 2000.0
+            minimum: 5.0
+          - type: 'null'
+          title: Totalpagesbudget
+        equationFrequencyLevel:
+          anyOf:
+          - type: integer
+            maximum: 5.0
+            minimum: 1.0
+          - type: 'null'
+          title: Equationfrequencylevel
+        doConsiderOutline:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Doconsideroutline
+        doConsiderPreviousSections:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Doconsiderprevioussections
+        outputFormat:
+          anyOf:
+          - $ref: '#/components/schemas/OutputFormat'
+          - type: 'null'
+        maxOutlineLevels:
+          anyOf:
+          - type: integer
+            maximum: 5.0
+            minimum: 1.0
+          - type: 'null'
+          title: Maxoutlinelevels
+        additionalRequirements:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Additionalrequirements
+      additionalProperties: false
+      type: object
+      title: ProjectUpdate
+    RegenerateRequestIn:
+      properties:
+        promptModifier:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Promptmodifier
+      additionalProperties: false
+      type: object
+      title: RegenerateRequestIn
+      description: Request body of `POST /projects/{id}/outline/{nodeId}/regenerate`.
+    Run:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        projectId:
+          type: string
+          format: uuid
+          title: Projectid
+        kind:
+          $ref: '#/components/schemas/RunKind'
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        options:
+          $ref: '#/components/schemas/RunOptionsOut'
+        baseRunId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Baserunid
+        targetNodeId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Targetnodeid
+        exitCode:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Exitcode
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        totalTokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Totaltokens
+        totalCostUsd:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Totalcostusd
+        queuedAt:
+          type: string
+          format: date-time
+          title: Queuedat
+        startedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Startedat
+        finishedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Finishedat
+        resumable:
+          type: boolean
+          title: Resumable
+      type: object
+      required:
+      - id
+      - projectId
+      - kind
+      - status
+      - options
+      - baseRunId
+      - targetNodeId
+      - exitCode
+      - error
+      - totalTokens
+      - totalCostUsd
+      - queuedAt
+      - startedAt
+      - finishedAt
+      - resumable
+      title: Run
+    RunArtifact:
       properties:
         kind:
-          $ref: "#/components/schemas/ArtifactKind"
+          $ref: '#/components/schemas/ArtifactKind'
         relativePath:
           type: string
-          description: Path within the run's work directory, e.g. `sections/1-2.md`.
+          title: Relativepath
         fileId:
           type: string
           format: uuid
+          title: Fileid
         filename:
           type: string
+          title: Filename
         sizeBytes:
           type: integer
+          title: Sizebytes
         contentType:
           type: string
-      required: [kind, relativePath, fileId, filename, sizeBytes, contentType]
-
-    RegenerateRequest:
+          title: Contenttype
       type: object
-      x-status: planned
-      x-issue: 11
+      required:
+      - kind
+      - relativePath
+      - fileId
+      - filename
+      - sizeBytes
+      - contentType
+      title: RunArtifact
+    RunEvent:
       properties:
-        promptModifier:
+        seq:
+          type: integer
+          title: Seq
+        ts:
           type: string
-          description: >
-            Appended to the node's `summary` in the reused `structure_graph.json`
-            before the CLI resumes.
-
-    ExportFormat:
-      type: string
-      enum: [latex, pdf]
-
-    ExportRequest:
+          format: date-time
+          title: Ts
+        level:
+          type: string
+          title: Level
+        stage:
+          type: string
+          title: Stage
+        message:
+          type: string
+          title: Message
+        payload:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Payload
       type: object
-      x-status: planned
-      x-issue: 11
+      required:
+      - seq
+      - ts
+      - level
+      - stage
+      - message
+      title: RunEvent
+    RunKind:
+      type: string
+      enum:
+      - full
+      - regenerate_section
+      - export
+      title: RunKind
+    RunOptionsIn:
       properties:
-        format:
-          $ref: "#/components/schemas/ExportFormat"
-      required: [format]
+        outline:
+          type: string
+          enum:
+          - project
+          - generate
+          title: Outline
+          default: project
+        outputFormat:
+          anyOf:
+          - type: string
+            enum:
+            - markdown
+            - latex
+            - pdf
+          - type: 'null'
+          title: Outputformat
+        allowSubdivision:
+          type: boolean
+          title: Allowsubdivision
+          default: false
+        enableWebRag:
+          type: boolean
+          title: Enablewebrag
+          default: false
+        auditBook:
+          type: boolean
+          title: Auditbook
+          default: false
+        auditBookMode:
+          type: string
+          enum:
+          - 'off'
+          - warn
+          - strict
+          title: Auditbookmode
+          default: warn
+        legacyTex:
+          type: boolean
+          title: Legacytex
+          default: false
+        rebuildKb:
+          type: boolean
+          title: Rebuildkb
+          default: false
+        failFastSchema:
+          type: boolean
+          title: Failfastschema
+          default: false
+        resume:
+          type: boolean
+          title: Resume
+          default: false
+        exportTexOnly:
+          type: boolean
+          title: Exporttexonly
+          default: false
+      additionalProperties: false
+      type: object
+      title: RunOptionsIn
+      description: 'Request body of `POST /projects/{id}/runs`. `output_format` defaults
+
+        to the project''s own `output_format` when omitted (resolved by
+
+        `RunService.create`''s caller, not here).'
+    RunOptionsOut:
+      properties:
+        outline:
+          type: string
+          enum:
+          - project
+          - generate
+          title: Outline
+        outputFormat:
+          type: string
+          enum:
+          - markdown
+          - latex
+          - pdf
+          title: Outputformat
+        allowSubdivision:
+          type: boolean
+          title: Allowsubdivision
+        enableWebRag:
+          type: boolean
+          title: Enablewebrag
+        auditBook:
+          type: boolean
+          title: Auditbook
+        auditBookMode:
+          type: string
+          enum:
+          - 'off'
+          - warn
+          - strict
+          title: Auditbookmode
+        legacyTex:
+          type: boolean
+          title: Legacytex
+        rebuildKb:
+          type: boolean
+          title: Rebuildkb
+        failFastSchema:
+          type: boolean
+          title: Failfastschema
+        resume:
+          type: boolean
+          title: Resume
+        exportTexOnly:
+          type: boolean
+          title: Exporttexonly
+        promptModifier:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Promptmodifier
+      type: object
+      required:
+      - outline
+      - outputFormat
+      - allowSubdivision
+      - enableWebRag
+      - auditBook
+      - auditBookMode
+      - legacyTex
+      - rebuildKb
+      - failFastSchema
+      - resume
+      - exportTexOnly
+      title: RunOptionsOut
+    RunStatus:
+      type: string
+      enum:
+      - queued
+      - running
+      - succeeded
+      - failed
+      - cancelled
+      title: RunStatus
+    Source:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        fileId:
+          type: string
+          format: uuid
+          title: Fileid
+        name:
+          type: string
+          title: Name
+        sizeBytes:
+          type: integer
+          title: Sizebytes
+        type:
+          $ref: '#/components/schemas/SourceType'
+        chunksCount:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Chunkscount
+        status:
+          $ref: '#/components/schemas/SourceStatus'
+        uploadDate:
+          type: string
+          format: date-time
+          title: Uploaddate
+        authors:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authors
+        year:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Year
+        doi:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Doi
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      type: object
+      required:
+      - id
+      - fileId
+      - name
+      - sizeBytes
+      - type
+      - status
+      - uploadDate
+      title: Source
+    SourceCreate:
+      properties:
+        fileId:
+          type: string
+          format: uuid
+          title: Fileid
+        type:
+          anyOf:
+          - $ref: '#/components/schemas/SourceType'
+          - type: 'null'
+        authors:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authors
+        year:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Year
+        doi:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Doi
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      type: object
+      required:
+      - fileId
+      title: SourceCreate
+    SourceStatus:
+      type: string
+      enum:
+      - ready
+      - indexed
+      - error
+      title: SourceStatus
+    SourceType:
+      type: string
+      enum:
+      - pdf
+      - doc
+      - ppt
+      - md
+      - txt
+      - slides
+      - arxiv
+      - notes
+      - bibtex
+      - latex
+      - url
+      - book
+      - dataset
+      title: SourceType
+    SourceUpdate:
+      properties:
+        authors:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authors
+        year:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Year
+        doi:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Doi
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      type: object
+      title: SourceUpdate
+    TargetAudience:
+      type: string
+      enum:
+      - undergraduate
+      - graduate
+      - phd_researcher
+      - industry_practitioner
+      title: TargetAudience
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
