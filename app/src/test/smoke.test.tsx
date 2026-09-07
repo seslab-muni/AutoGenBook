@@ -23,7 +23,9 @@ describe('root route', () => {
         name: /Distributed Consensus & Quantum Fault Tolerance/i,
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Outline tree coming soon/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Foundations of Classical Asynchronous Consensus/i),
+    ).toBeInTheDocument();
   });
 
   it('renders the not-found view for an unknown project id', async () => {
