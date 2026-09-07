@@ -128,6 +128,7 @@ def run(
     cancel_grace_s: float = CANCEL_GRACE_S,
     poll_interval_s: float = GRAPH_POLL_INTERVAL_S,
     timeout_s: float | None = None,
+    start_seq: int = 0,
 ) -> int:
     """Run `argv` as a subprocess, streaming events via `on_event`.
 
@@ -138,6 +139,12 @@ def run(
     True the process group is sent SIGTERM, then SIGKILL after
     `cancel_grace_s` seconds if it hasn't exited. `timeout_s`, if given,
     triggers the same SIGKILL directly once the wall-clock budget is spent.
+
+    `start_seq` seeds the emitted sequence numbers (the first event is
+    `start_seq + 1`) - it must be the run's current max persisted `seq`
+    (0 for a run's first attempt), so a re-claimed/retried run's events
+    don't collide with `uq_run_events_run_id_seq` on rows a previous,
+    interrupted attempt already committed.
     """
 
     work_dir = Path(work_dir)
@@ -149,7 +156,7 @@ def run(
     # delivered to `on_event` in strictly increasing `seq` order even when
     # both threads race to emit at the same time.
     emit_lock = threading.Lock()
-    seq_holder = [0]
+    seq_holder = [start_seq]
 
     def emit(level: str, stage: str, message: str, payload: dict | None = None) -> None:
         with emit_lock:

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.domain.models import Run, RunKind, RunOptions, RunStatus
 from api.infrastructure.db.models import OutlineNodeRecord
+from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 
 MINIMAL_PROJECT = {
     "title": "Intro to Widgets",
@@ -548,6 +551,79 @@ async def test_duplicate_project_deep_copies_outline_with_new_ids(
     # Original project's outline is untouched.
     original_response = await client.get(f"/api/v1/projects/{project['id']}")
     assert len(original_response.json()["outline"]) == 1
+
+
+async def _start_active_run(session_factory: async_sessionmaker[AsyncSession], project_id: str) -> None:
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        await SqlAlchemyRunRepository(session).add(
+            Run(
+                id=uuid.uuid4(),
+                project_id=uuid.UUID(project_id),
+                kind=RunKind.full,
+                status=RunStatus.running,
+                options=RunOptions(outline="generate", output_format="markdown"),
+                base_run_id=None,
+                target_node_id=None,
+                target_node_previous_status=None,
+                work_dir="/tmp/does-not-matter",
+                exit_code=None,
+                error=None,
+                cancel_requested=False,
+                locked_by="worker-1",
+                heartbeat_at=now,
+                queued_at=now,
+                started_at=now,
+                finished_at=None,
+                total_tokens=None,
+                total_cost_usd=None,
+            )
+        )
+
+
+async def test_structural_outline_writes_are_rejected_while_a_run_is_active(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #74: a structural outline edit (insert, delete,
+    full replace, or a move via PATCH's `parentId`/`orderIndex`) landing
+    while a run is active shifts every sibling's recomputed `cli_key`, so
+    `graph_import.py` - which matches the CLI's output back onto outline
+    rows by recomputing that key from the *current* tree - silently writes
+    one node's generated content and title onto a different, unrelated row
+    once the run finishes. Non-structural edits (title/summary/content) are
+    still safe and must stay allowed."""
+    project = await _create_project(client)
+    project_id = project["id"]
+    chapter = await _create_node(client, project_id, title="Chapter 1")
+
+    await _start_active_run(session_factory, project_id)
+
+    create_response = await client.post(
+        f"/api/v1/projects/{project_id}/outline", json={"title": "New", "parentId": None}
+    )
+    assert create_response.status_code == 409
+
+    delete_response = await client.delete(
+        f"/api/v1/projects/{project_id}/outline/{chapter['id']}"
+    )
+    assert delete_response.status_code == 409
+
+    replace_response = await client.put(
+        f"/api/v1/projects/{project_id}/outline", json=[{"title": "Only chapter"}]
+    )
+    assert replace_response.status_code == 409
+
+    move_response = await client.patch(
+        f"/api/v1/projects/{project_id}/outline/{chapter['id']}", json={"orderIndex": 5}
+    )
+    assert move_response.status_code == 409
+
+    content_response = await client.patch(
+        f"/api/v1/projects/{project_id}/outline/{chapter['id']}",
+        json={"title": "Renamed while a run is active"},
+    )
+    assert content_response.status_code == 200
+    assert content_response.json()["title"] == "Renamed while a run is active"
 
 
 async def test_flat_and_tree_formats_are_equivalent(client: AsyncClient) -> None:

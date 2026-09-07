@@ -120,6 +120,8 @@ class RunRepository(Protocol):
 
     async def list_terminal_before(self, cutoff: datetime) -> list[Run]: ...
 
+    async def rollback(self) -> None: ...
+
 
 class RunEventRepository(Protocol):
     async def append_batch(self, run_id: uuid.UUID, events: Sequence[RunEvent]) -> None: ...
@@ -127,6 +129,10 @@ class RunEventRepository(Protocol):
     async def list(
         self, run_id: uuid.UUID, after_seq: int, limit: int
     ) -> tuple[list[RunEvent], int]: ...
+
+    async def list_after(
+        self, run_id: uuid.UUID, after_seq: int, limit: int
+    ) -> list[RunEvent]: ...
 
     async def max_seq(self, run_id: uuid.UUID) -> int: ...
 

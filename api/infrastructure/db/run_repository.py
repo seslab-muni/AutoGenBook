@@ -108,6 +108,15 @@ class SqlAlchemyRunRepository:
         )
         return [run_to_domain(record) for record in result.scalars().all()], total or 0
 
+    async def rollback(self) -> None:
+        """Recover the shared session from a poisoned ("pending rollback")
+        state after a failed commit elsewhere (e.g. `SqlAlchemyRunEventRepository
+        .append_batch`), so subsequent writes on it (e.g. `update`, from
+        `GenerationService._fail`/`_finalize`) don't also raise
+        `PendingRollbackError`. Safe to call even when the session isn't
+        poisoned."""
+        await self._session.rollback()
+
     async def add(self, run: Run) -> Run:
         record = RunRecord(id=run.id)
         _apply_domain_to_record(run, record)
@@ -193,6 +202,19 @@ class SqlAlchemyRunEventRepository:
             .limit(limit)
         )
         return [_event_to_domain(record) for record in result.scalars().all()], total or 0
+
+    async def list_after(
+        self, run_id: uuid.UUID, after_seq: int, limit: int
+    ) -> list[RunEvent]:
+        """Like `list`, but skips the `count(*)` - for callers (SSE polling)
+        that only need the next batch of events, not a total."""
+        result = await self._session.execute(
+            select(RunEventRecord)
+            .where(RunEventRecord.run_id == run_id, RunEventRecord.seq > after_seq)
+            .order_by(RunEventRecord.seq)
+            .limit(limit)
+        )
+        return [_event_to_domain(record) for record in result.scalars().all()]
 
     async def max_seq(self, run_id: uuid.UUID) -> int:
         value = await self._session.scalar(

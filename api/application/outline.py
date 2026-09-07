@@ -5,7 +5,7 @@ from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
-from api.core.errors import NotFound, ValidationFailed
+from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project
 from api.domain.outline import (
     OutlineTree,
@@ -14,7 +14,7 @@ from api.domain.outline import (
     depth_of,
     subtree_ids,
 )
-from api.domain.ports import OutlineRepository, ProjectRepository
+from api.domain.ports import OutlineRepository, ProjectRepository, RunRepository
 
 # Matches the CLI's default page->word ratio used to seed `word_budget`
 # (`autogenbook` sizes sections in words but the wizard/UI think in pages).
@@ -37,15 +37,33 @@ class OutlineService:
         self,
         outline_repository: OutlineRepository,
         project_repository: ProjectRepository,
+        run_repository: RunRepository,
     ) -> None:
         self._outline_repository = outline_repository
         self._project_repository = project_repository
+        self._run_repository = run_repository
 
     async def _get_project(self, project_id: uuid.UUID) -> Project:
         project = await self._project_repository.get(project_id)
         if project is None:
             raise NotFound(f"project {project_id} does not exist")
         return project
+
+    async def _reject_if_run_active(self, project_id: uuid.UUID) -> None:
+        """A `full`/`regenerate_section` run reads the outline once, up
+        front, into its work directory (`GenerationService._prepare_work_dir`
+        / `_prepare_regenerate`) and matches its own results back onto outline
+        rows by *recomputed* `cli_key` once it finishes (`graph_import.py`).
+        A structural edit landing in between (insert/delete/move, which
+        shifts every sibling's recomputed key) makes that recompute-at-import
+        match the wrong rows - see issue #74: a probe reproduced generated
+        content and titles landing on the wrong node, silently discarding a
+        real section. Block the write instead of racing it."""
+        if await self._run_repository.get_active_for_project(project_id) is not None:
+            raise Conflict(
+                f"project {project_id} has an active run; the outline's structure "
+                "can't be changed until it finishes or is cancelled"
+            )
 
     async def _get_node(
         self, project_id: uuid.UUID, node_id: uuid.UUID, flat: Sequence[OutlineNode]
@@ -86,6 +104,7 @@ class OutlineService:
         equation_density_level: int | None = None,
     ) -> OutlineNode:
         project = await self._get_project(project_id)
+        await self._reject_if_run_active(project_id)
         flat = await self._outline_repository.list(project_id)
         by_id = {n.id: n for n in flat}
 
@@ -158,6 +177,9 @@ class OutlineService:
         requested_order_index = changes.pop("order_index", None)
         touches_position = parent_changed or requested_order_index is not None
 
+        if touches_position:
+            await self._reject_if_run_active(project_id)
+
         if parent_changed:
             if new_parent_id is not None:
                 new_parent = next(
@@ -210,6 +232,7 @@ class OutlineService:
         `OutlineRepository.delete_subtree` sets `deleted_at` rather than
         issuing a SQL `DELETE`, so the rows still exist afterwards."""
         await self._get_project(project_id)
+        await self._reject_if_run_active(project_id)
         flat = await self._outline_repository.list(project_id)
         await self._get_node(project_id, node_id, flat)
         ids = subtree_ids(node_id, flat)
@@ -219,6 +242,7 @@ class OutlineService:
         self, project_id: uuid.UUID, tree: list[dict[str, Any]]
     ) -> list[OutlineNode]:
         project = await self._get_project(project_id)
+        await self._reject_if_run_active(project_id)
         now = datetime.now(timezone.utc)
         flat_nodes: list[OutlineNode] = []
 

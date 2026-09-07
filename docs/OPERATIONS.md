@@ -30,7 +30,7 @@ Deployment is not codified in runtime code paths; no container/orchestration log
 
 `docker compose up --build` starts six services (`docker-compose.yml`):
 
-- `web`: nginx, the only container published to the host (`${WEB_PORT:-8080}`); proxies to `api` and serves the `app/` frontend build. (`docker-compose.yml:web`)
+- `web`: nginx, the only container published to the host (`${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-8080}`, loopback-only by default); proxies to `api` and serves the `app/` frontend build. Also rate-limits `/api/` (`limit_req`/`limit_conn` in `app/nginx.conf`), since the API has no throttling of its own. (`docker-compose.yml:web`, `app/nginx.conf`)
 - `api`: FastAPI (`api/main.py:create_app`), on `frontend`+`backend`; runs `alembic -c api/alembic.ini upgrade head` before `uvicorn api.main:app` on container start, and is health-gated on `GET /api/v1/ready` (`api/presentation/routers/system.py:ready`), which checks the database through `api/core/db.py:get_session`. (`docker-compose.yml:api`)
 - `worker`: the generation worker (`python -m api.worker`, `api/worker/__main__.py:main`), `backend`-only, `restart: unless-stopped`; shares the `runs_data` volume with `api` so run directories written by the worker are readable by the API. (`docker-compose.yml:worker`)
 - `db`: `postgres:16-alpine`, `backend`-only, health-gated on `pg_isready`. (`docker-compose.yml:db`)
@@ -40,6 +40,16 @@ Deployment is not codified in runtime code paths; no container/orchestration log
 Named volumes: `postgres_data` (Postgres data directory), `minio_data` (object store data), `runs_data` (shared `/app/runs` run directories between `api` and `worker`). (`docker-compose.yml`)
 
 Configuration for `api`/`worker` (`api/core/settings.py:Settings`) comes entirely from environment variables injected by `docker-compose.yml`, sourced from `.env` (copy `.env.example` first); containers do not read `.env` files themselves. Key variables: `DATABASE_URL`, `S3_ENDPOINT_URL`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`, `RUNS_DIR`, `MAX_UPLOAD_MB`, `WORKER_CONCURRENCY`/`WORKER_POLL_INTERVAL_S`/`WORKER_STALE_S`, `RUNS_RETENTION_DAYS`, plus the CLI's own `OPENROUTER_API_KEY`/`AUTOGENBOOK_LLM_BASE_URL`/`AUTOGENBOOK_LLM_API_KEY`/`AUTOGENBOOK_FORCE_MINI_MODEL`/`TAVILY_API_KEY`/`MCP_GATEWAY_ENABLE`, passed through to both `api` and `worker`. (`.env.example`, `api/core/settings.py:Settings`)
+
+### ⚠️ No authentication - do not expose beyond localhost
+
+`/api/v1` has no authentication and no CORS middleware (`api/main.py`'s module docstring); `ProjectRepository.list`/`.get` have no owner filter, so any client that can reach the API can read/write every project, upload arbitrary files up to `MAX_UPLOAD_MB` with no per-client quota, and start CLI runs that spend `OPENROUTER_API_KEY` budget (issue #50). This is a deliberate, tracked gap (auth is a stub pending its own design, issue #16), not a bug to work around.
+
+Until real auth exists:
+
+- Leave `WEB_BIND_HOST=127.0.0.1` (the default) so the stack is reachable only from the host it runs on. Only change it to `0.0.0.0` if you put a real auth/authorization layer in front (a reverse proxy with its own auth, a VPN, etc.) - never expose the stack to an untrusted network as-is.
+- `app/nginx.conf` rate-limits `/api/` (`limit_req`/`limit_conn`) as a spend/DoS backstop, not a substitute for auth.
+- There's no per-client upload/run quota beyond "one active run per project" - unlimited projects means effectively no cap on concurrent LLM spend from a single trusted-network client.
 
 ## Logging and observability
 

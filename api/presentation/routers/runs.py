@@ -4,10 +4,13 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sse_starlette.sse import EventSourceResponse
 from starlette import status
 
 from api.application.runs import RunService
+from api.core.db import get_sessionmaker
+from api.infrastructure.db.run_repository import SqlAlchemyRunEventRepository
 from api.presentation.deps import get_run_service
 from api.presentation.schemas.common import Page, PageParams
 from api.presentation.schemas.runs import (
@@ -161,6 +164,7 @@ async def stream_run_events(
     run_id: uuid.UUID,
     request: Request,
     service: RunService = Depends(get_run_service),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> EventSourceResponse:
     await service.get(run_id)  # 404 if the run doesn't exist
 
@@ -173,7 +177,16 @@ async def stream_run_events(
         while True:
             if await request.is_disconnected():
                 return
-            events, _total = await service.events(run_id, after_seq=after_seq, limit=200)
+            # A fresh, short-lived session per poll iteration: the `service`
+            # from `Depends(get_run_service)` is bound to a session that
+            # FastAPI closes as soon as this route function returns (i.e.
+            # before this generator starts streaming), so reusing it here
+            # would silently re-acquire and pin a pooled connection for the
+            # entire lifetime of the stream.
+            async with session_factory() as session:
+                events = await SqlAlchemyRunEventRepository(session).list_after(
+                    run_id, after_seq, limit=200
+                )
             done = False
             for event in events:
                 after_seq = event.seq

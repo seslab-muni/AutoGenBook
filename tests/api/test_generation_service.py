@@ -18,6 +18,7 @@ from api.domain.models import (
     OutputFormat,
     Project,
     Run,
+    RunEvent,
     RunKind,
     RunOptions,
     RunStatus,
@@ -270,6 +271,52 @@ async def test_execute_marks_failed_on_nonzero_cli_exit(
     assert finished.status == RunStatus.failed
     assert finished.exit_code != 0
     assert finished.error is not None
+
+
+async def test_execute_on_a_reclaimed_run_does_not_collide_on_seq_or_hang(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Regression for issue #73: a run requeued after a worker crash (or a
+    session poisoned by a previous attempt) is re-executed against the same
+    `run.id`, whose `run_events` table already has rows from that earlier,
+    interrupted attempt. Before this fix, `subprocess_runner.run` always
+    numbered its own events from `seq=1`, so the first `append_batch` of
+    the retry violated `uq_run_events_run_id_seq`, poisoned the session,
+    and `_fail`'s own `update()` then raised `PendingRollbackError` -
+    propagating out of `execute` uncaught and leaving the run stuck
+    `running` forever (see `_claim_and_execute`, which only logs and moves
+    on)."""
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+        # Simulate events already committed by an earlier, interrupted
+        # attempt at this same run.
+        await SqlAlchemyRunEventRepository(session).append_batch(
+            run.id,
+            [
+                RunEvent(
+                    seq=1,
+                    ts=datetime.now(timezone.utc),
+                    level="info",
+                    stage="log",
+                    message="a previous attempt's event",
+                )
+            ],
+        )
+        service = _make_service(session, InMemoryFileStorage(), _settings())
+
+        finished = await service.execute(run)
+
+        events, _ = await SqlAlchemyRunEventRepository(session).list(run.id, 0, 1000)
+
+    assert finished.status in (RunStatus.succeeded, RunStatus.failed)
+    assert finished.finished_at is not None
+    seqs = [event.seq for event in events]
+    assert seqs == sorted(seqs)
+    assert len(seqs) == len(set(seqs)), "duplicate seq: retry collided with the earlier attempt"
+    assert events[-1].stage == "done"
 
 
 async def test_execute_marks_cancelled_when_cancel_requested_mid_run(
