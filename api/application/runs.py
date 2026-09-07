@@ -452,11 +452,20 @@ class GenerationService:
                 raise ValueError(f"unknown run kind: {run.kind!r}")
             argv, env, cwd = book_command.build_command(run.work_dir, run.options, self._settings)
             exit_code = await self._run_subprocess_and_drain(run, argv, env, cwd)
-        except Exception as exc:  # noqa: BLE001 - any prep/run failure -> failed run
+            return await self._finalize(run, exit_code, project)
+        except Exception as exc:  # noqa: BLE001 - any prep/run/finalize failure -> failed run
             logger.exception("run %s failed before/while executing the CLI", run.id)
+            # A failed commit (e.g. `append_batch` hitting a duplicate
+            # `seq` on a re-claimed run, see `_run_subprocess_and_drain`'s
+            # `start_seq`) leaves the shared session in SQLAlchemy's
+            # "pending rollback" state; every subsequent statement on it -
+            # including `_fail`'s own `update()` - would raise
+            # `PendingRollbackError` and leave the run stuck `running`
+            # forever, getting re-claimed and re-executed (new CLI, new
+            # LLM spend) every `WORKER_STALE_S`. Roll back first so `_fail`
+            # can actually persist a terminal status.
+            await self._runs.rollback()
             return await self._fail(run, str(exc), project)
-
-        return await self._finalize(run, exit_code, project)
 
     async def _prepare_work_dir(
         self, run: Run, project: Project, outline_tree: list[OutlineTree]
@@ -623,6 +632,13 @@ class GenerationService:
         cancel_event = threading.Event()
         subprocess_done = threading.Event()
 
+        # A run re-claimed after `requeue_stale` (worker crash, or the
+        # previous attempt's session was poisoned before it could persist
+        # a terminal status) resumes with events already committed for
+        # this run.id - restart numbering from there, not 0, or the first
+        # `append_batch` of this attempt violates `uq_run_events_run_id_seq`.
+        start_seq = await self._events.max_seq(run.id)
+
         def on_event(event: RunEvent) -> None:
             event_queue.put(event)
 
@@ -641,6 +657,7 @@ class GenerationService:
                     should_cancel,
                     cancel_grace_s=self._settings.cli_cancel_grace_s,
                     timeout_s=self._settings.cli_run_timeout_s,
+                    start_seq=start_seq,
                 )
             finally:
                 subprocess_done.set()

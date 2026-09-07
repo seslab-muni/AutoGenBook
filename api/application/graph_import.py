@@ -8,11 +8,14 @@ recomputing `cli_key` for the outline's *current* tree shape
 (`api.domain.outline.assign_positions`) rather than reading a persisted
 column - `OutlineNode.cli_key` is deliberately never written to storage
 (`api/presentation/schemas/outline.py`'s docstring), only derived at read
-time. This is safe here because nothing about the outline's structure can
-have changed between `StructureBuilder.build` rendering it for this run and
-this import running right after that run finished; issue #11's regenerate
-flow is the one that has to guard against a structural edit landing in
-between.
+time. This is only safe because `OutlineService._reject_if_run_active`
+blocks every structural outline write (create/delete/replace, and any
+`update` that moves a node) for the whole lifetime of a project's active
+run - otherwise an insert/delete/move landing between `StructureBuilder.
+build` rendering the outline for this run and this import running after it
+finished would shift every sibling's recomputed key, and this import would
+silently write one node's generated content and title onto a different,
+unrelated row (issue #74).
 
 A CLI key present in `structure_graph.json` but absent from that recomputed
 map is a node the CLI subdivided on its own (`book_pipeline.py`'s

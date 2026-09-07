@@ -40,6 +40,7 @@ def get_outline_service(session: AsyncSession = Depends(get_session)) -> Outline
     return OutlineService(
         outline_repository=SqlAlchemyOutlineRepository(session),
         project_repository=SqlAlchemyProjectRepository(session),
+        run_repository=SqlAlchemyRunRepository(session),
     )
 
 
