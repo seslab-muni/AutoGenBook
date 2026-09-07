@@ -1,6 +1,0 @@
-{
-  "name": "AutoGenBook Studio",
-  "description": "Academic textbook and multi-agent document generation workbench with recursive planning and real-time streaming.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
