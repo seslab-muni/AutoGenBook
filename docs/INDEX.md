@@ -5,6 +5,7 @@
 - Examples: `EXAMPLES.md`
 - Architecture: `ARCHITECTURE.md`
 - API reference (CLI): `API_REFERENCE.md`
+- Web API reference (HTTP, planned + implemented): `WEB_API_REFERENCE.md` (`openapi.yaml`)
 - Configuration: `CONFIGURATION.md`
 - Operations: `OPERATIONS.md`
 - Troubleshooting: `TROUBLESHOOTING.md`

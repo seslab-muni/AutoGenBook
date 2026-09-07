@@ -1,0 +1,985 @@
+openapi: 3.0.3
+info:
+  title: AutoGenBook API
+  version: 0.1.0
+  description: >
+    HTTP API for AutoGenBook, served by the FastAPI app in `api/main.py` and reached
+    through the nginx-fronted Docker Compose stack at `/api/...`.
+
+
+    Operations tagged `system` are **implemented today** (`x-status: implemented`).
+    All other operations are a **planned, not-yet-implemented** proposal
+    (`x-status: planned`), derived from the frontend's current TypeScript data model
+    (`app/src/types.ts`) and its mock handler functions (`app/src/App.tsx`). See
+    `WEB_API_REFERENCE.md` in this same directory for the full human-readable
+    reference, including design-decision rationale.
+
+
+    No authentication and no CORS middleware exist in the implemented service today;
+    this spec intentionally omits `securitySchemes`.
+servers:
+  - url: /api
+    description: >
+      Reached through the nginx reverse proxy defined in docker-compose.yml /
+      app/nginx.conf, which forwards `location /api/` to the `api` container.
+tags:
+  - name: system
+    description: Implemented health/readiness endpoints.
+  - name: projects
+    description: Planned. Project (book) CRUD.
+  - name: sources
+    description: Planned. Ingested source documents, nested under a project.
+  - name: outline
+    description: Planned. Outline nodes (flat list with parentId), nested under a project.
+  - name: generation
+    description: Planned. Generation runs and streaming progress.
+  - name: export
+    description: Planned. Document export/download.
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Liveness check
+      x-status: implemented
+      description: "**Implemented.** Always returns ok; does not check dependencies."
+      responses:
+        "200":
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /ready:
+    get:
+      tags: [system]
+      operationId: getReady
+      summary: Readiness check (verifies Postgres connectivity)
+      x-status: implemented
+      description: >
+        **Implemented.** Opens a fresh connection to Postgres and runs `SELECT 1`.
+        On failure, the exception propagates unhandled, resulting in a generic 500
+        (no custom error body).
+      responses:
+        "200":
+          description: Database check succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyStatus"
+        "500":
+          description: Database connection or query failed (unhandled exception, default FastAPI 500).
+
+  /projects:
+    get:
+      tags: [projects]
+      operationId: listProjects
+      summary: List projects
+      x-status: planned
+      description: "**Planned — not yet implemented.** Maps to `WelcomeProjectsView`'s `books` prop."
+      responses:
+        "200":
+          description: List of project summaries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectSummary"
+    post:
+      tags: [projects]
+      operationId: createProject
+      summary: Create a project
+      x-status: planned
+      description: "**Planned — not yet implemented.** Maps to `handleCreateNewBook` / `NewBookWizardModal.onCreateBook`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectCreate"
+      responses:
+        "201":
+          description: Project created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [projects]
+      operationId: getProject
+      summary: Get a project
+      x-status: planned
+      description: "**Planned — not yet implemented.**"
+      responses:
+        "200":
+          description: Full project, including sources and outline.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Project not found.
+    patch:
+      tags: [projects]
+      operationId: updateProject
+      summary: Update project metadata
+      x-status: planned
+      description: >
+        **Planned — not yet implemented.** Metadata fields only (not `sources`/`outline`,
+        which have their own endpoints). Maps to `handleSaveProjectSettings`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectUpdate"
+      responses:
+        "200":
+          description: Updated project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Project not found.
+    delete:
+      tags: [projects]
+      operationId: deleteProject
+      summary: Delete a project
+      x-status: planned
+      description: "**Planned — not yet implemented.** Maps to `handleDeleteProject`."
+      responses:
+        "204":
+          description: Project deleted.
+        "404":
+          description: Project not found.
+
+  /projects/{projectId}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      tags: [projects]
+      operationId: duplicateProject
+      summary: Duplicate a project
+      x-status: planned
+      description: "**Planned — not yet implemented.** Maps to `handleDuplicateProject`."
+      responses:
+        "201":
+          description: New, duplicated project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Source project not found.
+
+  /projects/{projectId}/sources:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [sources]
+      operationId: listSources
+      summary: List a project's ingested sources
+      x-status: planned
+      description: "**Planned — not yet implemented.**"
+      responses:
+        "200":
+          description: List of sources.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Source"
+        "404":
+          description: Project not found.
+    post:
+      tags: [sources]
+      operationId: addSource
+      summary: Ingest a new source
+      x-status: planned
+      description: >
+        **Planned — not yet implemented.** File upload uses `multipart/form-data`;
+        the arxiv/url/bibtex ingest tabs use `application/json`. Maps to `handleAddSource`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                type:
+                  $ref: "#/components/schemas/SourceType"
+                description:
+                  type: string
+              required: [file, type]
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceCreate"
+      responses:
+        "202":
+          description: Source accepted, indexing in the background.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "404":
+          description: Project not found.
+
+  /projects/{projectId}/sources/{sourceId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/SourceId"
+    get:
+      tags: [sources]
+      operationId: getSource
+      summary: Get a source (e.g. to poll indexing status)
+      x-status: planned
+      description: "**Planned — not yet implemented.**"
+      responses:
+        "200":
+          description: Source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "404":
+          description: Project or source not found.
+    delete:
+      tags: [sources]
+      operationId: deleteSource
+      summary: Delete a source
+      x-status: planned
+      description: "**Planned — not yet implemented.** Maps to `handleDeleteSource`."
+      responses:
+        "204":
+          description: Source deleted.
+        "404":
+          description: Project or source not found.
+
+  /projects/{projectId}/outline:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [outline]
+      operationId: listOutlineNodes
+      summary: List outline nodes
+      x-status: planned
+      description: >
+        **Planned — not yet implemented.** Flat list (with `parentId`/`orderIndex`) is
+        the canonical/default shape; pass `format=tree` for a nested tree for rendering
+        convenience. See design-decision rationale in `WEB_API_REFERENCE.md`.
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [flat, tree]
+            default: flat
+      responses:
+        "200":
+          description: Outline nodes, flat (default) or nested.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OutlineNode"
+        "404":
+          description: Project not found.
+    post:
+      tags: [outline]
+      operationId: createOutlineNode
+      summary: Create an outline node
+      x-status: planned
+      description: "**Planned — not yet implemented.** Maps to `handleAddChildNode`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutlineNodeCreate"
+      responses:
+        "201":
+          description: New outline node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutlineNode"
+        "404":
+          description: Project (or parent node) not found.
+
+  /projects/{projectId}/outline/{nodeId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/NodeId"
+    get:
+      tags: [outline]
+      operationId: getOutlineNode
+      summary: Get an outline node
+      x-status: planned
+      description: "**Planned — not yet implemented.** Includes full `contentMarkdown`/`contentLatex`/`ragCitations`."
+      responses:
+        "200":
+          description: Outline node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutlineNode"
+        "404":
+          description: Project or node not found.
+    patch:
+      tags: [outline]
+      operationId: updateOutlineNode
+      summary: Update an outline node
+      x-status: planned
+      description: >
+        **Planned — not yet implemented.** Deliberately consolidates the frontend's
+        five separate handlers (`handleRenameNode`, `handleUpdateContent`,
+        `handleUpdateNodeMathLevel`, `handleUpdateNodeEquationDensity`,
+        `handleUpdateNodeBudget`) into one generic PATCH, since they all mutate the
+        same underlying resource.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutlineNodeUpdate"
+      responses:
+        "200":
+          description: Updated outline node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutlineNode"
+        "404":
+          description: Project or node not found.
+    delete:
+      tags: [outline]
+      operationId: deleteOutlineNode
+      summary: Delete an outline node (cascades to children)
+      x-status: planned
+      description: "**Planned — not yet implemented.** Maps to `handleDeleteNode`."
+      responses:
+        "204":
+          description: Node (and descendants) deleted.
+        "404":
+          description: Project or node not found.
+
+  /projects/{projectId}/generate:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      tags: [generation]
+      operationId: startGeneration
+      summary: Start a generation run
+      x-status: planned
+      description: >
+        **Planned — not yet implemented.** `scope: 'node'` maps to
+        `handleTriggerNodeGeneration`; `scope: 'batch'` maps to `TopHeader`'s
+        `onStartBatchGeneration`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerationRequest"
+      responses:
+        "202":
+          description: Generation run queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [queued]
+                required: [runId, status]
+        "404":
+          description: Project (or node) not found.
+
+  /projects/{projectId}/generate/{runId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [generation]
+      operationId: getGenerationRun
+      summary: Poll a generation run's status and accumulated logs
+      x-status: planned
+      description: "**Planned — not yet implemented.** Polling fallback for clients that don't use the SSE stream."
+      responses:
+        "200":
+          description: Generation run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerationRun"
+        "404":
+          description: Project or run not found.
+
+  /projects/{projectId}/generate/{runId}/stream:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [generation]
+      operationId: streamGenerationRun
+      summary: Server-Sent Events stream of generation progress
+      x-status: planned
+      description: >
+        **Planned — not yet implemented.** SSE chosen over WebSocket because the
+        existing nginx `location /api/` config has no `Upgrade`/`Connection: upgrade`
+        headers, while SSE works over plain HTTP/1.1 unchanged; see
+        `WEB_API_REFERENCE.md` for the full rationale. Emits `log` (AgentStreamLog
+        JSON), `token` (partial content chunk), and `done` (terminal) events.
+      responses:
+        "200":
+          description: Event stream open until the run finishes or the client disconnects.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          description: Project or run not found.
+
+  /projects/{projectId}/export:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      tags: [export]
+      operationId: exportProject
+      summary: Export/download a project in a given format
+      x-status: planned
+      description: >
+        **Planned — not yet implemented.** Maps to `ExportModal`. PDF is flagged as
+        the likely-async case (server-side LuaLaTeX compilation via the
+        `texlive-luatex` package installed in the Dockerfile); whether other formats
+        are sync or async is an open question — see `WEB_API_REFERENCE.md`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum: [latex, markdown, bibtex, pdf]
+              required: [format]
+      responses:
+        "200":
+          description: Artifact returned directly (synchronous export).
+          content:
+            text/plain: {}
+            application/x-latex: {}
+            application/pdf: {}
+        "202":
+          description: Export accepted as an async job.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                required: [jobId]
+        "404":
+          description: Project not found.
+
+components:
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      schema:
+        type: string
+    NodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: string
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    HealthStatus:
+      type: object
+      description: Response of the implemented `GET /api/health`.
+      properties:
+        status:
+          type: string
+          enum: [ok]
+      required: [status]
+
+    ReadyStatus:
+      type: object
+      description: Response of the implemented `GET /api/ready` on success.
+      properties:
+        status:
+          type: string
+          enum: [ready]
+      required: [status]
+
+    AudienceLevel:
+      type: string
+      enum: [undergraduate, graduate, phd_researcher, industry_practitioner]
+
+    OutputFormat:
+      type: string
+      enum: [latex, markdown, pdf]
+
+    SourceType:
+      type: string
+      enum: [pdf, doc, ppt, md, txt, slides, arxiv, notes, bibtex, latex, url, book, dataset]
+
+    NodeStatus:
+      type: string
+      enum: [not_started, drafting, review_ready, compiled]
+
+    MathLevel:
+      type: string
+      enum: [introductory, rigorous, formal_proof, applied]
+
+    RAGCitation:
+      type: object
+      x-source: app/src/types.ts
+      properties:
+        id:
+          type: string
+        sourceDoc:
+          type: string
+        pageNumber:
+          type: integer
+        sectionSnippet:
+          type: string
+        relevanceScore:
+          type: number
+        authorYear:
+          type: string
+      required: [id, sourceDoc, sectionSnippet, relevanceScore]
+
+    Source:
+      type: object
+      x-status: planned
+      x-source: app/src/types.ts (IngestedSource)
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        size:
+          type: string
+        type:
+          $ref: "#/components/schemas/SourceType"
+        chunksCount:
+          type: integer
+        uploadDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [indexed, indexing, error]
+        authors:
+          type: string
+        year:
+          type: string
+        doi:
+          type: string
+        url:
+          type: string
+        description:
+          type: string
+      required: [id, name, size, type, chunksCount, uploadDate, status]
+
+    SourceCreate:
+      type: object
+      x-status: planned
+      description: Body for the arxiv/url/bibtex ingest tabs (application/json variant of POST sources).
+      properties:
+        type:
+          $ref: "#/components/schemas/SourceType"
+        identifier:
+          type: string
+        url:
+          type: string
+        rawText:
+          type: string
+        description:
+          type: string
+      required: [type]
+
+    OutlineNode:
+      type: object
+      x-status: planned
+      x-source: app/src/types.ts (OutlineNode, flattened)
+      properties:
+        id:
+          type: string
+        parentId:
+          type: string
+          nullable: true
+        orderIndex:
+          type: integer
+        title:
+          type: string
+        sectionNumber:
+          type: string
+          description: e.g. "1.2.1"
+        level:
+          type: integer
+          description: 1 = Chapter, 2 = Section, 3 = Subsection
+        status:
+          $ref: "#/components/schemas/NodeStatus"
+        targetPages:
+          type: number
+        wordBudget:
+          type: integer
+        actualWords:
+          type: integer
+        equationDensityLevel:
+          type: integer
+          description: 1 to 5
+        mathLevel:
+          $ref: "#/components/schemas/MathLevel"
+        subPrompt:
+          type: string
+        contentMarkdown:
+          type: string
+        contentLatex:
+          type: string
+        ragCitations:
+          type: array
+          items:
+            $ref: "#/components/schemas/RAGCitation"
+        reviewerScore:
+          type: number
+        reviewerNotes:
+          type: string
+      required:
+        - id
+        - parentId
+        - orderIndex
+        - title
+        - sectionNumber
+        - level
+        - status
+        - targetPages
+        - wordBudget
+        - actualWords
+        - equationDensityLevel
+        - mathLevel
+        - contentMarkdown
+        - contentLatex
+        - ragCitations
+
+    OutlineNodeCreate:
+      type: object
+      x-status: planned
+      properties:
+        parentId:
+          type: string
+          nullable: true
+        title:
+          type: string
+        level:
+          type: integer
+        orderIndex:
+          type: integer
+      required: [parentId, title, level]
+
+    OutlineNodeUpdate:
+      type: object
+      x-status: planned
+      description: Partial update; any subset of OutlineNode's mutable fields.
+      properties:
+        title:
+          type: string
+        contentMarkdown:
+          type: string
+        contentLatex:
+          type: string
+        mathLevel:
+          $ref: "#/components/schemas/MathLevel"
+        equationDensityLevel:
+          type: integer
+        targetPages:
+          type: number
+        wordBudget:
+          type: integer
+        subPrompt:
+          type: string
+        orderIndex:
+          type: integer
+        parentId:
+          type: string
+          nullable: true
+
+    Project:
+      type: object
+      x-status: planned
+      x-source: app/src/types.ts (BookProject)
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        subtitle:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        topic:
+          type: string
+        targetAudience:
+          $ref: "#/components/schemas/AudienceLevel"
+        totalPagesBudget:
+          type: integer
+        equationFrequencyLevel:
+          type: integer
+          description: 1 to 5
+        doConsiderOutline:
+          type: boolean
+        doConsiderPreviousSections:
+          type: boolean
+        outputFormat:
+          $ref: "#/components/schemas/OutputFormat"
+        maxOutlineLevels:
+          type: integer
+          description: 1 to 5, default 3
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/Source"
+        outline:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutlineNode"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - subtitle
+        - authors
+        - topic
+        - targetAudience
+        - totalPagesBudget
+        - equationFrequencyLevel
+        - doConsiderOutline
+        - doConsiderPreviousSections
+        - outputFormat
+        - sources
+        - outline
+        - createdAt
+        - updatedAt
+
+    ProjectSummary:
+      type: object
+      x-status: planned
+      description: Lighter shape for GET /api/projects, not a 1:1 BookProject subset type in the frontend.
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        subtitle:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        topic:
+          type: string
+        targetAudience:
+          $ref: "#/components/schemas/AudienceLevel"
+        totalPagesBudget:
+          type: integer
+        sourcesCount:
+          type: integer
+        outlineNodeCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - subtitle
+        - authors
+        - topic
+        - targetAudience
+        - totalPagesBudget
+        - sourcesCount
+        - outlineNodeCount
+        - createdAt
+        - updatedAt
+
+    ProjectCreate:
+      type: object
+      x-status: planned
+      description: Project fields minus id/createdAt/updatedAt; sources/outline optional (default empty).
+      properties:
+        title:
+          type: string
+        subtitle:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        topic:
+          type: string
+        targetAudience:
+          $ref: "#/components/schemas/AudienceLevel"
+        totalPagesBudget:
+          type: integer
+        equationFrequencyLevel:
+          type: integer
+        doConsiderOutline:
+          type: boolean
+        doConsiderPreviousSections:
+          type: boolean
+        outputFormat:
+          $ref: "#/components/schemas/OutputFormat"
+        maxOutlineLevels:
+          type: integer
+      required:
+        - title
+        - subtitle
+        - authors
+        - topic
+        - targetAudience
+        - totalPagesBudget
+        - equationFrequencyLevel
+        - doConsiderOutline
+        - doConsiderPreviousSections
+        - outputFormat
+
+    ProjectUpdate:
+      type: object
+      x-status: planned
+      description: Partial update of project metadata only (not sources/outline).
+      properties:
+        title:
+          type: string
+        subtitle:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        topic:
+          type: string
+        targetAudience:
+          $ref: "#/components/schemas/AudienceLevel"
+        totalPagesBudget:
+          type: integer
+        equationFrequencyLevel:
+          type: integer
+        doConsiderOutline:
+          type: boolean
+        doConsiderPreviousSections:
+          type: boolean
+        outputFormat:
+          $ref: "#/components/schemas/OutputFormat"
+        maxOutlineLevels:
+          type: integer
+
+    AgentStreamLog:
+      type: object
+      x-source: app/src/types.ts
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        agentName:
+          type: string
+          enum: ["Planner Agent", "Writer Agent", "Math Formalizer", "Reviewer Agent", "RAG Retriever"]
+        agentColor:
+          type: string
+        status:
+          type: string
+          enum: [active, completed, queued, error]
+        thought:
+          type: string
+        tokensGenerated:
+          type: integer
+        currentStep:
+          type: string
+      required: [id, timestamp, agentName, agentColor, status, thought, currentStep]
+
+    GenerationRequest:
+      type: object
+      x-status: planned
+      properties:
+        nodeId:
+          type: string
+          description: Required when scope is 'node'.
+        promptModifier:
+          type: string
+        scope:
+          type: string
+          enum: [node, batch]
+      required: [scope]
+
+    GenerationRun:
+      type: object
+      x-status: planned
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, error]
+        activeNodeId:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentStreamLog"
+      required: [id, status, logs]
