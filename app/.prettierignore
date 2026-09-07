@@ -3,4 +3,5 @@ dist
 coverage
 pnpm-lock.yaml
 src/routeTree.gen.ts
+src/api/schema.gen.ts
 src/components/ui

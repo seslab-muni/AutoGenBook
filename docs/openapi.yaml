@@ -1737,6 +1737,36 @@ components:
         reviewerNotes:
           type: string
 
+    OutlineTreeReplaceNode:
+      type: object
+      x-status: planned
+      x-issue: 6
+      description: >
+        One node of a full outline replacement, nested, without ids (ids are
+        assigned on write). Named separately from `OutlineTreeReplace` (rather
+        than an inline array `items` schema) so `children` can `$ref` it
+        recursively - a `$ref` into another schema's own `items` keyword isn't
+        a resolvable named schema for codegen.
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        targetPages:
+          type: number
+        subPrompt:
+          type: string
+        mathLevel:
+          $ref: "#/components/schemas/MathLevel"
+        equationDensityLevel:
+          type: integer
+          minimum: 1
+          maximum: 5
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutlineTreeReplaceNode"
+      required: [title]
     OutlineTreeReplace:
       type: array
       x-status: planned
@@ -1745,27 +1775,7 @@ components:
         Root-level nodes of a full outline replacement, nested, without ids (ids
         are assigned on write).
       items:
-        type: object
-        properties:
-          title:
-            type: string
-          summary:
-            type: string
-          targetPages:
-            type: number
-          subPrompt:
-            type: string
-          mathLevel:
-            $ref: "#/components/schemas/MathLevel"
-          equationDensityLevel:
-            type: integer
-            minimum: 1
-            maximum: 5
-          children:
-            type: array
-            items:
-              $ref: "#/components/schemas/OutlineTreeReplace/items"
-        required: [title]
+        $ref: "#/components/schemas/OutlineTreeReplaceNode"
 
     RunKind:
       type: string
