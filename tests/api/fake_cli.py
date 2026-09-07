@@ -16,15 +16,25 @@ LLM, printing the same `[TAG]` progress lines the real CLI prints
 (`autogenbook/pipelines/book_pipeline.py`) and writing the same artifact
 shapes: `structure_graph.json` (with `content_file_path` populated
 incrementally, so `subprocess_runner`'s graph watcher has something to
-find), `sections/<key>.md`, `kb_sources.json` (only when `--kb-dir` is
-given), `<Title>.md`, `run_meta.json`, and `llm_usage.jsonl`. `--resume`
-skips sections whose output file already exists; `--export-tex` writes stub
-`.tex`/`.pdf` files.
+find, and `graph.input_path`/`graph.input_sha256` stamped like the real
+CLI's own drift check), `sections/<key>.md`, `kb_sources.json` (only when
+`--kb-dir` is given), `<Title>.md`, `run_meta.json`, and `llm_usage.jsonl`.
+
+`--resume` mirrors `book_pipeline.py`'s own short-circuit: if a previous
+`structure_graph.json` exists and its `input_sha256` still matches, its
+`nodes`/`edges` are loaded verbatim instead of re-derived from
+`book_structure.json`/TXT - so a `summary` edited directly in that file
+(issue #11's regenerate-with-a-prompt-modifier flow) survives into the
+fabricated section content instead of being clobbered by a fresh rebuild.
+Per leaf, a section whose output file already exists is skipped; `--export-
+tex` writes stub `.tex`/`.pdf` files regardless of what was (or wasn't)
+regenerated.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -89,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     if not input_path.exists():
         print(f"Chyba: vstupni soubor neexistuje: {input_path}", file=sys.stderr)
         return 2
+    input_sha256 = hashlib.sha256(input_path.read_bytes()).hexdigest()
 
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -137,69 +148,101 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("[KB] --kb-dir nebyl zadan. RAG bude vypnut.")
 
-    json_path = Path(args.json_path).expanduser()
-    if not json_path.is_absolute():
-        # Mirrors book_pipeline.py: a relative -j path resolves against
-        # out_dir, not the process cwd.
-        json_path = out_dir / json_path
+    graph_path = out_dir / "structure_graph.json"
 
-    if args.use_json and json_path.exists():
-        print(f"[JSON] Nacitam existujici strukturu: {json_path}")
-        book_json = json.loads(json_path.read_text(encoding="utf-8"))
-    else:
-        print("[JSON] Generuji novou strukturu z TXT vstupu")
-        time.sleep(STEP_SLEEP_S)
-        book_json = _default_book_json(input_path)
-        json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text(json.dumps(book_json, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    title = book_json.get("title") or "Fake Book"
-    summary = book_json.get("summary") or ""
-
-    nodes: dict[str, dict] = {"book": {"title": title, "summary": summary}}
+    # Mirrors `book_pipeline.py`'s own `--resume` short-circuit: when a
+    # previous `structure_graph.json` exists and its `input_sha256` still
+    # matches, resume loads that graph's `nodes`/`edges` verbatim (never
+    # re-derived from `book_structure.json`/TXT) - the one thing that makes
+    # a `regenerate_section` run's edited `summary` (the prompt modifier)
+    # actually reach the fabricated section content below instead of being
+    # clobbered by a fresh rebuild.
+    resumed = False
+    nodes: dict[str, dict] = {}
     edges: list[list[str]] = []
+    if args.resume and graph_path.exists():
+        existing = json.loads(graph_path.read_text(encoding="utf-8"))
+        stored_sha256 = str((existing.get("graph") or {}).get("input_sha256") or "").strip()
+        if not stored_sha256 or stored_sha256 == input_sha256:
+            print(f"[RESUME] Nacitam ulozenou strukturu z: {graph_path}")
+            nodes = existing.get("nodes") or {}
+            edges = existing.get("edges") or []
+            resumed = True
+        else:
+            print("[RESUME] Preskakuji --resume: vstupni soubor byl zmenen.")
 
-    # `childs` (nested, dash-keyed "1", "1-2", ...) is the shape
-    # `StructureBuilder.build` produces for `--use-json` runs - mirrors
-    # `book_builder.py:build_graph_from_book_json`'s key scheme exactly, so
-    # a key here matches the outline's own `assign_positions` cli_key. Falls
-    # back to the older flat "chapters" mock shape (`_default_book_json`)
-    # when there's no real outline behind this run.
-    def add_children(parent_key: str, children: list[dict]) -> None:
-        for i, child in enumerate(children, start=1):
-            key = str(i) if parent_key == "book" else f"{parent_key}-{i}"
-            nodes[key] = {
-                "title": str(child.get("title", key)).strip(),
-                "summary": str(child.get("summary", "")).strip(),
-            }
-            edges.append([parent_key, key])
-            nested = [c for c in (child.get("childs") or []) if isinstance(c, dict)]
-            if nested:
-                add_children(key, nested)
-
-    childs = [c for c in (book_json.get("childs") or []) if isinstance(c, dict)]
-    if childs:
-        add_children("book", childs)
+    if resumed:
+        title = str(nodes.get("book", {}).get("title") or "Fake Book")
     else:
-        chapters = book_json.get("chapters") or [
-            {"key": "ch1", "title": "Chapter One"},
-            {"key": "ch2", "title": "Chapter Two"},
-        ]
-        for chapter in chapters:
-            key = chapter["key"]
-            nodes[key] = {"title": chapter.get("title", key)}
-            edges.append(["book", key])
+        json_path = Path(args.json_path).expanduser()
+        if not json_path.is_absolute():
+            # Mirrors book_pipeline.py: a relative -j path resolves against
+            # out_dir, not the process cwd.
+            json_path = out_dir / json_path
+
+        if args.use_json and json_path.exists():
+            print(f"[JSON] Nacitam existujici strukturu: {json_path}")
+            book_json = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            print("[JSON] Generuji novou strukturu z TXT vstupu")
+            time.sleep(STEP_SLEEP_S)
+            book_json = _default_book_json(input_path)
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps(book_json, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        title = book_json.get("title") or "Fake Book"
+        summary = book_json.get("summary") or ""
+
+        nodes = {"book": {"title": title, "summary": summary}}
+        edges = []
+
+        # `childs` (nested, dash-keyed "1", "1-2", ...) is the shape
+        # `StructureBuilder.build` produces for `--use-json` runs - mirrors
+        # `book_builder.py:build_graph_from_book_json`'s key scheme exactly, so
+        # a key here matches the outline's own `assign_positions` cli_key. Falls
+        # back to the older flat "chapters" mock shape (`_default_book_json`)
+        # when there's no real outline behind this run.
+        def add_children(parent_key: str, children: list[dict]) -> None:
+            for i, child in enumerate(children, start=1):
+                key = str(i) if parent_key == "book" else f"{parent_key}-{i}"
+                nodes[key] = {
+                    "title": str(child.get("title", key)).strip(),
+                    "summary": str(child.get("summary", "")).strip(),
+                }
+                edges.append([parent_key, key])
+                nested = [c for c in (child.get("childs") or []) if isinstance(c, dict)]
+                if nested:
+                    add_children(key, nested)
+
+        childs = [c for c in (book_json.get("childs") or []) if isinstance(c, dict)]
+        if childs:
+            add_children("book", childs)
+        else:
+            chapters = book_json.get("chapters") or [
+                {"key": "ch1", "title": "Chapter One"},
+                {"key": "ch2", "title": "Chapter Two"},
+            ]
+            for chapter in chapters:
+                key = chapter["key"]
+                nodes[key] = {"title": chapter.get("title", key)}
+                edges.append(["book", key])
 
     # Leaves are the only nodes that get generated content - anything else
     # is a parent kept only for the tree shape, exactly like the real CLI.
     parent_keys = {parent for parent, _ in edges}
     leaf_keys = [key for key in nodes if key != "book" and key not in parent_keys]
 
-    graph_path = out_dir / "structure_graph.json"
-
     def save_graph() -> None:
         graph_path.write_text(
-            json.dumps({"graph": {}, "nodes": nodes, "edges": edges}, ensure_ascii=False, indent=2),
+            json.dumps(
+                {
+                    "graph": {"input_path": str(input_path), "input_sha256": input_sha256},
+                    "nodes": nodes,
+                    "edges": edges,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
 
@@ -218,6 +261,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[GEN] Generuji obsah sekci: {node_title}")
             time.sleep(STEP_SLEEP_S)
             content = f"## {node_title}\n\nFake generated content for {key}.\n"
+            section_summary = str(nodes[key].get("summary") or "").strip()
+            if section_summary:
+                content += f"\n{section_summary}\n"
             if i == 1 and kb_chunks:
                 content += f"\nSee [{kb_chunks[0]['cite_key']}] for details.\n"
             section_path.write_text(content, encoding="utf-8")

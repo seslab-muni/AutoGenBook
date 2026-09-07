@@ -8,12 +8,14 @@ never run in the same process.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import queue
 import shutil
 import threading
 import uuid
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -24,8 +26,18 @@ from api.application import graph_import
 from api.application.book_spec import SpecRenderer, StructureBuilder
 from api.core.errors import Conflict, NotFound
 from api.core.settings import Settings
-from api.domain.models import File, Project, Run, RunArtifact, RunEvent, RunKind, RunOptions, RunStatus
-from api.domain.outline import OutlineTree, build_tree
+from api.domain.models import (
+    File,
+    NodeStatus,
+    Project,
+    Run,
+    RunArtifact,
+    RunEvent,
+    RunKind,
+    RunOptions,
+    RunStatus,
+)
+from api.domain.outline import OutlineTree, assign_positions, build_tree
 from api.domain.ports import (
     FileRepository,
     FileStorage,
@@ -56,6 +68,7 @@ class RunService:
         project_repository: ProjectRepository,
         run_artifact_repository: RunArtifactRepository,
         file_repository: FileRepository,
+        outline_repository: OutlineRepository,
         settings: Settings,
     ) -> None:
         self._runs = run_repository
@@ -63,6 +76,7 @@ class RunService:
         self._projects = project_repository
         self._artifacts = run_artifact_repository
         self._files = file_repository
+        self._outline = outline_repository
         self._settings = settings
 
     async def _get(self, run_id: uuid.UUID) -> Run:
@@ -121,6 +135,7 @@ class RunService:
             options=options,
             base_run_id=None,
             target_node_id=None,
+            target_node_previous_status=None,
             work_dir=str(Path(self._settings.runs_dir) / str(run_id)),
             exit_code=None,
             error=None,
@@ -180,6 +195,172 @@ class RunService:
             if file is not None:
                 pairs.append((artifact, file))
         return pairs, total
+
+    async def _resolvable_base_run(self, project_id: uuid.UUID, base_run_id: uuid.UUID | None) -> Run:
+        """The most recent `full`/`regenerate_section` run whose work
+        directory a `regenerate_section` run can resume from - `409` with
+        guidance to start a full run for every way that isn't possible."""
+        if base_run_id is None:
+            raise Conflict(
+                f"project {project_id} has no previous run; start a full run first"
+            )
+        base_run = await self._runs.get(base_run_id)
+        if (
+            base_run is None
+            or base_run.kind not in (RunKind.full, RunKind.regenerate_section)
+            or base_run.status != RunStatus.succeeded
+        ):
+            raise Conflict(
+                f"project {project_id}'s last run is not a succeeded full/regenerate_section "
+                "run; start a full run first"
+            )
+        if not Path(base_run.work_dir).is_dir():
+            raise Conflict(
+                f"run {base_run.id}'s work directory no longer exists; start a full run first"
+            )
+        return base_run
+
+    async def regenerate_node(
+        self,
+        project_id: uuid.UUID,
+        node_id: uuid.UUID,
+        *,
+        prompt_modifier: str | None = None,
+    ) -> Run:
+        project = await self._projects.get(project_id)
+        if project is None:
+            raise NotFound(f"project {project_id} does not exist")
+
+        flat = await self._outline.list(project_id)
+        positioned = {node.id: node for node in assign_positions(flat)}
+        node = positioned.get(node_id)
+        if node is None:
+            raise NotFound(f"outline node {node_id} does not exist")
+        if not node.cli_key:
+            raise Conflict(f"outline node {node_id} has no cli_key; start a full run first")
+
+        active = await self._runs.get_active_for_project(project_id)
+        if active is not None:
+            raise Conflict(
+                f"project {project_id} already has an active run ({active.id}, "
+                f"status={active.status.value})"
+            )
+
+        base_run = await self._resolvable_base_run(project_id, project.last_run_id)
+
+        # A structural edit (new/removed/moved node, retitled project, ...)
+        # since `base_run` would make its frozen `structure_graph.json`
+        # inconsistent with the current outline - `--resume` never re-runs
+        # `subdivide_graph`, so the only safe path forward there is a new
+        # `full` run. Re-rendering the current project/outline into the same
+        # TXT `_prepare_work_dir` would have produced and comparing its
+        # hash to what the base run actually saw catches that drift here,
+        # synchronously, instead of only failing once the worker gets to it.
+        outline_tree = build_tree(flat)
+        include_outline = base_run.options.outline == "project"
+        current_txt = SpecRenderer.render(project, outline_tree, include_outline=include_outline)
+        current_sha256 = hashlib.sha256(current_txt.encode("utf-8")).hexdigest()
+        stored_sha256 = _read_graph_input_sha256(base_run.work_dir)
+        if stored_sha256 and stored_sha256 != current_sha256:
+            raise Conflict(
+                "the outline has changed since the base run; start a full run"
+            )
+
+        now = datetime.now(timezone.utc)
+        options = dataclass_replace(
+            base_run.options,
+            resume=True,
+            outline=base_run.options.outline,
+            prompt_modifier=prompt_modifier,
+        )
+        run = Run(
+            id=uuid.uuid4(),
+            project_id=project_id,
+            kind=RunKind.regenerate_section,
+            status=RunStatus.queued,
+            options=options,
+            base_run_id=base_run.id,
+            target_node_id=node_id,
+            target_node_previous_status=node.status,
+            work_dir=base_run.work_dir,
+            exit_code=None,
+            error=None,
+            cancel_requested=False,
+            locked_by=None,
+            heartbeat_at=None,
+            queued_at=now,
+            started_at=None,
+            finished_at=None,
+            total_tokens=None,
+            total_cost_usd=None,
+        )
+        created = await self._runs.add(run)
+        await self._outline.update(
+            dataclass_replace(node, status=NodeStatus.DRAFTING, updated_at=now)
+        )
+        return created
+
+    async def export(
+        self,
+        run_id: uuid.UUID,
+        *,
+        output_format: Literal["latex", "pdf"],
+    ) -> Run:
+        base_run = await self._get(run_id)
+        if base_run.status != RunStatus.succeeded:
+            raise Conflict(f"run {run_id} did not succeed; cannot export from it")
+        if not Path(base_run.work_dir).is_dir():
+            raise Conflict(
+                f"run {run_id}'s work directory no longer exists; start a full run first"
+            )
+
+        active = await self._runs.get_active_for_project(base_run.project_id)
+        if active is not None:
+            raise Conflict(
+                f"project {base_run.project_id} already has an active run ({active.id}, "
+                f"status={active.status.value})"
+            )
+
+        now = datetime.now(timezone.utc)
+        options = dataclass_replace(
+            base_run.options,
+            resume=True,
+            export_tex_only=True,
+            output_format=output_format,
+            prompt_modifier=None,
+        )
+        run = Run(
+            id=uuid.uuid4(),
+            project_id=base_run.project_id,
+            kind=RunKind.export,
+            status=RunStatus.queued,
+            options=options,
+            base_run_id=base_run.id,
+            target_node_id=None,
+            target_node_previous_status=None,
+            work_dir=base_run.work_dir,
+            exit_code=None,
+            error=None,
+            cancel_requested=False,
+            locked_by=None,
+            heartbeat_at=None,
+            queued_at=now,
+            started_at=None,
+            finished_at=None,
+            total_tokens=None,
+            total_cost_usd=None,
+        )
+        return await self._runs.add(run)
+
+
+def _read_graph_input_sha256(work_dir: str) -> str | None:
+    path = Path(work_dir) / book_command.OUT_DIRNAME / "structure_graph.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = str((data.get("graph") or {}).get("input_sha256") or "").strip()
+    return value or None
 
 
 async def sweep_stale_work_dirs(run_repository: RunRepository, retention_days: float) -> int:
@@ -258,10 +439,17 @@ class GenerationService:
             return await self._fail(run, "project no longer exists")
 
         try:
-            flat_nodes = await self._outline.list(run.project_id)
-            outline_tree = build_tree(flat_nodes)
-            await self._prepare_work_dir(run, project, outline_tree)
-            await self._download_sources(run)
+            if run.kind == RunKind.full:
+                flat_nodes = await self._outline.list(run.project_id)
+                outline_tree = build_tree(flat_nodes)
+                await self._prepare_work_dir(run, project, outline_tree)
+                await self._download_sources(run)
+            elif run.kind == RunKind.regenerate_section:
+                await self._prepare_regenerate(run)
+            elif run.kind == RunKind.export:
+                await self._prepare_export(run)
+            else:  # pragma: no cover - exhaustive over RunKind
+                raise ValueError(f"unknown run kind: {run.kind!r}")
             argv, env, cwd = book_command.build_command(run.work_dir, run.options, self._settings)
             exit_code = await self._run_subprocess_and_drain(run, argv, env, cwd)
         except Exception as exc:  # noqa: BLE001 - any prep/run failure -> failed run
@@ -304,6 +492,104 @@ class GenerationService:
             (out_dir / book_command.BOOK_STRUCTURE_FILENAME).write_text(
                 json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+
+    async def _prepare_regenerate(self, run: Run) -> None:
+        """`regenerate_section`: reuse the base run's work directory as-is,
+        but delete the target section's Markdown so the CLI's `--resume`
+        regenerates only that one leaf, and (if a prompt modifier was given)
+        rewrite its `summary` in `structure_graph.json` - the field
+        `book_builder.py:generate_contents` sends the writer agent as
+        `section_summary`.
+        """
+        work_dir = Path(run.work_dir)
+        if not work_dir.is_dir():
+            raise RuntimeError("work directory no longer exists; start a full run")
+        out_dir = work_dir / book_command.OUT_DIRNAME
+        graph_path = out_dir / "structure_graph.json"
+        input_path = work_dir / book_command.INPUT_FILENAME
+        if not graph_path.is_file() or not input_path.is_file():
+            raise RuntimeError(
+                "work directory is missing its base run's outputs; start a full run"
+            )
+
+        graph_data, current_sha256 = await run_in_threadpool(
+            self._load_graph_and_input_sha256_sync, graph_path, input_path
+        )
+        stored_sha256 = str((graph_data.get("graph") or {}).get("input_sha256") or "").strip()
+        if stored_sha256 and stored_sha256 != current_sha256:
+            raise RuntimeError("the outline changed since the base run; start a full run")
+
+        flat_nodes = await self._outline.list(run.project_id)
+        positioned = {node.id: node for node in assign_positions(flat_nodes)}
+        node = positioned.get(run.target_node_id) if run.target_node_id else None
+        if node is None or not node.cli_key:
+            raise RuntimeError("target outline node no longer exists; start a full run")
+        cli_key = node.cli_key
+
+        await run_in_threadpool(self._backup_and_delete_section_sync, out_dir, cli_key)
+
+        # `content_file_path` still points at the file just deleted above -
+        # clear it so `subprocess_runner`'s graph-watcher (seeded from
+        # whatever nodes already have it set, to avoid re-announcing every
+        # section a `--resume` run *isn't* touching) doesn't mistake this
+        # node for already-done too and skip emitting its `"section"` event
+        # once the CLI regenerates it.
+        graph_changed = False
+        cli_node = (graph_data.get("nodes") or {}).get(cli_key)
+        if cli_node is not None and cli_node.get("content_file_path"):
+            cli_node["content_file_path"] = ""
+            graph_changed = True
+        if run.options.prompt_modifier and cli_node is not None:
+            base_summary = str(cli_node.get("summary") or "").strip()
+            modifier_line = f"Writing instructions: {run.options.prompt_modifier}"
+            cli_node["summary"] = (
+                f"{base_summary}\n\n{modifier_line}" if base_summary else modifier_line
+            )
+            graph_changed = True
+        if graph_changed:
+            await run_in_threadpool(self._write_json_sync, graph_path, graph_data)
+
+        kb_dir = work_dir / book_command.KB_DIRNAME
+        if not kb_dir.is_dir():
+            await self._download_sources(run)
+
+    async def _prepare_export(self, run: Run) -> None:
+        """`export`: reuse the base run's work directory verbatim - no
+        section is deleted, so `--resume` skips every leaf and the CLI only
+        (re)builds the requested `.tex`/`.pdf`."""
+        work_dir = Path(run.work_dir)
+        if not work_dir.is_dir():
+            raise RuntimeError("work directory no longer exists; start a full run")
+        out_dir = work_dir / book_command.OUT_DIRNAME
+        if not (out_dir / "structure_graph.json").is_file():
+            raise RuntimeError(
+                "work directory is missing its base run's outputs; start a full run"
+            )
+
+    @staticmethod
+    def _load_graph_and_input_sha256_sync(
+        graph_path: Path, input_path: Path
+    ) -> tuple[dict[str, Any], str]:
+        graph_data = json.loads(graph_path.read_text(encoding="utf-8"))
+        digest = hashlib.sha256()
+        with input_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return graph_data, digest.hexdigest()
+
+    @staticmethod
+    def _backup_and_delete_section_sync(out_dir: Path, cli_key: str) -> None:
+        section_path = out_dir / "sections" / f"{cli_key}.md"
+        if not section_path.is_file():
+            return
+        history_dir = out_dir / "regen_history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(section_path, history_dir / f"{cli_key}.md.prev")
+        section_path.unlink()
+
+    @staticmethod
+    def _write_json_sync(path: Path, data: dict[str, Any]) -> None:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     async def _download_sources(self, run: Run) -> None:
         sources = await self._sources.list_all(run.project_id)
@@ -412,7 +698,13 @@ class GenerationService:
         # is only synced back from a run the CLI actually completed.
         await self._upload_artifacts(run, project)
         if status == RunStatus.succeeded:
-            await self._import_graph(run, project)
+            if run.kind == RunKind.full:
+                await self._import_graph(run, project)
+            elif run.kind == RunKind.regenerate_section:
+                await self._import_target_node(run, project)
+            # export: no section was regenerated, nothing to sync back.
+        elif run.kind == RunKind.regenerate_section:
+            await self._revert_node_status(run)
 
         saved = await self._runs.update(run)
         await self._emit_done(saved)
@@ -423,6 +715,8 @@ class GenerationService:
         run.error = message
         run.finished_at = datetime.now(timezone.utc)
         await self._upload_artifacts(run, project)
+        if run.kind == RunKind.regenerate_section:
+            await self._revert_node_status(run)
         saved = await self._runs.update(run)
         await self._emit_done(saved)
         return saved
@@ -454,6 +748,39 @@ class GenerationService:
             await self._projects.update(project)
         except Exception:  # noqa: BLE001 - graph sync-back is best-effort
             logger.exception("run %s: failed to import structure_graph.json", run.id)
+
+    async def _import_target_node(self, run: Run, project: Project) -> None:
+        if run.target_node_id is None:
+            return
+        try:
+            await graph_import.import_single_node(
+                project, Path(run.work_dir), run.target_node_id, self._outline
+            )
+            # A succeeded `regenerate_section` run is itself a valid base for
+            # the next regenerate/export (same work dir, one more section
+            # generated) - chain it the same way a `full` run does.
+            project.last_run_id = run.id
+            project.updated_at = datetime.now(timezone.utc)
+            await self._projects.update(project)
+        except Exception:  # noqa: BLE001 - graph sync-back is best-effort
+            logger.exception("run %s: failed to import structure_graph.json", run.id)
+
+    async def _revert_node_status(self, run: Run) -> None:
+        if run.target_node_id is None or run.target_node_previous_status is None:
+            return
+        try:
+            node = await self._outline.get(run.target_node_id)
+            if node is None:
+                return
+            await self._outline.update(
+                dataclass_replace(
+                    node,
+                    status=run.target_node_previous_status,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+        except Exception:  # noqa: BLE001 - status revert is best-effort
+            logger.exception("run %s: failed to revert target node status", run.id)
 
     async def _emit_done(self, run: Run) -> None:
         next_seq = await self._events.max_seq(run.id) + 1

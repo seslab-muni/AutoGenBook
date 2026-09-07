@@ -11,6 +11,8 @@ from api.application.runs import RunService
 from api.presentation.deps import get_run_service
 from api.presentation.schemas.common import Page, PageParams
 from api.presentation.schemas.runs import (
+    ExportRequestIn,
+    RegenerateRequestIn,
     Run,
     RunArtifact,
     RunEvent,
@@ -68,6 +70,23 @@ async def list_runs(
     )
 
 
+@router.post(
+    "/projects/{project_id}/outline/{node_id}/regenerate",
+    response_model=Run,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def regenerate_node(
+    project_id: uuid.UUID,
+    node_id: uuid.UUID,
+    body: RegenerateRequestIn,
+    service: RunService = Depends(get_run_service),
+) -> Run:
+    run = await service.regenerate_node(
+        project_id, node_id, prompt_modifier=body.prompt_modifier
+    )
+    return run_to_schema(run)
+
+
 @router.get("/runs/{run_id}", response_model=Run)
 async def get_run(
     run_id: uuid.UUID, service: RunService = Depends(get_run_service)
@@ -83,6 +102,18 @@ async def cancel_run(
     run_id: uuid.UUID, service: RunService = Depends(get_run_service)
 ) -> Run:
     run = await service.cancel(run_id)
+    return run_to_schema(run)
+
+
+@router.post(
+    "/runs/{run_id}/exports", response_model=Run, status_code=status.HTTP_202_ACCEPTED
+)
+async def export_run(
+    run_id: uuid.UUID,
+    body: ExportRequestIn,
+    service: RunService = Depends(get_run_service),
+) -> Run:
+    run = await service.export(run_id, output_format=body.format)
     return run_to_schema(run)
 
 

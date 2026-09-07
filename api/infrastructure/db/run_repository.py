@@ -33,6 +33,7 @@ def run_to_domain(record: RunRecord) -> Run:
         options=RunOptions(**record.options),
         base_run_id=record.base_run_id,
         target_node_id=record.target_node_id,
+        target_node_previous_status=record.target_node_previous_status,
         work_dir=record.work_dir,
         exit_code=record.exit_code,
         error=record.error,
@@ -56,6 +57,7 @@ def _apply_domain_to_record(run: Run, record: RunRecord) -> None:
     record.options = dataclasses.asdict(run.options)
     record.base_run_id = run.base_run_id
     record.target_node_id = run.target_node_id
+    record.target_node_previous_status = run.target_node_previous_status
     record.work_dir = run.work_dir
     record.exit_code = run.exit_code
     record.error = run.error

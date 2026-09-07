@@ -55,6 +55,7 @@ def _run(project_id: uuid.UUID, *, queued_at: datetime | None = None) -> Run:
         options=RunOptions(outline="project"),
         base_run_id=None,
         target_node_id=None,
+        target_node_previous_status=None,
         work_dir=f"/app/runs/{uuid.uuid4()}",
         exit_code=None,
         error=None,

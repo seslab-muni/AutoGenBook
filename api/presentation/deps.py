@@ -53,5 +53,6 @@ def get_run_service(
         project_repository=SqlAlchemyProjectRepository(session),
         run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
         file_repository=SqlAlchemyFileRepository(session),
+        outline_repository=SqlAlchemyOutlineRepository(session),
         settings=settings,
     )
