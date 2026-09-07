@@ -62,6 +62,57 @@ class ProjectSummary:
     updated_at: datetime
 
 
+class NodeStatus(str, enum.Enum):
+    NOT_STARTED = "not_started"
+    DRAFTING = "drafting"
+    REVIEW_READY = "review_ready"
+    COMPILED = "compiled"
+
+
+class MathLevel(str, enum.Enum):
+    INTRODUCTORY = "introductory"
+    RIGOROUS = "rigorous"
+    FORMAL_PROOF = "formal_proof"
+    APPLIED = "applied"
+
+
+@dataclass
+class OutlineNode:
+    id: uuid.UUID
+    project_id: uuid.UUID
+    parent_id: uuid.UUID | None
+    order_index: int
+    title: str
+    summary: str
+    status: NodeStatus
+    target_pages: float
+    word_budget: int
+    actual_words: int
+    equation_density_level: int
+    math_level: MathLevel
+    sub_prompt: str | None
+    content_markdown: str
+    content_latex: str
+    rag_citations: list[dict]
+    reviewer_score: float | None
+    reviewer_notes: str | None
+    structure_locked: bool
+    created_at: datetime
+    updated_at: datetime
+    # Soft delete: set (recursively, for the whole subtree) instead of a SQL
+    # DELETE by `OutlineRepository.delete_subtree`. NULL = live; repository
+    # reads filter it out by default, so a service/schema never needs to
+    # check it directly.
+    deleted_at: datetime | None = None
+    # Server-derived, never persisted as-is on their own (`cli_key` is a real
+    # column recomputed on every structural change; `level`/`section_number`
+    # are never stored at all) - populated by
+    # `api.domain.outline.assign_positions` before a node reaches a schema.
+    cli_key: str | None = None
+    level: int = 0
+    section_number: str = ""
+
+
 class FileKind(str, enum.Enum):
     upload = "upload"
     artifact = "artifact"

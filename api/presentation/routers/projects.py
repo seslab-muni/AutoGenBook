@@ -5,11 +5,15 @@ import uuid
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.application.outline import OutlineService
 from api.application.projects import ProjectService
 from api.core.db import get_session
 from api.domain.models import Project as ProjectDomain
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.presentation.deps import get_outline_service
+from api.presentation.routers.outline import tree_to_schema
 from api.presentation.schemas.common import Page, PageParams
+from api.presentation.schemas.outline import OutlineNodeTree
 from api.presentation.schemas.projects import (
     Project,
     ProjectCreate,
@@ -29,7 +33,14 @@ def get_project_service(session: AsyncSession = Depends(get_session)) -> Project
     return ProjectService(SqlAlchemyProjectRepository(session))
 
 
-def _to_schema(project: ProjectDomain) -> Project:
+async def _outline_tree(
+    project_id: uuid.UUID, outline_service: OutlineService
+) -> list[OutlineNodeTree]:
+    tree, _total = await outline_service.list(project_id, format="tree")
+    return [tree_to_schema(entry) for entry in tree]
+
+
+def _to_schema(project: ProjectDomain, outline: list[OutlineNodeTree]) -> Project:
     return Project(
         id=project.id,
         title=project.title,
@@ -45,7 +56,7 @@ def _to_schema(project: ProjectDomain) -> Project:
         max_outline_levels=project.max_outline_levels,
         additional_requirements=project.additional_requirements,
         sources=[],
-        outline=[],
+        outline=outline,
         last_run_id=project.last_run_id,
         created_at=project.created_at,
         updated_at=project.updated_at,
@@ -71,18 +82,28 @@ async def create_project(
     body: ProjectCreate,
     owner_id: uuid.UUID | None = Depends(current_owner),
     service: ProjectService = Depends(get_project_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
-    project = await service.create(owner_id=owner_id, **body.model_dump())
-    return _to_schema(project)
+    fields = body.model_dump(exclude={"outline"})
+    project = await service.create(owner_id=owner_id, **fields)
+    wizard_outline = body.outline
+    outline: list[OutlineNodeTree] = []
+    if wizard_outline is not None:
+        tree = [entry.model_dump() for entry in wizard_outline]
+        await outline_service.replace(project.id, tree)
+        outline = await _outline_tree(project.id, outline_service)
+    return _to_schema(project, outline)
 
 
 @router.get("/{project_id}", response_model=Project)
 async def get_project(
     project_id: uuid.UUID,
     service: ProjectService = Depends(get_project_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     project = await service.get(project_id)
-    return _to_schema(project)
+    outline = await _outline_tree(project_id, outline_service)
+    return _to_schema(project, outline)
 
 
 @router.patch("/{project_id}", response_model=Project)
@@ -90,10 +111,12 @@ async def update_project(
     project_id: uuid.UUID,
     body: ProjectUpdate,
     service: ProjectService = Depends(get_project_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     changes = body.model_dump(exclude_unset=True)
     project = await service.update(project_id, changes)
-    return _to_schema(project)
+    outline = await _outline_tree(project_id, outline_service)
+    return _to_schema(project, outline)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -111,6 +134,9 @@ async def delete_project(
 async def duplicate_project(
     project_id: uuid.UUID,
     service: ProjectService = Depends(get_project_service),
+    outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     project = await service.duplicate(project_id)
-    return _to_schema(project)
+    await outline_service.duplicate_from(project_id, project.id)
+    outline = await _outline_tree(project.id, outline_service)
+    return _to_schema(project, outline)

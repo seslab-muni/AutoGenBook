@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.domain.models import Project
-from api.infrastructure.db.models import ProjectRecord
+from api.infrastructure.db.models import OutlineNodeRecord, ProjectRecord
 
 
 def _as_aware_utc(value: datetime) -> datetime:
@@ -112,5 +112,12 @@ class SqlAlchemyProjectRepository:
         return 0
 
     async def outline_node_count(self, project_id: uuid.UUID) -> int:
-        # No `outline_nodes` table yet (issue #6); always 0 until it lands.
-        return 0
+        total = await self._session.scalar(
+            select(func.count())
+            .select_from(OutlineNodeRecord)
+            .where(
+                OutlineNodeRecord.project_id == project_id,
+                OutlineNodeRecord.deleted_at.is_(None),
+            )
+        )
+        return total or 0
