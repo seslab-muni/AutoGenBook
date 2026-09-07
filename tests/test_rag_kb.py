@@ -1,7 +1,9 @@
+import io
 import json
 import os
 import unittest
 import uuid
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -233,6 +235,25 @@ class EmptyKnowledgeBaseTests(unittest.TestCase):
                 kb_dir, cache_dir=Path(tmp) / "cache"
             )
             self.assertEqual(kb.retrieve("anything"), [])
+
+    def test_file_with_no_extractable_text_is_named_in_a_warning(self):
+        # A supported extension that still yields zero chunks (e.g. a blank file, or a
+        # scanned/image-only PDF with no text layer) raises no exception, so without a
+        # dedicated warning it silently vanishes from the KB with no trace of which
+        # file was responsible or why - this is what confused a user debugging exactly
+        # that case.
+        with TemporaryDirectory() as tmp:
+            kb_dir = Path(tmp) / "kb"
+            kb_dir.mkdir()
+            blank_file = kb_dir / "blank.txt"
+            blank_file.write_text("   \n\n   ")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                kb = rag_kb.KnowledgeBase.build_from_directory(
+                    kb_dir, cache_dir=Path(tmp) / "cache"
+                )
+            self.assertEqual(kb.chunks, [])
+            self.assertIn(str(blank_file), buf.getvalue())
 
 
 class ExtractionCacheKeyTests(unittest.TestCase):

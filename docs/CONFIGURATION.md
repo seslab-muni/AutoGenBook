@@ -56,7 +56,7 @@ See `docs/API_REFERENCE.md` for the full CLI reference. (`docs/API_REFERENCE.md`
 
 | Variable | Required | Default / Behavior | Source |
 | --- | --- | --- | --- |
-| `AUTOGENBOOK_KB_OCR` | No | Enable OCR for PDFs if true. | `rag_kb.py:KnowledgeBase.build_from_directory` |
+| `AUTOGENBOOK_KB_OCR` | No | Enable OCR for PDFs if true (requires `pytesseract`/`pdf2image` plus the `tesseract-ocr`/`poppler-utils` system packages; defaults to `1` in the Docker Compose stack, `docker-compose.yml`). | `rag_kb.py:KnowledgeBase.build_from_directory` |
 | `AUTOGENBOOK_KB_OCR_LANG` | No | OCR language (default `eng`). | `rag_kb.py:KnowledgeBase.build_from_directory` |
 | `AUTOGENBOOK_KB_HEADING_CHUNKS` | No | Chunk Markdown by headings if true. | `rag_kb.py:KnowledgeBase.build_from_directory` |
 
