@@ -32,7 +32,7 @@ describe('run detail page', () => {
     expect(screen.getByText('Resumable')).toBeInTheDocument();
     expect(await screen.findByText('Run succeeded.')).toBeInTheDocument();
     expect(await screen.findByText(/book\.md|run_meta\.json/)).toBeInTheDocument();
-    expect(screen.getByText(/issue #22/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /download/i }).length).toBeGreaterThan(0);
     // A finished run has no Cancel action.
     expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
   });

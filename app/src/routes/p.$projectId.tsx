@@ -9,6 +9,7 @@ import { AppHeader } from '@/components/layout/app-header';
 import { NotFoundView } from '@/components/layout/not-found-view';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ProjectSettingsDialog } from '@/features/projects/components/project-settings-dialog';
+import { ExportDialog } from '@/features/exports/components/export-dialog';
 import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { RunsPanel } from '@/features/runs/components/runs-panel';
 import { StartRunDialog } from '@/features/runs/components/start-run-dialog';
@@ -76,6 +77,7 @@ function ProjectLayout() {
       <ProjectSettingsDialog project={current} />
       <SourcesDialog projectId={projectId} />
       <StartRunDialog project={current} />
+      <ExportDialog project={current} />
       <RunsPanel projectId={projectId} />
     </div>
   );

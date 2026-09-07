@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Copy, Database, FileText, ListTree, MoreVertical, Trash2 } from 'lucide-react';
+import { Copy, Database, DollarSign, FileText, ListTree, MoreVertical, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useDeleteProjectMutation, useDuplicateProjectMutation } from '@/api/queries/projects';
+import { runs as runQueries } from '@/api/queries/runs';
 import type { ProjectSummary } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
@@ -15,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { formatCost } from '@/features/runs/lib/run-format';
 
 interface ProjectCardProps {
   project: ProjectSummary;
@@ -25,6 +28,13 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const duplicateMutation = useDuplicateProjectMutation(project.id);
   const deleteMutation = useDeleteProjectMutation(project.id);
+  // `ProjectSummary` (this card's prop) has no cost field of its own — a light query keyed off
+  // `lastRunId` is the minimal way to surface it without the API adding one just for this card.
+  const { data: lastRun } = useQuery({
+    ...runQueries.detail(project.lastRunId ?? ''),
+    enabled: project.lastRunId !== null,
+  });
+  const lastRunCost = lastRun ? formatCost(lastRun.totalCostUsd) : null;
 
   function open() {
     void navigate({ to: '/p/$projectId', params: { projectId: project.id } });
@@ -114,6 +124,12 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <ListTree className="size-3.5" />
             {project.outlineNodeCount}
           </span>
+          {lastRunCost ? (
+            <span className="flex shrink-0 items-center gap-1" title="Cost of the last run">
+              <DollarSign className="size-3.5" />
+              {lastRunCost}
+            </span>
+          ) : null}
         </CardContent>
       </Card>
 
