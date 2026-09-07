@@ -82,6 +82,7 @@ class OutlineNodeUpdate(BaseSchema):
     content_latex: str | None = None
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
+    structure_locked: bool | None = None
 
 
 class OutlineTreeReplaceNode(BaseSchema):

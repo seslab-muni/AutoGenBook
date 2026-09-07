@@ -33,7 +33,7 @@ export interface paths {
         };
         /**
          * Readiness check (verifies Postgres connectivity)
-         * @description **Implemented** (`api/presentation/routers/system.py:ready`). Runs `SELECT 1` through the async session. `GET /api/v1/ready` also calls the object-storage adapter's `healthcheck()` once issue #3 lands.
+         * @description **Implemented** (`api/presentation/routers/system.py:ready`). Runs `SELECT 1` through the async session, then calls the object-storage adapter's `healthcheck()` (`api/infrastructure/storage/s3.py`).
          */
         get: operations["getReady"];
         put?: never;
@@ -733,6 +733,7 @@ export interface components {
             contentLatex?: string;
             reviewerScore?: number;
             reviewerNotes?: string;
+            structureLocked?: boolean;
         };
         /** @description One node of a full outline replacement, nested, without ids (ids are assigned on write). Named separately from `OutlineTreeReplace` (rather than an inline array `items` schema) so `children` can `$ref` it recursively - a `$ref` into another schema's own `items` keyword isn't a resolvable named schema for codegen. */
         OutlineTreeReplaceNode: {
@@ -891,7 +892,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Database (and, from issue */
+            /** @description Database and object storage checks both succeeded. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -900,7 +901,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReadyStatus"];
                 };
             };
-            /** @description A dependency (database today; object storage from issue #3) is unreachable. `api/core/errors.py:StorageError`. */
+            /** @description A dependency (database or object storage) is unreachable. `api/core/errors.py:StorageError`. */
             503: {
                 headers: {
                     [name: string]: unknown;

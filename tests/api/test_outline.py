@@ -206,6 +206,20 @@ async def test_patch_rename_and_status(client: AsyncClient) -> None:
     assert body["status"] == "drafting"
 
 
+async def test_patch_toggles_structure_locked(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    node = await _create_node(client, project["id"], title="Chapter 1")
+    assert node["structureLocked"] is True
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/outline/{node['id']}",
+        json={"structureLocked": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["structureLocked"] is False
+
+
 async def test_move_node_between_parents_updates_positions(client: AsyncClient) -> None:
     project = await _create_project(client)
     project_id = project["id"]
