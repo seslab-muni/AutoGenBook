@@ -43,6 +43,7 @@ def assign_positions(flat: Sequence[OutlineNode]) -> list[OutlineNode]:
 
     Output preserves the input order; inputs are never mutated.
     """
+    ids = {node.id for node in flat}
     by_parent = _siblings_by_parent(flat)
     positioned: dict[uuid.UUID, OutlineNode] = {}
 
@@ -58,6 +59,22 @@ def assign_positions(flat: Sequence[OutlineNode]) -> list[OutlineNode]:
             walk(node.id, node_path)
 
     walk(None, [])
+
+    # A node whose `parent_id` references an id that isn't in `flat` (the
+    # parent was soft-deleted, or the two were read in separate queries that
+    # raced a concurrent write) is otherwise unreachable from the `None` root
+    # above, and the final lookup below would raise `KeyError` for it. Treat
+    # every such orphaned parent id as an extra top-level root instead, so a
+    # stray write elsewhere in the tree degrades gracefully rather than
+    # turning every outline/project read into a 500 with no way to recover
+    # through the API (issue #75).
+    orphan_roots = sorted(
+        (parent_id for parent_id in by_parent if parent_id is not None and parent_id not in ids),
+        key=str,
+    )
+    for parent_id in orphan_roots:
+        walk(parent_id, [])
+
     return [positioned[node.id] for node in flat]
 
 

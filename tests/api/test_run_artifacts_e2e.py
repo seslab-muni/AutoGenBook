@@ -250,3 +250,86 @@ async def test_sweep_stale_work_dirs_removes_old_terminal_run_dirs(
     assert not old_work_dir.exists()
     assert recent_work_dir.exists()
     assert old_run.id != recent_run.id
+
+
+async def test_sweep_stale_work_dirs_keeps_a_dir_a_running_sibling_run_still_uses(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #64: `regenerate_section`/`export` runs reuse their base run's
+    `work_dir` verbatim (`RunService.regenerate_node`/`export`). A base
+    `full` run that succeeded 60 days ago must not have its directory
+    swept out from under a `regenerate_section` run that's still `running`
+    in it right now."""
+    shared_work_dir = tmp_path / "shared-run"
+    shared_work_dir.mkdir()
+
+    long_ago = datetime.now(timezone.utc) - timedelta(days=60)
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run_repo = SqlAlchemyRunRepository(session)
+        base_run = await run_repo.add(
+            _make_run(project.id, shared_work_dir, finished_at=long_ago, queued_at=long_ago)
+        )
+        running_regenerate = await run_repo.add(
+            _make_run(
+                project.id,
+                shared_work_dir,
+                kind=RunKind.regenerate_section,
+                base_run_id=base_run.id,
+                status=RunStatus.running,
+                finished_at=None,
+                queued_at=datetime.now(timezone.utc),
+            )
+        )
+
+        removed = await sweep_stale_work_dirs(run_repo, retention_days=30)
+
+    assert removed == 0
+    assert shared_work_dir.exists()
+    assert running_regenerate.status == RunStatus.running
+
+
+async def test_sweep_stale_work_dirs_uses_the_newest_finished_at_across_a_shared_dir(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #64: a `full` run finished 60 days ago and a later, succeeded
+    `export` from yesterday sharing the same `work_dir` should keep that
+    directory - the group's most recent activity is what matters, not the
+    original run's age. Once every run sharing the directory is old enough,
+    it's removed exactly once."""
+    shared_work_dir = tmp_path / "shared-run"
+    shared_work_dir.mkdir()
+
+    long_ago = datetime.now(timezone.utc) - timedelta(days=60)
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run_repo = SqlAlchemyRunRepository(session)
+        base_run = await run_repo.add(
+            _make_run(project.id, shared_work_dir, finished_at=long_ago, queued_at=long_ago)
+        )
+        export_run = await run_repo.add(
+            _make_run(
+                project.id,
+                shared_work_dir,
+                kind=RunKind.export,
+                base_run_id=base_run.id,
+                finished_at=yesterday,
+                queued_at=yesterday,
+            )
+        )
+
+        removed_too_soon = await sweep_stale_work_dirs(run_repo, retention_days=30)
+        assert removed_too_soon == 0
+        assert shared_work_dir.exists()
+
+        # Once the group's newest `finished_at` (yesterday) is itself older
+        # than the cutoff, the whole shared directory is removed exactly
+        # once - not once per run referencing it.
+        removed = await sweep_stale_work_dirs(run_repo, retention_days=0.5)
+
+    assert removed == 1
+    assert not shared_work_dir.exists()
+    assert export_run.id != base_run.id

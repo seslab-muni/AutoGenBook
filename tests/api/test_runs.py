@@ -136,6 +136,24 @@ async def test_cancel_run_404(client: AsyncClient) -> None:
     assert response.status_code == 404
 
 
+async def test_cancel_queued_run_persists_a_done_event(client: AsyncClient) -> None:
+    """issue #63: the worker's own `_finalize`/`_fail` (and its `_emit_done`)
+    never run for a run cancelled while still `queued` - without this,
+    `GET /runs/{id}/events` stayed empty forever and `.../events/stream`
+    would poll forever waiting for a "done" event that was never coming."""
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    await client.post(f"/api/v1/runs/{created['id']}/cancel")
+
+    response = await client.get(f"/api/v1/runs/{created['id']}/events")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["stage"] == "done"
+    assert body["items"][0]["payload"]["status"] == "cancelled"
+
+
 async def test_list_run_events_empty_for_freshly_created_run(client: AsyncClient) -> None:
     project = await _create_project(client)
     created = await _create_run(client, project["id"])

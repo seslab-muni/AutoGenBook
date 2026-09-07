@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,6 @@ from api.domain.models import Run, RunEvent, RunOptions, RunStatus
 from api.infrastructure.db.models import RunEventRecord, RunRecord
 
 _ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
-_TERMINAL_STATUSES = (RunStatus.succeeded, RunStatus.failed, RunStatus.cancelled)
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -144,15 +143,27 @@ class SqlAlchemyRunRepository:
         await self._session.refresh(record)
         return run_to_domain(record)
 
-    async def list_terminal_before(self, cutoff: datetime) -> list[Run]:
-        result = await self._session.execute(
-            select(RunRecord).where(
-                RunRecord.status.in_(_TERMINAL_STATUSES),
-                RunRecord.finished_at.is_not(None),
-                RunRecord.finished_at < cutoff,
-            )
+    async def list_stale_work_dirs(self, cutoff: datetime) -> list[str]:
+        """`work_dir`s safe to `rmtree` for `sweep_stale_work_dirs`: a
+        `regenerate_section`/`export` run reuses its base run's `work_dir`
+        verbatim (`RunService.regenerate_node`/`export`), so sweeping by
+        individual terminal-and-old runs (the previous `list_terminal_before`)
+        could delete a directory a newer, still-`running` (or resumable)
+        sibling run was still relying on. A `work_dir` only qualifies when
+        *every* run that references it is terminal and none of them
+        finished after `cutoff` - i.e. the whole group has been idle for
+        `retention_days`, not just the run that happened to create the
+        directory (issue #64)."""
+        non_terminal_count = func.sum(
+            case((RunRecord.status.in_(_ACTIVE_STATUSES), 1), else_=0)
         )
-        return [run_to_domain(record) for record in result.scalars().all()]
+        result = await self._session.execute(
+            select(RunRecord.work_dir)
+            .group_by(RunRecord.work_dir)
+            .having(non_terminal_count == 0)
+            .having(func.max(RunRecord.finished_at) < cutoff)
+        )
+        return [row[0] for row in result.all()]
 
 
 def _event_to_domain(record: RunEventRecord) -> RunEvent:

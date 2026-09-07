@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from httpx import AsyncClient
@@ -10,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.application.runs import GenerationService
 from api.core.settings import Settings, get_settings
+from api.domain.models import RunStatus
+from api.presentation.routers.runs import _stream_events
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
@@ -96,3 +100,52 @@ async def test_sse_stream_shows_section_and_done_events(
 
     assert "section" in seen_stages
     assert seen_stages[-1] == "done"
+
+
+async def test_sse_stream_terminates_on_terminal_run_status_without_a_done_event(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    """issue #63: `RunService.cancel`'s `queued` branch now persists its own
+    "done" event, but `_stream_events`'s fallback - terminate on the run's
+    own terminal status once the event tail is drained, not only on ever
+    seeing a "done" event - is the generic backstop for any other path that
+    ends a run without one (simulated here directly at the repository,
+    bypassing every code path that would normally append it). Driven
+    directly rather than through a live SSE connection: an httpx/ASGI
+    stream doesn't cancel cleanly under a test timeout, so proving the
+    pre-fix generator "polls forever" would itself hang the test suite."""
+    app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
+
+    project_response = await client.post("/api/v1/projects", json=MINIMAL_PROJECT)
+    project_id = project_response.json()["id"]
+    run_response = await client.post(
+        f"/api/v1/projects/{project_id}/runs", json={"outline": "generate"}
+    )
+    run_id = uuid.UUID(run_response.json()["id"])
+
+    async with session_factory() as session:
+        run_repo = SqlAlchemyRunRepository(session)
+        run = await run_repo.get(run_id)
+        assert run is not None
+        run.status = RunStatus.failed
+        run.error = "simulated: ended without ever emitting a done event"
+        run.finished_at = datetime.now(timezone.utc)
+        await run_repo.update(run)
+
+    async def never_disconnected() -> bool:
+        return False
+
+    events = _stream_events(
+        run_id, 0, never_disconnected, session_factory, poll_interval_s=0.01
+    )
+    seen = await asyncio.wait_for(_collect(events), timeout=5)
+
+    assert [item["event"] for item in seen] == ["done"]
+    assert json.loads(seen[0]["data"])["payload"]["status"] == "failed"
+
+
+async def _collect(events) -> list[dict]:
+    return [event async for event in events]
