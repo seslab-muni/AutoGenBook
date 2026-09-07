@@ -12,7 +12,10 @@ export default tseslint.config(
       'dist',
       'coverage',
       '_reference',
+      // Vendored by `msw init public --save` (src/mocks/browser.ts) — not hand-edited.
+      'public/mockServiceWorker.js',
       'src/routeTree.gen.ts',
+      'src/api/schema.gen.ts',
       // Generated/vendored via `pnpm dlx shadcn add` — not hand-edited, so not
       // held to the app's lint rules (matches shadcn/ui's own recommendation).
       'src/components/ui',

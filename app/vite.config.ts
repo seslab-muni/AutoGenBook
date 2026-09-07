@@ -31,7 +31,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    setupFiles: ['./src/test/setup.ts'],
+    setupFiles: ['./src/test/msw-polyfills.ts', './src/test/setup.ts'],
     css: true,
     exclude: ['node_modules', 'dist', '_reference'],
     coverage: {
