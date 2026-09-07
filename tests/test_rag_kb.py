@@ -207,6 +207,34 @@ class KnowledgeBaseExtractionCacheTests(unittest.TestCase):
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
 
+class EmptyKnowledgeBaseTests(unittest.TestCase):
+    """A KB dir with no supported/extractable files must yield a usable, empty
+    KnowledgeBase instead of crashing: BM25Okapi divides by the corpus size
+    internally and raises ZeroDivisionError when constructed over zero
+    documents, so `build_from_directory` must skip building it in that case.
+    """
+
+    def test_build_from_directory_with_no_supported_files_does_not_crash(self):
+        with TemporaryDirectory() as tmp:
+            kb_dir = Path(tmp) / "kb"
+            kb_dir.mkdir()
+            (kb_dir / "unsupported.zip").write_bytes(b"not a supported extension")
+            kb = rag_kb.KnowledgeBase.build_from_directory(
+                kb_dir, cache_dir=Path(tmp) / "cache"
+            )
+            self.assertEqual(kb.chunks, [])
+            self.assertIsNone(kb._bm25)
+
+    def test_retrieve_on_empty_knowledge_base_returns_no_results(self):
+        with TemporaryDirectory() as tmp:
+            kb_dir = Path(tmp) / "kb"
+            kb_dir.mkdir()
+            kb = rag_kb.KnowledgeBase.build_from_directory(
+                kb_dir, cache_dir=Path(tmp) / "cache"
+            )
+            self.assertEqual(kb.retrieve("anything"), [])
+
+
 class ExtractionCacheKeyTests(unittest.TestCase):
     def test_same_content_and_params_same_path(self):
         cache_dir = Path("/tmp/does-not-need-to-exist")

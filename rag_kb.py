@@ -349,7 +349,7 @@ class KnowledgeBase:
     - Cache to disk to avoid rebuilding.
     """
 
-    def __init__(self, chunks: List[Chunk], bm25: BM25Okapi):
+    def __init__(self, chunks: List[Chunk], bm25: Optional[BM25Okapi]):
         self.chunks = chunks
         self._bm25 = bm25
         self._tokenized_corpus = None  # just for debugging if needed
@@ -531,8 +531,17 @@ class KnowledgeBase:
                 # You can inspect and add OCR later if needed.
                 print(f"[KB] Varování: nepodařilo se načíst {file_path} ({e}). Přeskakuji.")
 
-        tokenized_corpus = [_tokenize(c.text) for c in chunks]
-        bm25 = BM25Okapi(tokenized_corpus)
+        if not chunks:
+            # BM25Okapi divides by the corpus size internally, so it can't be
+            # constructed over zero documents (e.g. an empty/unsupported-only
+            # KB dir). `retrieve()` already short-circuits on `not self.chunks`
+            # without touching `_bm25`, so a KB with no chunks is otherwise a
+            # valid, working (empty-results) state - just skip building BM25.
+            print(f"[KB] Varování: v {dir_path} nebyl nalezen žádný podporovaný/extrahovatelný obsah. RAG bude prázdný.")
+            bm25 = None
+        else:
+            tokenized_corpus = [_tokenize(c.text) for c in chunks]
+            bm25 = BM25Okapi(tokenized_corpus)
 
         kb = KnowledgeBase(chunks=chunks, bm25=bm25)
 
