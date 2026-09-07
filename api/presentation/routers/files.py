@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, UploadFile
+from fastapi import APIRouter, Depends, Query, Request, UploadFile
 from fastapi import File as FastAPIFile
 from fastapi.responses import StreamingResponse
 from starlette import status
@@ -18,10 +18,12 @@ router = APIRouter(prefix="/files", tags=["files"])
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=FileSchema)
 async def upload_file(
+    request: Request,
     file: UploadFile = FastAPIFile(...),
     service: FileService = Depends(get_file_service),
 ):
-    return await service.upload(file)
+    content_length = request.headers.get("content-length")
+    return await service.upload(file, int(content_length) if content_length else None)
 
 
 @router.get("", response_model=Page[FileSchema])

@@ -190,6 +190,41 @@ async def test_upload_artifacts_rewrites_author_line_when_authors_given(
     assert "Nobody" not in content
 
 
+async def test_upload_artifacts_rewrites_author_line_with_non_utf8_bytes_without_failing(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # A single bad byte in the main Markdown file used to raise a strict
+    # `.decode("utf-8")` inside the per-file loop, and since the whole loop
+    # ran inside one `try` at the call site, that silently skipped every
+    # remaining artifact too (issue #78's secondary bug) - the sorted walk
+    # visits "Fake Book.md" before "sections/1.md".
+    out_dir = _make_out_dir(tmp_path)
+    (out_dir / "Fake Book.md").write_bytes(b"**Author:** Nobody\n\nBody \xff bytes.\n")
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        created = await upload_artifacts(
+            out_dir, run_id, files, run_artifacts, storage, authors=["Ada Lovelace"]
+        )
+
+        rows, _ = await run_artifacts.list(run_id, limit=100, offset=0)
+        markdown_row = next(a for a in rows if a.kind == ArtifactKind.markdown)
+        file = await files.get(markdown_row.file_id)
+        assert file is not None
+        content = b"".join(
+            [chunk async for chunk in await storage.open(file.storage_key)]
+        ).decode("utf-8")
+
+    assert len(created) == len(collect_artifact_paths(out_dir))
+    assert "sections/1.md" in {a.relative_path for a in rows}
+    assert "**Author:** Ada Lovelace" in content
+
+
 async def test_upload_artifacts_is_idempotent_on_rerun(
     tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:

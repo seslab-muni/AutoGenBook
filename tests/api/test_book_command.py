@@ -173,6 +173,32 @@ def test_kb_extract_cache_dir_always_set_from_settings(work_dir: Path):
     assert env["AUTOGENBOOK_KB_EXTRACT_CACHE_DIR"] == "/data/kb_cache"
 
 
+def test_forced_env_does_not_force_assume_yes(work_dir: Path, settings: Settings):
+    # `AUTOGENBOOK_ASSUME_YES=1` made `_ask_yes_no` answer *yes* everywhere,
+    # including `book_pipeline.py`'s "Nahradit puvodni JSON touto revizi?",
+    # whose interactive default is "no" - `AUTOGENBOOK_NONINTERACTIVE` alone
+    # already makes every `_ask_*` helper fall through to its own default
+    # instead of blocking on stdin (issue #79).
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env["AUTOGENBOOK_NONINTERACTIVE"] == "1"
+    assert "AUTOGENBOOK_ASSUME_YES" not in env
+
+
+def test_author_env_var_set_when_author_given(settings: Settings, work_dir: Path):
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings, author="Ada Lovelace, Alan Turing")
+    assert env["AUTOGENBOOK_BOOK_AUTHOR"] == "Ada Lovelace, Alan Turing"
+
+
+def test_author_env_var_omitted_when_author_blank(settings: Settings, work_dir: Path):
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert "AUTOGENBOOK_BOOK_AUTHOR" not in env
+    _argv, env, _cwd = build_command(work_dir, options, settings, author="   ")
+    assert "AUTOGENBOOK_BOOK_AUTHOR" not in env
+
+
 def test_env_forwards_only_allowlisted_vars_present_in_parent(settings, work_dir, monkeypatch):
     for key in ENV_ALLOWLIST:
         monkeypatch.delenv(key, raising=False)

@@ -120,6 +120,29 @@ async def test_upload_over_max_size_returns_413_and_leaves_no_object(
     assert file_storage._objects == {}
 
 
+async def test_upload_over_max_size_rejected_by_content_length_never_touches_storage(
+    client: AsyncClient, app: FastAPI, file_storage: InMemoryFileStorage, monkeypatch
+) -> None:
+    put_calls = 0
+    original_put = file_storage.put
+
+    async def counting_put(*args, **kwargs):
+        nonlocal put_calls
+        put_calls += 1
+        return await original_put(*args, **kwargs)
+
+    monkeypatch.setattr(file_storage, "put", counting_put)
+    app.dependency_overrides[get_settings] = lambda: Settings(max_upload_mb=0)
+    try:
+        response = await _upload(client, "big.txt", b"more than zero bytes")
+    finally:
+        del app.dependency_overrides[get_settings]
+
+    assert response.status_code == 413
+    assert put_calls == 0
+    assert file_storage._objects == {}
+
+
 async def test_delete_returns_409_when_file_is_referenced(
     client: AsyncClient, monkeypatch
 ) -> None:

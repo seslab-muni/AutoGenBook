@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import mimetypes
 import re
 import uuid
@@ -27,6 +28,8 @@ from pathlib import Path, PurePosixPath
 
 from api.domain.models import ArtifactKind, File, FileKind, RunArtifact
 from api.domain.ports import FileRepository, FileStorage, RunArtifactRepository
+
+logger = logging.getLogger(__name__)
 
 _SKIP_DIR_PREFIXES = (".kb_cache",)
 _SKIP_SUFFIXES = (".bak",)
@@ -129,36 +132,49 @@ async def upload_artifacts(
 
     created: list[RunArtifact] = []
     for relative_path, kind in collect_artifact_paths(out_dir):
-        absolute_path = out_dir / relative_path
-        data = absolute_path.read_bytes()
-        if kind is ArtifactKind.markdown and authors:
-            data = _rewrite_author_line(data.decode("utf-8"), authors).encode("utf-8")
+        try:
+            absolute_path = out_dir / relative_path
+            data = absolute_path.read_bytes()
+            if kind is ArtifactKind.markdown and authors:
+                # `errors="replace"` (not strict `utf-8`): a single bad byte
+                # in a CLI-generated Markdown file used to raise here, and
+                # since this whole loop ran inside one `try` at the call
+                # site, that skipped *every remaining* artifact for the run
+                # (the title-cased `<Title>.md` sorts before `sections/`) -
+                # now isolated to just this one file's `try` below too.
+                data = _rewrite_author_line(
+                    data.decode("utf-8", errors="replace"), authors
+                ).encode("utf-8")
 
-        content_type, _ = mimetypes.guess_type(absolute_path.name)
-        content_type = content_type or "application/octet-stream"
+            content_type, _ = mimetypes.guess_type(absolute_path.name)
+            content_type = content_type or "application/octet-stream"
 
-        file = File(
-            id=uuid.uuid4(),
-            storage_key=f"runs/{run_id}/{relative_path}",
-            filename=absolute_path.name,
-            content_type=content_type,
-            size_bytes=len(data),
-            sha256=hashlib.sha256(data).hexdigest(),
-            kind=FileKind.artifact,
-            kb_eligible=False,
-            created_at=datetime.now(timezone.utc),
-        )
-        await storage.put(file.storage_key, io.BytesIO(data), file.content_type)
-        await file_repository.add(file)
-
-        saved = await run_artifact_repository.add(
-            RunArtifact(
+            file = File(
                 id=uuid.uuid4(),
-                run_id=run_id,
-                file_id=file.id,
-                kind=kind,
-                relative_path=str(relative_path),
+                storage_key=f"runs/{run_id}/{relative_path}",
+                filename=absolute_path.name,
+                content_type=content_type,
+                size_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+                kind=FileKind.artifact,
+                kb_eligible=False,
+                created_at=datetime.now(timezone.utc),
             )
-        )
-        created.append(saved)
+            await storage.put(file.storage_key, io.BytesIO(data), file.content_type)
+            await file_repository.add(file)
+
+            saved = await run_artifact_repository.add(
+                RunArtifact(
+                    id=uuid.uuid4(),
+                    run_id=run_id,
+                    file_id=file.id,
+                    kind=kind,
+                    relative_path=str(relative_path),
+                )
+            )
+            created.append(saved)
+        except Exception:
+            logger.exception(
+                "run %s: failed to upload artifact %s, skipping it", run_id, relative_path
+            )
     return created

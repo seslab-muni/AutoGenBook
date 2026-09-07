@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 
 from api.application import graph_import
 from api.application.book_spec import SpecRenderer, StructureBuilder
-from api.core.errors import Conflict, NotFound
+from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.core.settings import Settings
 from api.domain.models import (
     File,
@@ -117,9 +117,30 @@ class RunService:
                 f"status={active.status.value})"
             )
 
+        resolved_output_format = output_format or project.output_format.value
+        # Both combinations "succeed" with no useful output instead of
+        # erroring (issue #79): `legacyTex` makes `book_command.build_command`
+        # emit `--legacy-tex --export-tex --no-pdf`
+        # (`content_format="latex"`, so `md_first=False` in
+        # `book_pipeline.py`), but Markdown assembly requires `md_first` and
+        # TeX assembly's own `content_format == "markdown"` branch never
+        # runs - nothing gets assembled. `auditBook`'s audit
+        # (`book_pipeline.py`'s `audit_latex`) needs a `tex_path`, which a
+        # markdown-only run never produces, so the option is silently a
+        # no-op there too.
+        if legacy_tex and resolved_output_format == "markdown":
+            raise ValidationFailed(
+                "legacyTex is only valid with outputFormat 'latex' or 'pdf', not 'markdown'"
+            )
+        if audit_book and resolved_output_format == "markdown":
+            raise ValidationFailed(
+                "auditBook has no effect with outputFormat 'markdown' (the audit runs "
+                "against the LaTeX build, which a markdown-only run never produces)"
+            )
+
         options = RunOptions(
             outline=outline,
-            output_format=output_format or project.output_format.value,
+            output_format=resolved_output_format,
             allow_subdivision=allow_subdivision,
             enable_web_rag=enable_web_rag,
             audit_book=audit_book,
@@ -514,7 +535,9 @@ class GenerationService:
                 await self._prepare_export(run)
             else:  # pragma: no cover - exhaustive over RunKind
                 raise ValueError(f"unknown run kind: {run.kind!r}")
-            argv, env, cwd = book_command.build_command(run.work_dir, run.options, self._settings)
+            argv, env, cwd = book_command.build_command(
+                run.work_dir, run.options, self._settings, author=", ".join(project.authors)
+            )
             exit_code, timed_out = await self._run_subprocess_and_drain(run, argv, env, cwd)
             return await self._finalize(run, exit_code, project, timed_out=timed_out)
         except Exception as exc:  # noqa: BLE001 - any prep/run/finalize failure -> failed run

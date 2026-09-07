@@ -29,6 +29,24 @@ server {
         # pool at ~15 concurrent streams.
         limit_conn api_conn 20;
 
+        # Issue #47: nginx's own default (1m) is far below the API's
+        # `MAX_UPLOAD_MB` (200m default) - every RAG source PDF over 1 MB
+        # was rejected by nginx before FastAPI's own limit/413 handling
+        # (`api/application/files.py:_HashingLimitedStream`) ever ran. Kept
+        # in lockstep with the API's limit via envsubst at container start
+        # (see `app/Dockerfile`); `${MAX_UPLOAD_MB}` is substituted from the
+        # `web` service's own env var, matching `x-app-env`'s value.
+        client_max_body_size ${MAX_UPLOAD_MB}m;
+        # Stream the body straight to the upstream instead of spooling the
+        # whole (up to 200 MB) request to disk here first.
+        proxy_request_buffering off;
+        # The default 60s is fine for the SSE stream (sse-starlette pings
+        # every 15s) but too tight for a large upload over a slow link, and
+        # for `proxy_send_timeout` while nginx is still streaming a big body
+        # to the API - make both explicit rather than relying on the default.
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+
         proxy_pass http://api:8000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

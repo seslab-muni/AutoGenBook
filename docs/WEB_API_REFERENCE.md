@@ -1,6 +1,6 @@
 # Web API Reference (HTTP/REST)
 
-This document describes the HTTP API exposed by the FastAPI service in `api/` (`api/main.py:create_app`), reached through the nginx-fronted Docker Compose stack at `/api/...` (`docker-compose.yml`, `app/nginx.conf`). A machine-readable companion spec lives at `openapi.yaml` in this same directory.
+This document describes the HTTP API exposed by the FastAPI service in `api/` (`api/main.py:create_app`), reached through the nginx-fronted Docker Compose stack at `/api/...` (`docker-compose.yml`, `app/nginx.conf.template`). A machine-readable companion spec lives at `openapi.yaml` in this same directory.
 
 This is a different document from [`API_REFERENCE.md`](API_REFERENCE.md), which covers the Python **CLI** (`main.py:parse_args`) — the two do not overlap.
 
@@ -10,7 +10,7 @@ Every endpoint below is implemented in `api/` today and covered by `tests/api/`.
 
 ## Transport & deployment notes
 
-- nginx (`app/nginx.conf`) only reverse-proxies `location /api/` to `http://api:8000` (the FastAPI container). Everything else falls through to the SPA (`try_files ... /index.html`).
+- nginx (`app/nginx.conf.template`) only reverse-proxies `location /api/` to `http://api:8000` (the FastAPI container). Everything else falls through to the SPA (`try_files ... /index.html`).
 - Every versioned route is mounted under `/api/v1` (`api/main.py:create_app`, `APIRouter(prefix="/api/v1")`). Unversioned `/api/health` and `/api/ready` aliases also exist (`include_in_schema=False`, kept only for the Compose healthcheck) but are not part of the documented contract.
 - FastAPI's auto-generated `/docs` (Swagger UI), `/redoc`, and `/openapi.json` are enabled in-process but served at unprefixed paths, so they are **not reachable** through the nginx-proxied public URL — only routes under `/api/...` are forwarded. To browse the spec, use `openapi.yaml` in this directory (e.g. load it into a local Swagger UI/Redoc instance), or hit the `api` container directly during local development.
 - No authentication and no CORS middleware exist anywhere in `api/`. `ProjectRecord.owner_id` (`api/domain/models.py:Project.owner_id`) is reserved for later auth work — it's always `None` today (`api/presentation/routers/projects.py:current_owner`) and plays no part in access control.
@@ -259,7 +259,9 @@ Only one active (`queued`/`running`) run per project at a time; every create/reg
 
 Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use the project's own outline | `generate` — let the CLI structure it), `outputFormat` (nullable — defaults to the project's own `outputFormat`), `allowSubdivision`, `enableWebRag`, `auditBook`, `auditBookMode` (`off|warn|strict`, default `warn`), `legacyTex`, `rebuildKb`, `failFastSchema`, `resume`, `exportTexOnly` (all booleans, default `false`).
 
-Status codes: `202`; `404` if the project doesn't exist; `409` if it already has an active run.
+`legacyTex` and `auditBook` both require the resolved `outputFormat` (the explicit body value, or the project's own if omitted) to be `latex` or `pdf` — with `markdown`, `legacyTex` would otherwise "succeed" with no document assembled at all, and `auditBook` would silently be a no-op (both need a `tex_path` the markdown-only assembly path never produces).
+
+Status codes: `202`; `404` if the project doesn't exist; `409` if it already has an active run; `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format.
 
 Source: `api/application/runs.py:RunService.create`
 
