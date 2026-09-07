@@ -43,6 +43,11 @@ class StorageError(ApiError):
     title = "Service Unavailable"
 
 
+class PayloadTooLarge(ApiError):
+    status_code = 413
+    title = "Payload Too Large"
+
+
 def _problem_response(
     status_code: int, title: str, detail: Any, instance: str
 ) -> JSONResponse:
