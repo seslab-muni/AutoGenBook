@@ -6,4 +6,5 @@ __pycache__
 output
 app/node_modules
 app/dist
+tests/out_smoke*
 .env
