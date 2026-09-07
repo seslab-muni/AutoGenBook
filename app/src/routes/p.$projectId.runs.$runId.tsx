@@ -12,12 +12,10 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ArtifactsList } from '@/features/exports/components/artifacts-list';
+import { RunCostSummary } from '@/features/exports/components/run-cost-summary';
 import { RunEventLog } from '@/features/runs/components/run-event-log';
 import {
-  formatCost,
-  formatDuration,
-  formatElapsed,
-  formatTokens,
   RUN_KIND_LABELS,
   RUN_STATUS_CLASSES,
   RUN_STATUS_LABELS,
@@ -30,7 +28,6 @@ export const Route = createFileRoute('/p/$projectId/runs/$runId')({
 });
 
 const RUNNING_STATUSES = new Set(['queued', 'running']);
-const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
 
 function mergeEvents(pages: RunEvent[], live: RunEvent[]): RunEvent[] {
   const byId = new Map<number, RunEvent>();
@@ -92,8 +89,6 @@ function RunPage() {
   }
 
   const isRunning = RUNNING_STATUSES.has(run.status);
-  const isTerminal = TERMINAL_STATUSES.has(run.status);
-  const duration = isTerminal ? formatDuration(run.startedAt, run.finishedAt) : formatElapsed(run);
   // Captured as a local so the closure below narrows to `string` (a `run.targetNodeId` property
   // access wouldn't narrow across the closure boundary under `exactOptionalPropertyTypes`).
   const regenerateAgainNodeId = run.kind === 'regenerate_section' ? run.targetNodeId : null;
@@ -178,37 +173,22 @@ function RunPage() {
         </div>
 
         <div className="space-y-4 overflow-y-auto">
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg border p-3 text-xs">
-            <dt className="text-muted-foreground">Duration</dt>
-            <dd className="text-right font-mono">{duration ?? '—'}</dd>
-            <dt className="text-muted-foreground">Tokens</dt>
-            <dd className="text-right font-mono">{formatTokens(run.totalTokens) ?? '—'}</dd>
-            <dt className="text-muted-foreground">Cost</dt>
-            <dd className="text-right font-mono">{formatCost(run.totalCostUsd) ?? '—'}</dd>
-            <dt className="text-muted-foreground">Exit code</dt>
-            <dd className="text-right font-mono">{run.exitCode ?? '—'}</dd>
-          </dl>
+          <div className="rounded-lg border p-3">
+            <RunCostSummary run={run} />
+            <p className="mt-2 text-xs text-muted-foreground">
+              Exit code: <span className="font-mono">{run.exitCode ?? '—'}</span>
+            </p>
+          </div>
 
           <div className="rounded-lg border">
             <div className="border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
               Artifacts
             </div>
             <div className="p-3">
-              {artifacts && artifacts.items.length > 0 ? (
-                <ul className="space-y-1.5 text-xs">
-                  {artifacts.items.map((artifact) => (
-                    <li key={artifact.fileId} className="flex items-center justify-between gap-2">
-                      <span className="truncate">{artifact.filename}</span>
-                      <span className="shrink-0 text-muted-foreground">{artifact.kind}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-muted-foreground">No artifacts yet.</p>
-              )}
-              <p className="mt-2 text-[10px] text-muted-foreground">
-                Downloading artifacts lands in issue #22.
-              </p>
+              <ArtifactsList
+                artifacts={artifacts?.items ?? []}
+                emptyMessage="Artifacts appear here once the run produces output."
+              />
             </div>
           </div>
         </div>

@@ -261,14 +261,24 @@ function seedProject(seed: SeedProject): void {
     ];
     db.runEvents.set(runId, events);
 
+    const slug = seed.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const artifacts: RunArtifact[] = [
       {
         kind: 'markdown',
         relativePath: 'book.md',
         fileId: `${runId}-artifact-md`,
-        filename: `${seed.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.md`,
+        filename: `${slug}.md`,
         sizeBytes: 245_760,
         contentType: 'text/markdown',
+      },
+      // Markdown/BibTeX exist on every succeeded full run with no export needed - see issue #22.
+      {
+        kind: 'bib',
+        relativePath: 'refs.bib',
+        fileId: `${runId}-artifact-bib`,
+        filename: `${slug}.bib`,
+        sizeBytes: 8_192,
+        contentType: 'text/x-bibtex',
       },
       {
         kind: 'run_meta',
@@ -277,6 +287,32 @@ function seedProject(seed: SeedProject): void {
         filename: 'run_meta.json',
         sizeBytes: 2_048,
         contentType: 'application/json',
+      },
+      {
+        kind: 'llm_usage',
+        relativePath: 'llm_usage.jsonl',
+        fileId: `${runId}-artifact-usage`,
+        filename: 'llm_usage.jsonl',
+        sizeBytes: 4_096,
+        contentType: 'application/jsonl',
+      },
+      {
+        kind: 'log',
+        relativePath: 'run.log',
+        fileId: `${runId}-artifact-log`,
+        filename: 'run.log',
+        sizeBytes: 1_024,
+        contentType: 'text/plain',
+      },
+      // The first leaf node's own Markdown, keyed by its `cliKey` — backs the section editor's
+      // "Download section .md" button (issue #22).
+      {
+        kind: 'section',
+        relativePath: `sections/${flatOutline[1]?.cliKey ?? '1-1'}.md`,
+        fileId: `${runId}-artifact-section-1-1`,
+        filename: `${flatOutline[1]?.cliKey ?? '1-1'}.md`,
+        sizeBytes: 6_144,
+        contentType: 'text/markdown',
       },
     ];
     db.runArtifacts.set(runId, artifacts);

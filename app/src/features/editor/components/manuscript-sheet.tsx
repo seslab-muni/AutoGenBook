@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
-import { Check, Copy, Lock } from 'lucide-react';
+import { Check, Copy, Download, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
+import { runs as runQueries } from '@/api/queries/runs';
 import type { OutlineNode } from '@/api/types';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Button } from '@/components/ui/button';
@@ -17,6 +19,8 @@ import { useDebouncedMutation } from '@/features/editor/hooks/use-debounced-muta
 import { countDisplayEquations } from '@/features/editor/lib/count-equations';
 import { isUnsavedStatus } from '@/features/editor/lib/save-status';
 import { wordCount } from '@/features/editor/lib/word-count';
+import { findSectionArtifact } from '@/features/exports/lib/artifacts';
+import { fileContentUrl } from '@/features/exports/lib/file-url';
 import { useEditorStore, useEditorView } from '@/stores/editor-store';
 
 interface ManuscriptSheetProps {
@@ -56,6 +60,14 @@ export function ManuscriptSheet({
 
   const [draft, setDraft] = useState(node[field]);
   const [copied, setCopied] = useState(false);
+
+  // The `sections/<cliKey>.md` artifact the last full run produced for this node, if any — lets
+  // the toolbar offer a direct "Download section .md" link (issue #22) alongside "Copy Markdown".
+  const { data: lastRunArtifacts } = useQuery({
+    ...runQueries.artifacts(lastRunId ?? ''),
+    enabled: !!lastRunId,
+  });
+  const sectionArtifact = findSectionArtifact(lastRunArtifacts?.items, node.cliKey);
 
   const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
   const { status, schedule, flush } = useDebouncedMutation<string>({
@@ -123,6 +135,14 @@ export function ManuscriptSheet({
             {copied ? <Check className="text-success" /> : <Copy />}
             Copy Markdown
           </Button>
+          {sectionArtifact ? (
+            <Button type="button" variant="outline" size="sm" asChild>
+              <a href={fileContentUrl(sectionArtifact.fileId)} download={sectionArtifact.filename}>
+                <Download />
+                Download section .md
+              </a>
+            </Button>
+          ) : null}
           {lastRunId ? (
             <Button type="button" variant="outline" size="sm" asChild>
               <Link to="/p/$projectId/runs/$runId" params={{ projectId, runId: lastRunId }}>
