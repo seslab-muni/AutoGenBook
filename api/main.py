@@ -6,7 +6,7 @@ from fastapi import APIRouter, FastAPI
 
 from api.core.db import get_engine
 from api.core.errors import install_error_handlers
-from api.presentation.routers import system
+from api.presentation.routers import projects, system
 
 
 @asynccontextmanager
@@ -21,6 +21,7 @@ def create_app() -> FastAPI:
 
     api_router = APIRouter(prefix="/api/v1")
     api_router.include_router(system.router)
+    api_router.include_router(projects.router)
     app.include_router(api_router)
 
     # Legacy aliases kept until the compose healthcheck (issue 02) moves to

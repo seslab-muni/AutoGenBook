@@ -1,0 +1,270 @@
+from __future__ import annotations
+
+import uuid
+
+from httpx import AsyncClient
+
+MINIMAL_PAYLOAD = {
+    "title": "Intro to Widgets",
+    "subtitle": "A Practical Guide",
+    "authors": ["Ada Lovelace"],
+    "topic": "widgets",
+}
+
+
+async def _create_project(client: AsyncClient, **overrides) -> dict:
+    payload = {**MINIMAL_PAYLOAD, **overrides}
+    response = await client.post("/api/v1/projects", json=payload)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_create_project_applies_defaults(client: AsyncClient) -> None:
+    body = await _create_project(client)
+
+    assert uuid.UUID(body["id"])
+    assert body["title"] == "Intro to Widgets"
+    assert body["subtitle"] == "A Practical Guide"
+    assert body["authors"] == ["Ada Lovelace"]
+    assert body["topic"] == "widgets"
+    assert body["targetAudience"] == "graduate"
+    assert body["totalPagesBudget"] == 350
+    assert body["equationFrequencyLevel"] == 4
+    assert body["doConsiderOutline"] is True
+    assert body["doConsiderPreviousSections"] is True
+    assert body["outputFormat"] == "markdown"
+    assert body["maxOutlineLevels"] == 3
+    assert body["additionalRequirements"] is None
+    assert body["sources"] == []
+    assert body["outline"] == []
+    assert body["lastRunId"] is None
+    assert body["createdAt"]
+    assert body["updatedAt"]
+
+
+async def test_create_project_accepts_full_wizard_payload(client: AsyncClient) -> None:
+    body = await _create_project(
+        client,
+        targetAudience="phd_researcher",
+        totalPagesBudget=120,
+        equationFrequencyLevel=2,
+        doConsiderOutline=False,
+        doConsiderPreviousSections=False,
+        outputFormat="latex",
+        maxOutlineLevels=5,
+        additionalRequirements="Focus on chapter 3.",
+    )
+
+    assert body["targetAudience"] == "phd_researcher"
+    assert body["totalPagesBudget"] == 120
+    assert body["equationFrequencyLevel"] == 2
+    assert body["doConsiderOutline"] is False
+    assert body["doConsiderPreviousSections"] is False
+    assert body["outputFormat"] == "latex"
+    assert body["maxOutlineLevels"] == 5
+    assert body["additionalRequirements"] == "Focus on chapter 3."
+
+
+async def test_get_project_round_trips_created_project(client: AsyncClient) -> None:
+    created = await _create_project(client)
+
+    response = await client.get(f"/api/v1/projects/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == created
+
+
+async def test_get_project_404_is_problem_json(client: AsyncClient) -> None:
+    missing_id = uuid.uuid4()
+
+    response = await client.get(f"/api/v1/projects/{missing_id}")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+    body = response.json()
+    assert body["title"] == "Not Found"
+    assert body["status"] == 404
+    assert body["instance"] == f"/api/v1/projects/{missing_id}"
+
+
+async def test_list_projects_returns_summaries_sorted_by_updated_at_desc(
+    client: AsyncClient,
+) -> None:
+    first = await _create_project(client, title="First")
+    second = await _create_project(client, title="Second")
+
+    response = await client.get("/api/v1/projects")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    ids_in_order = [item["id"] for item in body["items"]]
+    assert ids_in_order == [second["id"], first["id"]]
+    summary = body["items"][0]
+    assert summary["sourcesCount"] == 0
+    assert summary["outlineNodeCount"] == 0
+    assert "sources" not in summary
+    assert "outline" not in summary
+
+
+async def test_list_projects_honors_limit_and_offset(client: AsyncClient) -> None:
+    for i in range(3):
+        await _create_project(client, title=f"Project {i}")
+
+    response = await client.get("/api/v1/projects", params={"limit": 1, "offset": 1})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["limit"] == 1
+    assert body["offset"] == 1
+    assert len(body["items"]) == 1
+
+
+async def test_update_project_patches_metadata_and_bumps_updated_at(
+    client: AsyncClient,
+) -> None:
+    created = await _create_project(client)
+
+    response = await client.patch(
+        f"/api/v1/projects/{created['id']}",
+        json={"title": "Renamed", "totalPagesBudget": 500},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Renamed"
+    assert body["totalPagesBudget"] == 500
+    assert body["subtitle"] == created["subtitle"]
+    assert body["updatedAt"] != created["updatedAt"]
+    assert body["createdAt"] == created["createdAt"]
+
+
+async def test_update_project_404(client: AsyncClient) -> None:
+    response = await client.patch(
+        f"/api/v1/projects/{uuid.uuid4()}", json={"title": "Nope"}
+    )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_update_project_rejects_sources_key(client: AsyncClient) -> None:
+    created = await _create_project(client)
+
+    response = await client.patch(
+        f"/api/v1/projects/{created['id']}", json={"sources": []}
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["title"] == "Validation Failed"
+
+
+async def test_update_project_rejects_outline_key(client: AsyncClient) -> None:
+    created = await _create_project(client)
+
+    response = await client.patch(
+        f"/api/v1/projects/{created['id']}", json={"outline": []}
+    )
+
+    assert response.status_code == 422
+
+
+async def test_delete_project_then_404s(client: AsyncClient) -> None:
+    created = await _create_project(client)
+
+    delete_response = await client.delete(f"/api/v1/projects/{created['id']}")
+    assert delete_response.status_code == 204
+    assert delete_response.content == b""
+
+    get_response = await client.get(f"/api/v1/projects/{created['id']}")
+    assert get_response.status_code == 404
+
+
+async def test_delete_project_404(client: AsyncClient) -> None:
+    response = await client.delete(f"/api/v1/projects/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_duplicate_project_creates_new_id_and_fresh_timestamps(
+    client: AsyncClient,
+) -> None:
+    created = await _create_project(client, title="Original")
+
+    response = await client.post(f"/api/v1/projects/{created['id']}/duplicate")
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] != created["id"]
+    assert body["title"] == "Original (Copy)"
+    assert body["subtitle"] == created["subtitle"]
+    assert body["createdAt"] != created["createdAt"]
+    assert body["updatedAt"] != created["updatedAt"]
+    assert body["lastRunId"] is None
+
+    listing = await client.get("/api/v1/projects")
+    assert listing.json()["total"] == 2
+
+
+async def test_duplicate_project_404(client: AsyncClient) -> None:
+    response = await client.post(f"/api/v1/projects/{uuid.uuid4()}/duplicate")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_create_project_rejects_total_pages_budget_out_of_bounds(
+    client: AsyncClient,
+) -> None:
+    too_low = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "totalPagesBudget": 4}
+    )
+    too_high = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "totalPagesBudget": 2001}
+    )
+
+    assert too_low.status_code == 422
+    assert too_high.status_code == 422
+
+
+async def test_create_project_rejects_equation_frequency_level_out_of_bounds(
+    client: AsyncClient,
+) -> None:
+    too_low = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "equationFrequencyLevel": 0}
+    )
+    too_high = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "equationFrequencyLevel": 6}
+    )
+
+    assert too_low.status_code == 422
+    assert too_high.status_code == 422
+
+
+async def test_create_project_rejects_max_outline_levels_out_of_bounds(
+    client: AsyncClient,
+) -> None:
+    too_low = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "maxOutlineLevels": 0}
+    )
+    too_high = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "maxOutlineLevels": 6}
+    )
+
+    assert too_low.status_code == 422
+    assert too_high.status_code == 422
+
+
+async def test_update_project_rejects_bounds_violations(client: AsyncClient) -> None:
+    created = await _create_project(client)
+
+    response = await client.patch(
+        f"/api/v1/projects/{created['id']}", json={"totalPagesBudget": 1}
+    )
+
+    assert response.status_code == 422
