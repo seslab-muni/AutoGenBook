@@ -4,7 +4,23 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import BinaryIO, Protocol
 
-from api.domain.models import File
+from api.domain.models import File, Project
+
+
+class ProjectRepository(Protocol):
+    async def get(self, project_id: uuid.UUID) -> Project | None: ...
+
+    async def list(self, limit: int, offset: int) -> tuple[list[Project], int]: ...
+
+    async def add(self, project: Project) -> Project: ...
+
+    async def update(self, project: Project) -> Project: ...
+
+    async def delete(self, project_id: uuid.UUID) -> None: ...
+
+    async def sources_count(self, project_id: uuid.UUID) -> int: ...
+
+    async def outline_node_count(self, project_id: uuid.UUID) -> int: ...
 
 
 class FileStorage(Protocol):
