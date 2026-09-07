@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiClient, unwrap } from '@/api/client';
-import type { ExportRequest, RunOptions } from '@/api/types';
+import type { ExportRequest, Run, RunOptions } from '@/api/types';
 
 import { projectKeys, runKeys } from './keys';
 
@@ -64,14 +64,33 @@ export function useCreateRunMutation(projectId: string) {
   });
 }
 
-/** On success: updates the run's own cache entry (now `cancelled` or `cancelRequested`). */
+/**
+ * Optimistically sets the run's cached `status` to `cancelled` (issue #21's `ConfirmDialog`
+ * flow reads this back immediately rather than waiting on the response); rolls back on error
+ * (e.g. a 409 because the run had already reached a terminal state). On success: syncs the
+ * cache with the server's copy and invalidates the project's run list so `useActiveRun`
+ * (which derives the active run from that list) stops treating this run as active right away,
+ * rather than waiting for its next poll.
+ */
 export function useCancelRunMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (runId: string) =>
       unwrap(apiClient.POST('/api/v1/runs/{runId}/cancel', { params: { path: { runId } } })),
+    onMutate: async (runId) => {
+      await queryClient.cancelQueries({ queryKey: runKeys.detail(runId) });
+      const previous = queryClient.getQueryData<Run>(runKeys.detail(runId));
+      if (previous) {
+        queryClient.setQueryData<Run>(runKeys.detail(runId), { ...previous, status: 'cancelled' });
+      }
+      return { previous };
+    },
+    onError: (_error, runId, context) => {
+      if (context?.previous) queryClient.setQueryData(runKeys.detail(runId), context.previous);
+    },
     onSuccess: (run) => {
       queryClient.setQueryData(runKeys.detail(run.id), run);
+      void queryClient.invalidateQueries({ queryKey: projectKeys.runs(run.projectId) });
     },
   });
 }

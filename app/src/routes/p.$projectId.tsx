@@ -9,6 +9,9 @@ import { AppHeader } from '@/components/layout/app-header';
 import { NotFoundView } from '@/components/layout/not-found-view';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ProjectSettingsDialog } from '@/features/projects/components/project-settings-dialog';
+import { useActiveRun } from '@/features/runs/hooks/use-active-run';
+import { RunsPanel } from '@/features/runs/components/runs-panel';
+import { StartRunDialog } from '@/features/runs/components/start-run-dialog';
 import { SourcesDialog } from '@/features/sources/components/sources-dialog';
 
 export interface ProjectSearch {
@@ -61,13 +64,19 @@ function ProjectLayout() {
   const { data: liveProject } = useQuery(projects.detail(projectId));
 
   const current = liveProject ?? project;
+  // Mounted once here (rather than in AppHeader/CopilotPanel individually) so the SSE
+  // subscription and outline/header wiring stay alive across the whole project layout,
+  // not just while a particular pane happens to be mounted.
+  const { activeRun } = useActiveRun(projectId);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <AppHeader project={current} />
+      <AppHeader project={current} {...(activeRun ? { activeRun } : {})} />
       <Outlet />
       <ProjectSettingsDialog project={current} />
       <SourcesDialog projectId={projectId} />
+      <StartRunDialog project={current} />
+      <RunsPanel projectId={projectId} />
     </div>
   );
 }

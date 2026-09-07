@@ -25,6 +25,15 @@ export const runKeys = {
   detail: (runId: string) => [...runKeys.all, runId] as const,
   events: (runId: string) => [...runKeys.detail(runId), 'events'] as const,
   artifacts: (runId: string) => [...runKeys.detail(runId), 'artifacts'] as const,
+  /**
+   * `useRunStream`'s live, deduped, seq-ordered accumulation of everything
+   * seen over a run's SSE stream — distinct from `runs.events(runId, params)`
+   * (a one-shot paged `GET .../events` fetch keyed by `[...events(runId),
+   * params]`) so the two caches never collide.
+   */
+  liveEvents: (runId: string) => [...runKeys.detail(runId), 'liveEvents'] as const,
+  /** Node/cli keys `useRunStream` has seen a `section` event for, this run — drives per-node "still generating" spinners. */
+  sectionNodeIds: (runId: string) => [...runKeys.detail(runId), 'sectionNodeIds'] as const,
 };
 
 export const fileKeys = {

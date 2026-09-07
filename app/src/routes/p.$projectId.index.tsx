@@ -1,10 +1,12 @@
+import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { BookOpen, Bot } from 'lucide-react';
+import { BookOpen } from 'lucide-react';
 
+import { projects } from '@/api/queries/projects';
 import { EmptyState } from '@/components/empty-state';
-import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { StudioLayout } from '@/components/layout/studio-layout';
+import { CopilotPanel } from '@/features/runs/components/copilot-panel';
 import { OutlinePane } from '@/features/outline/components/outline-pane';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
@@ -17,7 +19,11 @@ export const Route = createFileRoute('/p/$projectId/')({
 function StudioPage() {
   const { projectId } = Route.useParams();
   const { node } = ProjectRoute.useSearch();
-  const { project } = ProjectRoute.useLoaderData();
+  const { project: loaderProject } = ProjectRoute.useLoaderData();
+  // Re-subscribe (rather than relying on the loader snapshot alone) so a run finishing — which
+  // sets/updates `lastRunId` — is reflected here without a full route reload; see `p.$projectId.tsx`.
+  const { data: liveProject } = useQuery(projects.detail(projectId));
+  const project = liveProject ?? loaderProject;
   const navigate = useNavigate({ from: Route.fullPath });
   useDocumentTitle(project.title);
 
@@ -57,14 +63,9 @@ function StudioPage() {
           <PaneToolbar>
             <span className="text-xs font-semibold text-foreground">Copilot</span>
           </PaneToolbar>
-          <div className="flex-1 overflow-auto">
-            <EmptyState
-              icon={Bot}
-              title="Multi-agent stream coming soon"
-              description="Agent logs and citations land alongside the section editor."
-            />
+          <div className="min-h-0 flex-1">
+            <CopilotPanel projectId={projectId} project={project} selectedNodeId={node ?? null} />
           </div>
-          <PaneStatusBar>Idle</PaneStatusBar>
         </>
       }
     />
