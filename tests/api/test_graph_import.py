@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.application.graph_import import import_graph
 from api.domain.models import (
+    File,
+    FileKind,
     MathLevel,
     NodeStatus,
     OutlineNode,
@@ -19,10 +21,30 @@ from api.domain.models import (
     SourceType,
     TargetAudience,
 )
+from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.models import OutlineNodeRecord
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
+
+
+async def _make_file_row(session: AsyncSession, filename: str = "notes.md") -> File:
+    # `project_sources.file_id` has an FK to `files.id`, so a `Source` needs
+    # a real file behind it under FK enforcement (Postgres always, SQLite
+    # via the test fixture's `PRAGMA foreign_keys=ON`).
+    file = File(
+        id=uuid.uuid4(),
+        storage_key=f"uploads/{uuid.uuid4()}/{filename}",
+        filename=filename,
+        content_type="text/markdown",
+        size_bytes=1,
+        sha256="0" * 64,
+        kind=FileKind.upload,
+        kb_eligible=True,
+        created_at=datetime.now(timezone.utc),
+    )
+    await SqlAlchemyFileRepository(session).add(file)
+    return file
 
 
 def _make_project(**overrides) -> Project:
@@ -220,12 +242,14 @@ async def test_import_graph_updates_source_chunk_counts_and_status(
         project = await SqlAlchemyProjectRepository(session).add(_make_project())
         outline_repo = SqlAlchemyOutlineRepository(session)
         source_repo = SqlAlchemySourceRepository(session)
+        indexed_file = await _make_file_row(session, "indexed.md")
+        missing_file = await _make_file_row(session, "missing.md")
 
         indexed_source = await source_repo.add(
             Source(
                 id=uuid.uuid4(),
                 project_id=project.id,
-                file_id=uuid.uuid4(),
+                file_id=indexed_file.id,
                 source_type=SourceType.md,
                 authors=None,
                 year=None,
@@ -242,7 +266,7 @@ async def test_import_graph_updates_source_chunk_counts_and_status(
             Source(
                 id=uuid.uuid4(),
                 project_id=project.id,
-                file_id=uuid.uuid4(),
+                file_id=missing_file.id,
                 source_type=SourceType.md,
                 authors=None,
                 year=None,

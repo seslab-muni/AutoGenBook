@@ -117,6 +117,7 @@ class SqlAlchemySourceRepository:
     async def update(self, source: Source) -> Source:
         record = await self._session.get(SourceRecord, source.id)
         assert record is not None
+        record.file_id = source.file_id
         record.authors = source.authors
         record.year = source.year
         record.doi = source.doi

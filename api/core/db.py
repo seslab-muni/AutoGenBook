@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from functools import lru_cache
 
+from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -13,9 +14,23 @@ from sqlalchemy.orm import DeclarativeBase
 
 from api.core.settings import get_settings
 
+# Standard SQLAlchemy naming convention so every constraint Alembic
+# autogenerate/`create_all` produces gets a deterministic name, instead of
+# Postgres auto-naming FKs/uniques (`runs_project_id_fkey`,
+# `files_storage_key_key`, ...) in a way `op.drop_constraint` could never
+# reproduce on SQLite. Existing constraints created before this was added
+# keep their auto-generated names (renaming them is a separate migration).
+_NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 
 
 def to_async_url(url: str) -> str:
