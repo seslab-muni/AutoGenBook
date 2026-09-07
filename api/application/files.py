@@ -118,8 +118,14 @@ class FileService:
         file = await self.get(file_id)
         if await self._repository.is_referenced(file_id):
             raise Conflict(f"file {file_id} is still referenced")
-        await self._storage.delete(file.storage_key)
+        # DB row first, blob after: `is_referenced` already ignores
+        # soft-deleted sources, but the FK on `project_sources.file_id` is
+        # `RESTRICT`, so a row this check missed (a real bug, or a race with
+        # a fresh reference) makes the delete fail here instead of after the
+        # blob is already gone - a failed delete never leaves a `files` row
+        # whose content 404s and can never be cleaned up.
         await self._repository.delete(file)
+        await self._storage.delete(file.storage_key)
 
     async def open_content(self, file_id: uuid.UUID) -> tuple[File, AsyncIterator[bytes]]:
         file = await self.get(file_id)

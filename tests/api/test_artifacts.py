@@ -1,20 +1,93 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.domain.models import ArtifactKind
+from api.domain.models import (
+    ArtifactKind,
+    OutputFormat,
+    Project,
+    Run,
+    RunKind,
+    RunOptions,
+    RunStatus,
+    TargetAudience,
+)
 from api.infrastructure.cli.artifacts import collect_artifact_paths, upload_artifacts
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
+from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
+from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 from api.infrastructure.storage.memory import InMemoryFileStorage
 
 
 def _write(path: Path, content: str = "x") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _make_project(**overrides) -> Project:
+    now = datetime.now(timezone.utc)
+    defaults = dict(
+        id=uuid.uuid4(),
+        owner_id=None,
+        title="AI in Teaching",
+        subtitle="A practical guide",
+        authors=["Ada Lovelace"],
+        topic="using AI tools in university courses",
+        target_audience=TargetAudience.GRADUATE,
+        total_pages_budget=120,
+        equation_frequency_level=2,
+        do_consider_outline=True,
+        do_consider_previous_sections=True,
+        output_format=OutputFormat.MARKDOWN,
+        max_outline_levels=3,
+        additional_requirements=None,
+        last_run_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    defaults.update(overrides)
+    return Project(**defaults)
+
+
+def _make_run(project_id: uuid.UUID, work_dir: Path, **overrides) -> Run:
+    now = datetime.now(timezone.utc)
+    defaults = dict(
+        id=uuid.uuid4(),
+        project_id=project_id,
+        kind=RunKind.full,
+        status=RunStatus.running,
+        options=RunOptions(outline="generate", output_format="markdown"),
+        base_run_id=None,
+        target_node_id=None,
+        target_node_previous_status=None,
+        work_dir=str(work_dir),
+        exit_code=None,
+        error=None,
+        cancel_requested=False,
+        locked_by="worker-1",
+        heartbeat_at=now,
+        queued_at=now,
+        started_at=now,
+        finished_at=None,
+        total_tokens=None,
+        total_cost_usd=None,
+    )
+    defaults.update(overrides)
+    return Run(**defaults)
+
+
+async def _make_run_row(session: AsyncSession, work_dir: Path) -> Run:
+    # `RunArtifactRecord.run_id` has an FK to `runs.id`, so uploading
+    # artifacts against a run needs a real `runs`/`projects` row behind it
+    # under FK enforcement (Postgres always, SQLite via the test fixture's
+    # `PRAGMA foreign_keys=ON`).
+    project = await SqlAlchemyProjectRepository(session).add(_make_project())
+    return await SqlAlchemyRunRepository(session).add(_make_run(project.id, work_dir))
 
 
 def _make_out_dir(tmp_path: Path) -> Path:
@@ -73,9 +146,10 @@ def test_collect_artifact_paths_empty_when_out_dir_missing(tmp_path: Path) -> No
 
 async def test_upload_artifacts_creates_files_and_rows(tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]) -> None:
     out_dir = _make_out_dir(tmp_path)
-    run_id = uuid.uuid4()
 
     async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
         files = SqlAlchemyFileRepository(session)
         run_artifacts = SqlAlchemyRunArtifactRepository(session)
         storage = InMemoryFileStorage()
@@ -94,9 +168,10 @@ async def test_upload_artifacts_rewrites_author_line_when_authors_given(
     tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     out_dir = _make_out_dir(tmp_path)
-    run_id = uuid.uuid4()
 
     async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
         files = SqlAlchemyFileRepository(session)
         run_artifacts = SqlAlchemyRunArtifactRepository(session)
         storage = InMemoryFileStorage()
@@ -119,9 +194,10 @@ async def test_upload_artifacts_is_idempotent_on_rerun(
     tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     out_dir = _make_out_dir(tmp_path)
-    run_id = uuid.uuid4()
 
     async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
         files = SqlAlchemyFileRepository(session)
         run_artifacts = SqlAlchemyRunArtifactRepository(session)
         storage = InMemoryFileStorage()

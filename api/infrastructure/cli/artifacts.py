@@ -111,13 +111,21 @@ async def upload_artifacts(
     authors: list[str] | None = None,
 ) -> list[RunArtifact]:
     existing, _ = await run_artifact_repository.list(run_id, limit=10_000, offset=0)
+    if existing:
+        # `run_artifacts.file_id -> files.id` is `ON DELETE RESTRICT`, so the
+        # rows that reference a file must go before the file itself - doing
+        # this in the opposite order (as before) works on SQLite (which
+        # never enforced the FK) but throws `ForeignKeyViolation` on
+        # Postgres for every artifact after the first.
+        await run_artifact_repository.delete_by_run(run_id)
     for artifact in existing:
         file = await file_repository.get(artifact.file_id)
         if file is not None:
-            await storage.delete(file.storage_key)
+            # DB row first, blob after: if the row delete ever fails, the
+            # blob is still there and the row still resolves it, instead of
+            # leaving a `files` row whose content already 404s.
             await file_repository.delete(file)
-    if existing:
-        await run_artifact_repository.delete_by_run(run_id)
+            await storage.delete(file.storage_key)
 
     created: list[RunArtifact] = []
     for relative_path, kind in collect_artifact_paths(out_dir):

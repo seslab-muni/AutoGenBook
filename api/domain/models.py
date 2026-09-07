@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from sqlalchemy import Boolean, CHAR, BigInteger, DateTime, Enum as SqlEnum, String, Uuid
+from sqlalchemy import Boolean, CHAR, BigInteger, DateTime, Enum as SqlEnum, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.core.db import Base
@@ -88,7 +88,13 @@ class SourceStatus(str, enum.Enum):
 class Source:
     id: uuid.UUID
     project_id: uuid.UUID
-    file_id: uuid.UUID
+    # Nullable: `SourceService.remove` (soft delete) detaches this so the
+    # `RESTRICT` FK on `project_sources.file_id` no longer blocks deleting
+    # the file the source used to reference. Every live (non-soft-deleted)
+    # row still has a real file behind it - the repository's `get`/`list`/
+    # `list_all` all filter `deleted_at IS NULL`, so `None` is only ever
+    # observed on a source that's already gone from the API's view.
+    file_id: uuid.UUID | None
     source_type: SourceType
     authors: str | None
     year: str | None
@@ -163,9 +169,9 @@ class File(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    storage_key: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    filename: Mapped[str] = mapped_column(String, nullable=False)
-    content_type: Mapped[str] = mapped_column(String, nullable=False)
+    storage_key: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False, index=True)
     kind: Mapped[FileKind] = mapped_column(

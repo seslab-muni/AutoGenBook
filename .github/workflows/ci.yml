@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: autogenbook
+          POSTGRES_PASSWORD: autogenbook
+          POSTGRES_DB: autogenbook
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U autogenbook -d autogenbook"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook
+      DATABASE_URL: postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt -r api/requirements-dev.txt
+
+      - name: Run api/ test suite (pytest, against Postgres)
+        run: pytest tests/api
+
+      - name: Run CLI unit test suite
+        # `tests/` isn't a package (no `__init__.py`), so bare `python -m
+        # unittest` performs top-level discovery differently across Python
+        # versions and finds nothing here - point discovery at the package
+        # explicitly instead. Covers the same tests CLAUDE.md's documented
+        # `python -m unittest` is meant to run.
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Apply Alembic migrations and check for model/migration drift
+        run: |
+          alembic -c api/alembic.ini upgrade head
+          alembic -c api/alembic.ini check
+
+      - name: Prompt pack completeness check
+        run: python -m autogenbook.smoke_prompts
+
+      - name: Check exported OpenAPI schema is up to date
+        run: |
+          python scripts/export_openapi.py --out /tmp/openapi.yaml
+          diff -u docs/openapi.yaml /tmp/openapi.yaml
