@@ -1,11 +1,12 @@
+import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { BookOpen, Bot } from 'lucide-react';
 
-import { EmptyState } from '@/components/empty-state';
-import { PaneStatusBar } from '@/components/layout/pane-status-bar';
-import { PaneToolbar } from '@/components/layout/pane-toolbar';
+import { outline } from '@/api/queries/outline';
 import { StudioLayout } from '@/components/layout/studio-layout';
+import { CopilotDrawer, type CopilotTab } from '@/features/editor/components/copilot-drawer';
+import { EditorPane } from '@/features/editor/components/editor-pane';
 import { OutlinePane } from '@/features/outline/components/outline-pane';
+import { useOutlineOpen } from '@/stores/ui-store';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 import { Route as ProjectRoute } from './p.$projectId';
@@ -16,10 +17,14 @@ export const Route = createFileRoute('/p/$projectId/')({
 
 function StudioPage() {
   const { projectId } = Route.useParams();
-  const { node } = ProjectRoute.useSearch();
+  const { node, tab } = ProjectRoute.useSearch();
   const { project } = ProjectRoute.useLoaderData();
   const navigate = useNavigate({ from: Route.fullPath });
   useDocumentTitle(project.title);
+
+  const outlineOpen = useOutlineOpen();
+  const { data } = useQuery(outline.flat(projectId));
+  const flatNodes = data?.items ?? [];
 
   function handleSelectNode(nodeId: string | null) {
     void navigate({
@@ -30,6 +35,12 @@ function StudioPage() {
       },
     });
   }
+
+  function handleTabChange(nextTab: CopilotTab) {
+    void navigate({ search: (prev) => ({ ...prev, tab: nextTab }) });
+  }
+
+  const selectedNode = node ? (flatNodes.find((n) => n.id === node) ?? null) : null;
 
   return (
     <StudioLayout
@@ -42,30 +53,22 @@ function StudioPage() {
         />
       }
       editorPane={
-        <EmptyState
-          icon={BookOpen}
-          title="Section editor coming soon"
-          description={
-            node
-              ? `Selected node: ${node}`
-              : 'Select a section from the outline pane to start editing.'
-          }
+        <EditorPane
+          projectId={projectId}
+          nodeId={node ?? null}
+          projectTitle={project.title}
+          lastRunId={project.lastRunId}
+          flatNodes={flatNodes}
+          outlineOpen={outlineOpen}
+          onSelectNode={handleSelectNode}
         />
       }
       copilotPane={
-        <>
-          <PaneToolbar>
-            <span className="text-xs font-semibold text-foreground">Copilot</span>
-          </PaneToolbar>
-          <div className="flex-1 overflow-auto">
-            <EmptyState
-              icon={Bot}
-              title="Multi-agent stream coming soon"
-              description="Agent logs and citations land alongside the section editor."
-            />
-          </div>
-          <PaneStatusBar>Idle</PaneStatusBar>
-        </>
+        <CopilotDrawer
+          node={selectedNode}
+          tab={tab === 'settings' ? 'copilot' : (tab ?? 'copilot')}
+          onTabChange={handleTabChange}
+        />
       }
     />
   );

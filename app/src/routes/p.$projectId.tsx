@@ -13,11 +13,11 @@ import { SourcesDialog } from '@/features/sources/components/sources-dialog';
 
 export interface ProjectSearch {
   node?: string;
-  tab?: 'copilot' | 'citations' | 'settings';
+  tab?: 'copilot' | 'citations' | 'review' | 'settings';
 }
 
 type ProjectTab = NonNullable<ProjectSearch['tab']>;
-const TABS: readonly ProjectTab[] = ['copilot', 'citations', 'settings'];
+const TABS: readonly ProjectTab[] = ['copilot', 'citations', 'review', 'settings'];
 
 function validateSearch(search: Record<string, unknown>): ProjectSearch {
   const result: ProjectSearch = {};

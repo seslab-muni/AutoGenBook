@@ -1,0 +1,23 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`MarkdownView > matches a structural snapshot (headings, table rows, callout label, citation labels) for the CLI-style fixture 1`] = `
+{
+  "calloutLabel": "Theorem 3.2 (Quorum Intersection Bound):",
+  "citationLabels": [
+    "Castro & Liskov, 1999",
+    "Castro & Liskov, 1999",
+    "Lamport et al., 1982",
+    "Lamport et al., 1982",
+    "Castro & Liskov, 1999",
+  ],
+  "displayMathCount": 1,
+  "headings": [
+    "Byzantine Quorum Intersection",
+  ],
+  "tableHeaderRow": [
+    "Model",
+    "Resilience bound",
+    "Source",
+  ],
+}
+`;
