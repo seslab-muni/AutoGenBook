@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, notFound, Outlet } from '@tanstack/react-router';
 
 import { outline } from '@/api/queries/outline';
@@ -7,6 +8,7 @@ import { requireAuth } from '@/auth/require-auth';
 import { AppHeader } from '@/components/layout/app-header';
 import { NotFoundView } from '@/components/layout/not-found-view';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ProjectSettingsDialog } from '@/features/projects/components/project-settings-dialog';
 
 export interface ProjectSearch {
   node?: string;
@@ -50,12 +52,20 @@ export const Route = createFileRoute('/p/$projectId')({
 });
 
 function ProjectLayout() {
+  const { projectId } = Route.useParams();
+  // The loader ensures this is already in the cache; re-subscribing here (rather than
+  // reading `Route.useLoaderData()` alone) picks up settings/duplicate/delete mutations
+  // without needing a full route reload.
   const { project } = Route.useLoaderData();
+  const { data: liveProject } = useQuery(projects.detail(projectId));
+
+  const current = liveProject ?? project;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <AppHeader project={project} />
+      <AppHeader project={current} />
       <Outlet />
+      <ProjectSettingsDialog project={current} />
     </div>
   );
 }

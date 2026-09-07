@@ -4,6 +4,7 @@ import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import { ErrorView } from '@/components/layout/error-view';
 import { NotFoundView } from '@/components/layout/not-found-view';
 import { Toaster } from '@/components/ui/sonner';
+import { NewProjectDialog } from '@/features/projects/components/new-project-dialog';
 
 export interface RootRouteContext {
   queryClient: QueryClient;
@@ -20,6 +21,7 @@ function RootLayout() {
     <div className="h-screen bg-background font-sans text-foreground">
       <Outlet />
       <Toaster />
+      <NewProjectDialog />
     </div>
   );
 }
