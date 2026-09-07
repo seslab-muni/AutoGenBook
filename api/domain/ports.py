@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import BinaryIO, Protocol
 
-from api.domain.models import File, OutlineNode, Project, Source
+from api.domain.models import File, OutlineNode, Project, Run, RunEvent, Source
 
 
 class ProjectRepository(Protocol):
@@ -101,3 +101,37 @@ class OutlineRepository(Protocol):
     ) -> None: ...
 
     async def count(self, project_id: uuid.UUID) -> int: ...
+
+
+class RunRepository(Protocol):
+    async def get(self, run_id: uuid.UUID) -> Run | None: ...
+
+    async def get_active_for_project(self, project_id: uuid.UUID) -> Run | None: ...
+
+    async def list(
+        self, project_id: uuid.UUID, limit: int, offset: int
+    ) -> tuple[list[Run], int]: ...
+
+    async def add(self, run: Run) -> Run: ...
+
+    async def update(self, run: Run) -> Run: ...
+
+
+class RunEventRepository(Protocol):
+    async def append_batch(self, run_id: uuid.UUID, events: Sequence[RunEvent]) -> None: ...
+
+    async def list(
+        self, run_id: uuid.UUID, after_seq: int, limit: int
+    ) -> tuple[list[RunEvent], int]: ...
+
+    async def max_seq(self, run_id: uuid.UUID) -> int: ...
+
+
+class RunQueue(Protocol):
+    async def claim(self, worker_id: str) -> Run | None: ...
+
+    async def heartbeat(self, run_id: uuid.UUID) -> None: ...
+
+    async def release(self, run_id: uuid.UUID) -> None: ...
+
+    async def requeue_stale(self, older_than_s: float) -> int: ...

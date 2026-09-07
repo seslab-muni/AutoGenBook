@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+import asyncio
+import uuid
+
+from fastapi import APIRouter, Depends, Query, Request
+from sse_starlette.sse import EventSourceResponse
+from starlette import status
+
+from api.application.runs import RunService
+from api.presentation.deps import get_run_service
+from api.presentation.schemas.common import Page, PageParams
+from api.presentation.schemas.runs import (
+    Run,
+    RunEvent,
+    RunOptionsIn,
+    event_to_schema,
+    run_to_schema,
+)
+
+router = APIRouter(tags=["runs"])
+
+# Terminal SSE stages a client can rely on to stop listening once a "done"
+# event arrives, per `GenerationService._emit_done`.
+_DONE_STAGE = "done"
+_SSE_POLL_INTERVAL_S = 1.0
+
+
+@router.post(
+    "/projects/{project_id}/runs", response_model=Run, status_code=status.HTTP_202_ACCEPTED
+)
+async def create_run(
+    project_id: uuid.UUID,
+    body: RunOptionsIn,
+    service: RunService = Depends(get_run_service),
+) -> Run:
+    run = await service.create(
+        project_id,
+        outline=body.outline,
+        output_format=body.output_format,
+        allow_subdivision=body.allow_subdivision,
+        enable_web_rag=body.enable_web_rag,
+        audit_book=body.audit_book,
+        audit_book_mode=body.audit_book_mode,
+        legacy_tex=body.legacy_tex,
+        rebuild_kb=body.rebuild_kb,
+        fail_fast_schema=body.fail_fast_schema,
+        resume=body.resume,
+        export_tex_only=body.export_tex_only,
+    )
+    return run_to_schema(run)
+
+
+@router.get("/projects/{project_id}/runs", response_model=Page[Run])
+async def list_runs(
+    project_id: uuid.UUID,
+    params: PageParams = Depends(),
+    service: RunService = Depends(get_run_service),
+) -> Page[Run]:
+    runs, total = await service.list(project_id, limit=params.limit, offset=params.offset)
+    return Page[Run](
+        items=[run_to_schema(run) for run in runs],
+        total=total,
+        limit=params.limit,
+        offset=params.offset,
+    )
+
+
+@router.get("/runs/{run_id}", response_model=Run)
+async def get_run(
+    run_id: uuid.UUID, service: RunService = Depends(get_run_service)
+) -> Run:
+    run = await service.get(run_id)
+    return run_to_schema(run)
+
+
+@router.post(
+    "/runs/{run_id}/cancel", response_model=Run, status_code=status.HTTP_202_ACCEPTED
+)
+async def cancel_run(
+    run_id: uuid.UUID, service: RunService = Depends(get_run_service)
+) -> Run:
+    run = await service.cancel(run_id)
+    return run_to_schema(run)
+
+
+@router.get("/runs/{run_id}/events", response_model=Page[RunEvent])
+async def list_run_events(
+    run_id: uuid.UUID,
+    after_seq: int = Query(default=0, ge=0, alias="afterSeq"),
+    limit: int = Query(default=200, ge=1, le=1000),
+    service: RunService = Depends(get_run_service),
+) -> Page[RunEvent]:
+    events, total = await service.events(run_id, after_seq=after_seq, limit=limit)
+    return Page[RunEvent](
+        items=[event_to_schema(event) for event in events],
+        total=total,
+        limit=limit,
+        offset=after_seq,
+    )
+
+
+def _sse_event_name(event: RunEvent) -> str:
+    if event.stage in ("section", _DONE_STAGE):
+        return event.stage
+    if event.stage == "log" and event.level == "info":
+        return "log"
+    return "stage"
+
+
+@router.get("/runs/{run_id}/events/stream")
+async def stream_run_events(
+    run_id: uuid.UUID,
+    request: Request,
+    service: RunService = Depends(get_run_service),
+) -> EventSourceResponse:
+    await service.get(run_id)  # 404 if the run doesn't exist
+
+    last_event_id = request.headers.get("last-event-id")
+    after_seq = int(last_event_id) if last_event_id and last_event_id.isdigit() else 0
+    poll_interval_s = _SSE_POLL_INTERVAL_S
+
+    async def event_generator():
+        nonlocal after_seq
+        while True:
+            if await request.is_disconnected():
+                return
+            events, _total = await service.events(run_id, after_seq=after_seq, limit=200)
+            done = False
+            for event in events:
+                after_seq = event.seq
+                schema = event_to_schema(event)
+                if schema.stage == _DONE_STAGE:
+                    done = True
+                yield {
+                    "event": _sse_event_name(schema),
+                    "id": str(schema.seq),
+                    "data": schema.model_dump_json(by_alias=True),
+                }
+            if done:
+                return
+            await asyncio.sleep(poll_interval_s)
+
+    return EventSourceResponse(event_generator())

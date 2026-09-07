@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import uuid
+
+from httpx import AsyncClient
+
+MINIMAL_PROJECT = {
+    "title": "Intro to Widgets",
+    "subtitle": "A Practical Guide",
+    "authors": ["Ada Lovelace"],
+    "topic": "widgets",
+}
+
+
+async def _create_project(client: AsyncClient, **overrides) -> dict:
+    payload = {**MINIMAL_PROJECT, **overrides}
+    response = await client.post("/api/v1/projects", json=payload)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def _create_run(client: AsyncClient, project_id: str, **overrides) -> dict:
+    response = await client.post(f"/api/v1/projects/{project_id}/runs", json=overrides)
+    assert response.status_code == 202, response.text
+    return response.json()
+
+
+async def test_create_run_applies_defaults_from_project(client: AsyncClient) -> None:
+    project = await _create_project(client, outputFormat="latex")
+
+    body = await _create_run(client, project["id"])
+
+    assert uuid.UUID(body["id"])
+    assert body["projectId"] == project["id"]
+    assert body["kind"] == "full"
+    assert body["status"] == "queued"
+    assert body["options"]["outline"] == "project"
+    assert body["options"]["outputFormat"] == "latex"
+    assert body["options"]["allowSubdivision"] is False
+    assert body["options"]["auditBookMode"] == "warn"
+    assert body["exitCode"] is None
+    assert body["totalTokens"] is None
+    assert body["queuedAt"]
+
+
+async def test_create_run_accepts_explicit_options(client: AsyncClient) -> None:
+    project = await _create_project(client)
+
+    body = await _create_run(
+        client,
+        project["id"],
+        outline="generate",
+        outputFormat="pdf",
+        allowSubdivision=True,
+        enableWebRag=True,
+        auditBook=True,
+        auditBookMode="strict",
+    )
+
+    assert body["options"]["outline"] == "generate"
+    assert body["options"]["outputFormat"] == "pdf"
+    assert body["options"]["allowSubdivision"] is True
+    assert body["options"]["enableWebRag"] is True
+    assert body["options"]["auditBook"] is True
+    assert body["options"]["auditBookMode"] == "strict"
+
+
+async def test_create_run_sets_project_last_run_id(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    run = await _create_run(client, project["id"])
+
+    response = await client.get(f"/api/v1/projects/{project['id']}")
+    assert response.status_code == 200
+    assert response.json()["lastRunId"] == run["id"]
+
+
+async def test_create_run_404_for_missing_project(client: AsyncClient) -> None:
+    response = await client.post(f"/api/v1/projects/{uuid.uuid4()}/runs", json={})
+    assert response.status_code == 404
+
+
+async def test_create_run_409_when_project_already_has_active_run(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    await _create_run(client, project["id"])
+
+    response = await client.post(f"/api/v1/projects/{project['id']}/runs", json={})
+    assert response.status_code == 409
+
+
+async def test_get_run(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    response = await client.get(f"/api/v1/runs/{created['id']}")
+    assert response.status_code == 200
+    assert response.json()["id"] == created["id"]
+
+
+async def test_get_run_404(client: AsyncClient) -> None:
+    response = await client.get(f"/api/v1/runs/{uuid.uuid4()}")
+    assert response.status_code == 404
+
+
+async def test_list_runs_for_project(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    response = await client.get(f"/api/v1/projects/{project['id']}/runs")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == created["id"]
+
+
+async def test_cancel_queued_run_is_immediately_cancelled(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    response = await client.post(f"/api/v1/runs/{created['id']}/cancel")
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "cancelled"
+
+
+async def test_cancel_already_terminal_run_is_409(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+    await client.post(f"/api/v1/runs/{created['id']}/cancel")
+
+    response = await client.post(f"/api/v1/runs/{created['id']}/cancel")
+    assert response.status_code == 409
+
+
+async def test_cancel_run_404(client: AsyncClient) -> None:
+    response = await client.post(f"/api/v1/runs/{uuid.uuid4()}/cancel")
+    assert response.status_code == 404
+
+
+async def test_list_run_events_empty_for_freshly_created_run(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    response = await client.get(f"/api/v1/runs/{created['id']}/events")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+
+
+async def test_list_run_events_404_for_missing_run(client: AsyncClient) -> None:
+    response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/events")
+    assert response.status_code == 404
