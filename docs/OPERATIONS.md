@@ -37,9 +37,9 @@ Deployment is not codified in runtime code paths; no container/orchestration log
 - `minio`: S3-compatible object storage, `backend`-only (no host port — uploads/downloads are proxied through `api`, not accessed directly), health-gated on `/minio/health/live`. (`docker-compose.yml:minio`)
 - `minio-init`: one-shot `mc` job that creates the upload bucket; `api` and `worker` wait on its successful completion before starting. (`docker-compose.yml:minio-init`)
 
-Named volumes: `postgres_data` (Postgres data directory), `minio_data` (object store data), `runs_data` (shared `/app/runs` run directories between `api` and `worker`). (`docker-compose.yml`)
+Named volumes: `postgres_data` (Postgres data directory), `minio_data` (object store data), `runs_data` (shared `/app/runs` run directories between `api` and `worker`), `kb_extract_cache` (`worker`-only `/app/kb_cache`: `rag_kb.py`'s content-hash-keyed cache of extracted-but-not-yet-chunked document text, deliberately outside `runs_data` so it survives `sweep_stale_work_dirs` deleting individual runs and is shared across every project/run rather than scoped to one). (`docker-compose.yml`)
 
-Configuration for `api`/`worker` (`api/core/settings.py:Settings`) comes entirely from environment variables injected by `docker-compose.yml`, sourced from `.env` (copy `.env.example` first); containers do not read `.env` files themselves. Key variables: `DATABASE_URL`, `S3_ENDPOINT_URL`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`, `RUNS_DIR`, `MAX_UPLOAD_MB`, `WORKER_CONCURRENCY`/`WORKER_POLL_INTERVAL_S`/`WORKER_STALE_S`, `RUNS_RETENTION_DAYS`, plus the CLI's own `OPENROUTER_API_KEY`/`AUTOGENBOOK_LLM_BASE_URL`/`AUTOGENBOOK_LLM_API_KEY`/`AUTOGENBOOK_FORCE_MINI_MODEL`/`TAVILY_API_KEY`/`MCP_GATEWAY_ENABLE`, passed through to both `api` and `worker`. (`.env.example`, `api/core/settings.py:Settings`)
+Configuration for `api`/`worker` (`api/core/settings.py:Settings`) comes entirely from environment variables injected by `docker-compose.yml`, sourced from `.env` (copy `.env.example` first); containers do not read `.env` files themselves. Key variables: `DATABASE_URL`, `S3_ENDPOINT_URL`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`, `RUNS_DIR`, `MAX_UPLOAD_MB`, `KB_EXTRACT_CACHE_DIR`, `WORKER_CONCURRENCY`/`WORKER_POLL_INTERVAL_S`/`WORKER_STALE_S`, `RUNS_RETENTION_DAYS`, plus the CLI's own `OPENROUTER_API_KEY`/`AUTOGENBOOK_LLM_BASE_URL`/`AUTOGENBOOK_LLM_API_KEY`/`AUTOGENBOOK_FORCE_MINI_MODEL`/`TAVILY_API_KEY`/`MCP_GATEWAY_ENABLE`, passed through to both `api` and `worker`. (`.env.example`, `api/core/settings.py:Settings`)
 
 ### ⚠️ No authentication - do not expose beyond localhost
 
@@ -65,6 +65,7 @@ Runs are single-process and synchronous; scale by running multiple independent C
 
 - Preserve `--out-dir` to keep section files, structure graphs, and logs. (`autogenbook/state.py:RunContext`, `book_builder.py:generate_contents`)
 - Preserve `.kb_cache` inside `--out-dir` to avoid rebuilding KBs. (`rag_kb.py:KnowledgeBase.build_from_directory`)
+- In the Docker stack, also preserve the separate `kb_extract_cache` volume (`/app/kb_cache`) — the content-hash-keyed cache of extracted document text, shared across every project/run rather than scoped to one `--out-dir`. (`docker-compose.yml`, `rag_kb.py:KnowledgeBase.build_from_directory`)
 
 ## Security hardening checklist
 

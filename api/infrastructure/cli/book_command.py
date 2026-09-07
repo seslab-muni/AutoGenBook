@@ -155,5 +155,8 @@ def build_command(
         if value is not None:
             env[key] = value
     env.update(FORCED_ENV)
+    # Content-hash-keyed cache of extracted (pre-chunking) document text, shared across
+    # every run/project on this deployment; see `rag_kb.py`'s `extract_cache_dir`.
+    env["AUTOGENBOOK_KB_EXTRACT_CACHE_DIR"] = settings.kb_extract_cache_dir
 
     return argv, env, str(settings.repo_root)
