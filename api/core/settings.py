@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     worker_poll_interval_s: float = Field(default=2.0, alias="WORKER_POLL_INTERVAL_S")
     worker_stale_s: int = Field(default=300, alias="WORKER_STALE_S")
     runs_retention_days: int = Field(default=30, alias="RUNS_RETENTION_DAYS")
+    rewrite_author_line: bool = Field(default=True, alias="REWRITE_AUTHOR_LINE")
 
     cli_entrypoint: str = Field(default="main.py", alias="CLI_ENTRYPOINT")
     cli_python: str = Field(default_factory=lambda: sys.executable, alias="CLI_PYTHON")

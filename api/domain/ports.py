@@ -4,7 +4,9 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import BinaryIO, Protocol
 
-from api.domain.models import File, OutlineNode, Project, Run, RunEvent, Source
+from datetime import datetime
+
+from api.domain.models import File, OutlineNode, Project, Run, RunArtifact, RunEvent, Source
 
 
 class ProjectRepository(Protocol):
@@ -116,6 +118,8 @@ class RunRepository(Protocol):
 
     async def update(self, run: Run) -> Run: ...
 
+    async def list_terminal_before(self, cutoff: datetime) -> list[Run]: ...
+
 
 class RunEventRepository(Protocol):
     async def append_batch(self, run_id: uuid.UUID, events: Sequence[RunEvent]) -> None: ...
@@ -125,6 +129,16 @@ class RunEventRepository(Protocol):
     ) -> tuple[list[RunEvent], int]: ...
 
     async def max_seq(self, run_id: uuid.UUID) -> int: ...
+
+
+class RunArtifactRepository(Protocol):
+    async def add(self, artifact: RunArtifact) -> RunArtifact: ...
+
+    async def list(
+        self, run_id: uuid.UUID, limit: int, offset: int
+    ) -> tuple[list[RunArtifact], int]: ...
+
+    async def delete_by_run(self, run_id: uuid.UUID) -> None: ...
 
 
 class RunQueue(Protocol):

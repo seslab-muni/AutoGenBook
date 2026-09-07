@@ -13,6 +13,7 @@ from api.core.settings import Settings, get_settings
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
 from api.infrastructure.db.run_repository import SqlAlchemyRunEventRepository, SqlAlchemyRunRepository
 from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
 from api.infrastructure.queue.postgres import SqlAlchemyRunQueue
@@ -74,6 +75,7 @@ async def test_sse_stream_shows_section_and_done_events(
                 source_repository=SqlAlchemySourceRepository(session),
                 file_repository=SqlAlchemyFileRepository(session),
                 file_storage=file_storage,
+                run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
                 settings=_settings(tmp_path),
                 drain_poll_interval_s=0.05,
             )

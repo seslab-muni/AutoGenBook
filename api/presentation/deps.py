@@ -14,6 +14,7 @@ from api.domain.ports import FileStorage
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
 from api.infrastructure.db.run_repository import (
     SqlAlchemyRunEventRepository,
     SqlAlchemyRunRepository,
@@ -50,5 +51,7 @@ def get_run_service(
         run_repository=SqlAlchemyRunRepository(session),
         run_event_repository=SqlAlchemyRunEventRepository(session),
         project_repository=SqlAlchemyProjectRepository(session),
+        run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
+        file_repository=SqlAlchemyFileRepository(session),
         settings=settings,
     )

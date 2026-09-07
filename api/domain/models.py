@@ -231,6 +231,37 @@ class RunEvent:
     payload: dict[str, Any] | None = None
 
 
+class ArtifactKind(str, enum.Enum):
+    markdown = "markdown"
+    tex = "tex"
+    pdf = "pdf"
+    structure_graph = "structure_graph"
+    book_structure = "book_structure"
+    section = "section"
+    section_review = "section_review"
+    kb_sources = "kb_sources"
+    run_meta = "run_meta"
+    llm_usage = "llm_usage"
+    audit_report = "audit_report"
+    log = "log"
+    bib = "bib"
+    other = "other"
+
+
+@dataclass
+class RunArtifact:
+    """One file a run produced, uploaded to object storage as a `File`
+    (`kind=artifact`) and indexed here by its path within the run's work
+    directory - `relative_path` is what `GET /runs/{id}/artifacts` shows and
+    `api.infrastructure.cli.artifacts` classifies it from."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    file_id: uuid.UUID
+    kind: ArtifactKind
+    relative_path: str
+
+
 @dataclass
 class Run:
     """One book-mode CLI execution: a queue entry plus its outcome.

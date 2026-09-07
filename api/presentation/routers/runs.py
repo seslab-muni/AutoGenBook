@@ -12,8 +12,10 @@ from api.presentation.deps import get_run_service
 from api.presentation.schemas.common import Page, PageParams
 from api.presentation.schemas.runs import (
     Run,
+    RunArtifact,
     RunEvent,
     RunOptionsIn,
+    artifact_to_schema,
     event_to_schema,
     run_to_schema,
 )
@@ -97,6 +99,21 @@ async def list_run_events(
         total=total,
         limit=limit,
         offset=after_seq,
+    )
+
+
+@router.get("/runs/{run_id}/artifacts", response_model=Page[RunArtifact])
+async def list_run_artifacts(
+    run_id: uuid.UUID,
+    params: PageParams = Depends(),
+    service: RunService = Depends(get_run_service),
+) -> Page[RunArtifact]:
+    pairs, total = await service.artifacts(run_id, limit=params.limit, offset=params.offset)
+    return Page[RunArtifact](
+        items=[artifact_to_schema(artifact, file) for artifact, file in pairs],
+        total=total,
+        limit=params.limit,
+        offset=params.offset,
     )
 
 
