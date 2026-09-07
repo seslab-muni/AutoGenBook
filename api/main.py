@@ -1,35 +1,39 @@
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 
-import psycopg
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://autogenbook:autogenbook@db:5432/autogenbook",
-)
+from api.core.db import get_engine
+from api.core.errors import install_error_handlers
+from api.presentation.routers import system
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Keep the initial connection check out of import time so the API can start
-    # while PostgreSQL is still becoming ready.
     yield
+    await get_engine().dispose()
 
 
-app = FastAPI(title="AutoGenBook API", version="0.1.0", lifespan=lifespan)
+def create_app() -> FastAPI:
+    app = FastAPI(title="AutoGenBook API", version="0.1.0", lifespan=lifespan)
+    install_error_handlers(app)
+
+    api_router = APIRouter(prefix="/api/v1")
+    api_router.include_router(system.router)
+    app.include_router(api_router)
+
+    # Legacy aliases kept until the compose healthcheck (issue 02) moves to
+    # /api/v1/ready; excluded from the OpenAPI schema so they don't leak as
+    # a second documented surface.
+    app.add_api_route(
+        "/api/health", system.health, methods=["GET"], include_in_schema=False
+    )
+    app.add_api_route(
+        "/api/ready", system.ready, methods=["GET"], include_in_schema=False
+    )
+
+    return app
 
 
-@app.get("/api/health", tags=["system"])
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.get("/api/ready", tags=["system"])
-def ready() -> dict[str, str]:
-    with psycopg.connect(DATABASE_URL, connect_timeout=3) as connection:
-        connection.execute("SELECT 1")
-    return {"status": "ready"}
+app = create_app()
