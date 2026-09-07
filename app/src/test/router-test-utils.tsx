@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/rea
 import { render, type RenderResult } from '@testing-library/react';
 
 import { createQueryClient } from '@/app/query-client';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { routeTree } from '@/routeTree.gen';
 
 /** Renders the real route tree (MSW-backed) at `initialPath`, for router/loader integration tests. */
@@ -16,7 +17,9 @@ export function renderRouterApp(initialPath = '/'): RenderResult {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }

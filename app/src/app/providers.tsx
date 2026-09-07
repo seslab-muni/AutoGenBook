@@ -6,6 +6,7 @@ import { useState, type JSX } from 'react';
 
 import { createQueryClient } from '@/app/query-client';
 import { createAppRouter } from '@/app/router';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 export function AppProviders(): JSX.Element {
   const [queryClient] = useState(createQueryClient);
@@ -14,7 +15,9 @@ export function AppProviders(): JSX.Element {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <TooltipProvider>
+          <RouterProvider router={router} />
+        </TooltipProvider>
         {import.meta.env.DEV ? <ReactQueryDevtools initialIsOpen={false} /> : null}
       </QueryClientProvider>
     </ThemeProvider>
