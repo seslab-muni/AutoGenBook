@@ -44,7 +44,9 @@ See `docs/API_REFERENCE.md` for the full CLI reference. (`docs/API_REFERENCE.md`
 | --- | --- | --- | --- |
 | `AUTOGENBOOK_LLM_BASE_URL` | No | Override OpenAI-compatible base URL for all LLM calls. | `openrouter_llm.py:OpenRouterLLM.__init__` |
 | `AUTOGENBOOK_LLM_API_KEY` | No | Optional API key override for non-OpenRouter endpoints. | `openrouter_llm.py:OpenRouterLLM.__init__` |
-| `AUTOGENBOOK_FORCE_MINI_MODEL` | No | Forces `openai/gpt-5-mini` for all runs. | `openrouter_llm.py:OpenRouterLLM.__init__` |
+| `AUTOGENBOOK_LLM_MODEL` | No | Base chat model (`openai/gpt-5-mini` if unset), used wherever no more specific model override is given — book/paper mode, the book redundancy check, and proposal/reviewer roles left unset. Needed for non-OpenRouter/OpenAI-compatible endpoints. | `openrouter_llm.py:default_model_name` |
+| `AUTOGENBOOK_LLM_MINI_MODEL` | No | Cheap chat model used only when `AUTOGENBOOK_FORCE_MINI_MODEL` is on; falls back to `AUTOGENBOOK_LLM_MODEL` if unset. Set this to a smaller/cheaper model id from your endpoint to cut costs on dev/test runs. | `openrouter_llm.py:mini_model_name` |
+| `AUTOGENBOOK_FORCE_MINI_MODEL` | No | Forces `AUTOGENBOOK_LLM_MINI_MODEL` for every LLM call in the run, even ones with an explicit stronger model override. Meant for cheap dev/test runs — leave unset (or `0`) in production so each role gets its intended model. | `openrouter_llm.py:OpenRouterLLM.__init__` |
 | `AUTOGENBOOK_FAIL_FAST_SCHEMA` | No | Fail immediately on schema validation errors. | `main.py:main`, `autogenbook/agents/base.py:BaseAgent._validate_with_repair` |
 | `AUTOGENBOOK_NONINTERACTIVE` | No | Skips interactive prompts in book/proposal flows. | `autogenbook/pipelines/book_pipeline.py:_ask_choice`, `autogenbook/pipelines/proposal_pipeline.py:_is_noninteractive` |
 | `AUTOGENBOOK_ASSUME_YES` | No | Auto-accepts yes/no prompts in book flow. | `autogenbook/pipelines/book_pipeline.py:_ask_yes_no` |

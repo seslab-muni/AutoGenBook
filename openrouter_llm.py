@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
@@ -74,9 +74,26 @@ def _json_only_prompt() -> str:
     return get_prompt_optional("json_only_system") or JSON_ONLY_SYSTEM_PROMPT
 
 
+_FALLBACK_MODEL = "openai/gpt-5-mini"
+
+
+def default_model_name() -> str:
+    """Base chat model, overridable via AUTOGENBOOK_LLM_MODEL for non-OpenRouter endpoints."""
+    return os.environ.get("AUTOGENBOOK_LLM_MODEL", "").strip() or _FALLBACK_MODEL
+
+
+def mini_model_name() -> str:
+    """Cheap chat model used when AUTOGENBOOK_FORCE_MINI_MODEL is on.
+
+    Overridable via AUTOGENBOOK_LLM_MINI_MODEL; falls back to the base model
+    (default_model_name()) if no separate mini model is configured.
+    """
+    return os.environ.get("AUTOGENBOOK_LLM_MINI_MODEL", "").strip() or default_model_name()
+
+
 @dataclass(frozen=True)
 class LLMConfig:
-    model: str = "openai/gpt-5-mini"
+    model: str = field(default_factory=default_model_name)
     temperature: float = 0.2
     max_tokens: Optional[int] = None
     input_cost_per_million: Optional[float] = None
@@ -91,13 +108,16 @@ class OpenRouterLLM:
 
     - API key is read from OPENROUTER_API_KEY (or AUTOGENBOOK_LLM_API_KEY / OPENAI_API_KEY).
     - Base URL defaults to OpenRouter but can be overridden via AUTOGENBOOK_LLM_BASE_URL.
+    - Base model defaults to openai/gpt-5-mini but can be overridden via AUTOGENBOOK_LLM_MODEL.
+    - AUTOGENBOOK_FORCE_MINI_MODEL forces AUTOGENBOOK_LLM_MINI_MODEL (or the base model, if unset)
+      for every call, even ones with an explicit stronger model override.
     """
 
     def __init__(self, config: Optional[LLMConfig] = None) -> None:
         self.config = config or LLMConfig()
         if os.environ.get("AUTOGENBOOK_FORCE_MINI_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}:
             self.config = LLMConfig(
-                model="openai/gpt-5-mini",
+                model=mini_model_name(),
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 input_cost_per_million=self.config.input_cost_per_million,
