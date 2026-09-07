@@ -33,7 +33,7 @@ function StudioPage() {
             <EmptyState
               icon={ListTree}
               title="Outline tree coming soon"
-              description="Browsing and editing the outline lands in issue #17."
+              description="Browsing and editing the outline lands in issue #19."
             />
           </div>
           <PaneStatusBar>{outlineNodes?.total ?? 0} nodes</PaneStatusBar>

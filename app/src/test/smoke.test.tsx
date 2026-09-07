@@ -4,10 +4,15 @@ import { describe, expect, it } from 'vitest';
 import { renderRouterApp } from '@/test/router-test-utils';
 
 describe('root route', () => {
-  it('renders the placeholder home page', async () => {
+  it('renders the projects hub with seeded projects', async () => {
     renderRouterApp('/');
 
-    expect(await screen.findByText(/TODO: projects list/i)).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: /Distributed Consensus & Quantum Fault/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: /Deep Reinforcement Learning & Multi-Agent Planning/i }),
+    ).toBeInTheDocument();
   });
 
   it('renders the studio shell for a known project', async () => {

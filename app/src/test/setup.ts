@@ -18,6 +18,15 @@ if (typeof window.matchMedia !== 'function') {
   });
 }
 
+/** jsdom has no `ResizeObserver`; Radix's `Select` measures its trigger/viewport with one. */
+if (typeof window.ResizeObserver !== 'function') {
+  window.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 beforeEach(() => seedDatabase());
 afterEach(() => server.resetHandlers());
