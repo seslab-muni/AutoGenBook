@@ -141,9 +141,14 @@ function buildTimeline(run: Run): TimelineEntry[] {
 function completeNode(nodeId: string): void {
   const node = db.outlineNodes.get(nodeId);
   if (!node) return;
+  // `compiled`, not `review_ready`: the real worker's graph-import step
+  // (`api/application/graph_import.py`) sets `NodeStatus.COMPILED` once it
+  // folds a finished run's `sections/*.md` back into a node - `review_ready`
+  // is reserved for a human reviewer marking a section reviewed and is never
+  // set automatically by any backend code path.
   db.outlineNodes.set(nodeId, {
     ...node,
-    status: 'review_ready',
+    status: 'compiled',
     actualWords: node.wordBudget,
     contentMarkdown: node.contentMarkdown || `*(Drafted by the fake run for "${node.title}".)*`,
     updatedAt: db.now(),

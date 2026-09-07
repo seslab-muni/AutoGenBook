@@ -14,6 +14,9 @@ export default defineConfig({
       autoCodeSplitting: true,
       routesDirectory: './src/routes',
       generatedRouteTree: './src/routeTree.gen.ts',
+      // Route-level tests (e.g. `p.$projectId.runs.$runId.test.tsx`) live alongside their route
+      // module rather than off in a mirrored test tree, so exclude test files from route scanning.
+      routeFileIgnorePattern: '\\.test\\.[jt]sx?$',
     }),
     react(),
     tailwindcss(),
