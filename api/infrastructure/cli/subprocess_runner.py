@@ -1,0 +1,209 @@
+"""Run the book-mode CLI as a subprocess and stream structured `RunEvent`s.
+
+Owns the process lifecycle only: starting it, turning its stdout into
+events via `stdout_parser`, watching `structure_graph.json` for newly
+completed sections, and tearing the process (and its children, e.g.
+`lualatex`) down on cancellation or timeout. Building the command itself is
+`book_command.py`'s job.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import threading
+import time
+from collections.abc import Callable
+from datetime import datetime, timezone
+from pathlib import Path
+
+from api.domain.models import RunEvent
+from api.infrastructure.cli.stdout_parser import parse_line
+
+# Default grace period between SIGTERM and SIGKILL on cancellation.
+# Overridable per call (e.g. from `settings.cli_cancel_grace_s`).
+CANCEL_GRACE_S = 15.0
+
+# How often the watcher thread checks structure_graph.json's mtime.
+GRAPH_POLL_INTERVAL_S = 1.0
+
+# How often the main loop polls the process/cancellation state.
+_WAIT_POLL_INTERVAL_S = 0.2
+
+STRUCTURE_GRAPH_FILENAME = "structure_graph.json"
+OUT_DIRNAME = "out"
+
+OnEvent = Callable[[RunEvent], None]
+ShouldCancel = Callable[[], bool]
+
+
+def _kill_process_group(proc: subprocess.Popen, sig: int) -> None:
+    try:
+        if os.name == "posix":
+            os.killpg(os.getpgid(proc.pid), sig)
+        else:  # pragma: no cover - Windows fallback, not exercised in CI
+            proc.send_signal(sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _watch_structure_graph(
+    graph_path: Path,
+    emit: Callable[[str, str, str, dict | None], None],
+    stop_event: threading.Event,
+    poll_interval_s: float,
+) -> None:
+    seen_keys: set[str] = set()
+    last_mtime: float | None = None
+
+    def poll_once() -> None:
+        nonlocal last_mtime
+        try:
+            mtime = graph_path.stat().st_mtime
+        except OSError:
+            return
+        if mtime == last_mtime:
+            return
+        last_mtime = mtime
+        try:
+            data = json.loads(graph_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        nodes = data.get("nodes") or {}
+        for key, attrs in nodes.items():
+            if key in seen_keys:
+                continue
+            content_path = attrs.get("content_file_path") if isinstance(attrs, dict) else None
+            if not content_path:
+                continue
+            seen_keys.add(key)
+            title = attrs.get("title") or key
+            emit(
+                "info",
+                "section",
+                f"Section '{title}' generated",
+                {"node_key": key, "content_file_path": content_path},
+            )
+
+    while not stop_event.is_set():
+        poll_once()
+        stop_event.wait(poll_interval_s)
+    # Catch a final write that landed after the last wait but before the
+    # process actually exited.
+    poll_once()
+
+
+def run(
+    argv: list[str],
+    env: dict[str, str],
+    cwd: str | Path,
+    work_dir: str | Path,
+    on_event: OnEvent,
+    should_cancel: ShouldCancel | None = None,
+    *,
+    cancel_grace_s: float = CANCEL_GRACE_S,
+    poll_interval_s: float = GRAPH_POLL_INTERVAL_S,
+    timeout_s: float | None = None,
+) -> int:
+    """Run `argv` as a subprocess, streaming events via `on_event`.
+
+    Returns the child's exit code (or a negative signal-derived code, per
+    `subprocess.Popen.returncode` conventions, if it was killed).
+
+    `should_cancel`, if given, is polled periodically; once it returns
+    True the process group is sent SIGTERM, then SIGKILL after
+    `cancel_grace_s` seconds if it hasn't exited. `timeout_s`, if given,
+    triggers the same SIGKILL directly once the wall-clock budget is spent.
+    """
+
+    work_dir = Path(work_dir)
+    graph_path = work_dir / OUT_DIRNAME / STRUCTURE_GRAPH_FILENAME
+
+    # `emit` is called from both the stdout-reader thread and the graph
+    # watcher thread. The lock must cover both the sequence-number bump and
+    # the `on_event` dispatch as one atomic step, so that events are
+    # delivered to `on_event` in strictly increasing `seq` order even when
+    # both threads race to emit at the same time.
+    emit_lock = threading.Lock()
+    seq_holder = [0]
+
+    def emit(level: str, stage: str, message: str, payload: dict | None = None) -> None:
+        with emit_lock:
+            seq_holder[0] += 1
+            on_event(
+                RunEvent(
+                    seq=seq_holder[0],
+                    ts=datetime.now(timezone.utc),
+                    level=level,
+                    stage=stage,
+                    message=message,
+                    payload=payload,
+                )
+            )
+
+    popen_kwargs: dict = dict(
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(argv, **popen_kwargs)  # noqa: S603 - argv built by book_command
+
+    stop_event = threading.Event()
+
+    def read_stdout() -> None:
+        assert proc.stdout is not None
+        for raw_line in proc.stdout:
+            stage, level, message = parse_line(raw_line)
+            emit(level, stage, message)
+
+    reader_thread = threading.Thread(target=read_stdout, daemon=True)
+    watcher_thread = threading.Thread(
+        target=_watch_structure_graph,
+        args=(graph_path, emit, stop_event, poll_interval_s),
+        daemon=True,
+    )
+    reader_thread.start()
+    watcher_thread.start()
+
+    started_at = time.monotonic()
+    cancel_requested_at: float | None = None
+    exit_code: int | None = None
+
+    try:
+        while True:
+            exit_code = proc.poll()
+            if exit_code is not None:
+                break
+
+            if should_cancel is not None and should_cancel() and cancel_requested_at is None:
+                cancel_requested_at = time.monotonic()
+                _kill_process_group(proc, signal.SIGTERM)
+
+            if (
+                cancel_requested_at is not None
+                and (time.monotonic() - cancel_requested_at) >= cancel_grace_s
+            ):
+                _kill_process_group(proc, signal.SIGKILL)
+
+            if timeout_s is not None and (time.monotonic() - started_at) >= timeout_s:
+                _kill_process_group(proc, signal.SIGKILL)
+
+            time.sleep(_WAIT_POLL_INTERVAL_S)
+
+        # Make sure the OS has actually reaped the process before we stop
+        # reading its output.
+        proc.wait()
+    finally:
+        stop_event.set()
+        reader_thread.join(timeout=5)
+        watcher_thread.join(timeout=poll_interval_s + 5)
+
+    return exit_code if exit_code is not None else (proc.returncode or -1)

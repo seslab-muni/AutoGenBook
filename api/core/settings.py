@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     cli_entrypoint: str = Field(default="main.py", alias="CLI_ENTRYPOINT")
     cli_python: str = Field(default_factory=lambda: sys.executable, alias="CLI_PYTHON")
     repo_root: str = Field(default_factory=_default_repo_root, alias="REPO_ROOT")
+    cli_cancel_grace_s: float = Field(default=15.0, alias="CLI_CANCEL_GRACE_S")
+    cli_run_timeout_s: float = Field(default=3600.0, alias="CLI_RUN_TIMEOUT_S")
 
 
 @lru_cache
