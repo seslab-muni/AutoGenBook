@@ -123,7 +123,14 @@ class SourceService:
         # Soft delete: the row stays around (for audit, and so `is_referenced`
         # can tell a truly-active reference apart from a removed one) but
         # disappears from `get`/`list`/`list_for_embed`, which all filter
-        # `deleted_at IS NULL`.
+        # `deleted_at IS NULL`. `file_id` is also nulled out here: the FK on
+        # `project_sources.file_id` is `ON DELETE RESTRICT`, so as long as a
+        # soft-deleted row keeps pointing at the file, Postgres still refuses
+        # to delete that file even though `is_referenced` (correctly) no
+        # longer counts this row as a reference - detaching the FK here is
+        # what actually makes the file deletable again, not just makes it
+        # look deletable to the application.
         source, _file = await self.get(project_id, source_id)
         source.deleted_at = datetime.now(timezone.utc)
+        source.file_id = None
         await self._sources.update(source)

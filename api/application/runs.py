@@ -59,6 +59,12 @@ logger = logging.getLogger("api.application.runs")
 _EVENT_BATCH_SIZE = 50
 _DRAIN_POLL_INTERVAL_S = 1.0
 
+# A drain-loop iteration can fail on a transient DB error (a Postgres
+# restart, a connection reset, ...) - retry a bounded number of times with a
+# linear backoff before giving up and tearing down the still-running CLI
+# subprocess (issue #48), rather than dying on the very first hiccup.
+_DRAIN_MAX_CONSECUTIVE_FAILURES = 5
+
 
 class RunService:
     def __init__(
@@ -509,8 +515,8 @@ class GenerationService:
             else:  # pragma: no cover - exhaustive over RunKind
                 raise ValueError(f"unknown run kind: {run.kind!r}")
             argv, env, cwd = book_command.build_command(run.work_dir, run.options, self._settings)
-            exit_code = await self._run_subprocess_and_drain(run, argv, env, cwd)
-            return await self._finalize(run, exit_code, project)
+            exit_code, timed_out = await self._run_subprocess_and_drain(run, argv, env, cwd)
+            return await self._finalize(run, exit_code, project, timed_out=timed_out)
         except Exception as exc:  # noqa: BLE001 - any prep/run/finalize failure -> failed run
             logger.exception("run %s failed before/while executing the CLI", run.id)
             # A failed commit (e.g. `append_batch` hitting a duplicate
@@ -685,10 +691,11 @@ class GenerationService:
 
     async def _run_subprocess_and_drain(
         self, run: Run, argv: list[str], env: dict[str, str], cwd: str
-    ) -> int:
+    ) -> tuple[int, bool]:
         event_queue: "queue.Queue[RunEvent]" = queue.Queue()
         cancel_event = threading.Event()
         subprocess_done = threading.Event()
+        timed_out_event = threading.Event()
 
         # A run re-claimed after `requeue_stale` (worker crash, or the
         # previous attempt's session was poisoned before it could persist
@@ -716,11 +723,25 @@ class GenerationService:
                     cancel_grace_s=self._settings.cli_cancel_grace_s,
                     timeout_s=self._settings.cli_run_timeout_s,
                     start_seq=start_seq,
+                    timed_out=timed_out_event,
                 )
             finally:
                 subprocess_done.set()
 
         async def drain_loop() -> None:
+            # issue #48: a transient DB error here (Postgres restart,
+            # connection reset, the run row cascade-deleted, a duplicate
+            # `seq`) used to propagate immediately out of `asyncio.gather`,
+            # leaving `run_subprocess()` running - and the CLI still
+            # spending LLM tokens - with nothing left to ever flip
+            # `cancel_event`. Retry a bounded number of times with backoff
+            # first; only once that budget is exhausted do we set
+            # `cancel_event` (so the concurrently-running `run_subprocess`
+            # tears the child down via `subprocess_runner.run`'s own
+            # SIGTERM -> SIGKILL handling) and re-raise, so `execute`'s
+            # caller sees the child already terminated by the time it
+            # catches this and calls `_fail`.
+            consecutive_failures = 0
             while True:
                 batch: list[RunEvent] = []
                 try:
@@ -728,22 +749,62 @@ class GenerationService:
                         batch.append(event_queue.get_nowait())
                 except queue.Empty:
                     pass
-                if batch:
-                    await self._events.append_batch(run.id, batch)
-
-                current = await self._runs.get(run.id)
-                if current is not None and current.cancel_requested:
-                    cancel_event.set()
-                await self._queue.heartbeat(run.id)
+                try:
+                    if batch:
+                        await self._events.append_batch(run.id, batch)
+                    current = await self._runs.get(run.id)
+                    if current is not None and current.cancel_requested:
+                        cancel_event.set()
+                    await self._queue.heartbeat(run.id)
+                except Exception:
+                    consecutive_failures += 1
+                    logger.exception(
+                        "run %s: drain loop iteration failed (attempt %s/%s)",
+                        run.id,
+                        consecutive_failures,
+                        _DRAIN_MAX_CONSECUTIVE_FAILURES,
+                    )
+                    if consecutive_failures > _DRAIN_MAX_CONSECUTIVE_FAILURES:
+                        cancel_event.set()
+                        raise
+                    await asyncio.sleep(self._drain_poll_interval_s * consecutive_failures)
+                    continue
+                else:
+                    consecutive_failures = 0
 
                 if subprocess_done.is_set() and event_queue.empty():
                     break
                 await asyncio.sleep(self._drain_poll_interval_s)
 
-        exit_code, _ = await asyncio.gather(run_subprocess(), drain_loop())
-        return exit_code
+        # `return_exceptions=True` (rather than a bare `gather`, which
+        # re-raises the first exception immediately and abandons the other
+        # awaitable) makes `gather` wait for *both* to actually finish -
+        # `drain_loop` sets `cancel_event` before re-raising above, and
+        # `run_subprocess` polls it, so by the time this line returns the
+        # child has already been torn down, not left orphaned.
+        exit_code, drain_result = await asyncio.gather(
+            run_subprocess(), drain_loop(), return_exceptions=True
+        )
+        if isinstance(exit_code, BaseException):
+            # `subprocess_runner.run` itself doesn't raise in practice, but
+            # guard against it anyway: make sure `drain_loop` (which may
+            # still be waiting on `subprocess_done`) isn't left hanging, and
+            # surface whichever exception actually explains the failure.
+            subprocess_done.set()
+            if isinstance(drain_result, BaseException) and drain_result is not exit_code:
+                logger.error(
+                    "run %s: drain loop also failed after run_subprocess raised",
+                    run.id,
+                    exc_info=drain_result,
+                )
+            raise exit_code
+        if isinstance(drain_result, BaseException):
+            raise drain_result
+        return exit_code, timed_out_event.is_set()
 
-    async def _finalize(self, run: Run, exit_code: int, project: Project) -> Run:
+    async def _finalize(
+        self, run: Run, exit_code: int, project: Project, *, timed_out: bool = False
+    ) -> Run:
         run_meta = _read_run_meta(run.work_dir)
         total_tokens, total_cost = _extract_totals(run_meta)
 
@@ -758,7 +819,15 @@ class GenerationService:
             error = None
         else:
             status = RunStatus.failed
-            error = (run_meta or {}).get("error") or f"CLI exited with code {exit_code}"
+            if timed_out:
+                # Distinguish an API-enforced timeout from an ordinary CLI
+                # crash (issue #80) - both exit with a SIGKILL-derived
+                # negative code, but only one of them means "this may still
+                # have produced usable, resumable output" rather than a
+                # real failure.
+                error = f"killed by API after {self._settings.cli_run_timeout_s:g}s timeout"
+            else:
+                error = (run_meta or {}).get("error") or f"CLI exited with code {exit_code}"
 
         run.status = status
         run.exit_code = exit_code

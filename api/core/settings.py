@@ -52,7 +52,13 @@ class Settings(BaseSettings):
     cli_python: str = Field(default_factory=lambda: sys.executable, alias="CLI_PYTHON")
     repo_root: str = Field(default_factory=_default_repo_root, alias="REPO_ROOT")
     cli_cancel_grace_s: float = Field(default=15.0, alias="CLI_CANCEL_GRACE_S")
-    cli_run_timeout_s: float = Field(default=3600.0, alias="CLI_RUN_TIMEOUT_S")
+    # 3600s (1h) SIGKILLed any realistically-sized book run: the wizard's
+    # default `totalPagesBudget` of 350 pages at `max_output_pages: 1.5`
+    # subdivides into ~230 leaf sections, each needing several LLM calls
+    # (write, review, revise) - easily several hours end to end. 21600s (6h)
+    # gives that generous headroom while still bounding a truly stuck run
+    # (issue #80). Still overridable via `CLI_RUN_TIMEOUT_S`.
+    cli_run_timeout_s: float = Field(default=21600.0, alias="CLI_RUN_TIMEOUT_S")
 
 
 @lru_cache

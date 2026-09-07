@@ -107,14 +107,18 @@ class SourceRecord(Base):
             postgresql_where=sa.text("deleted_at IS NULL"),
             sqlite_where=sa.text("deleted_at IS NULL"),
         ),
+        sa.Index("ix_project_sources_project_id", "project_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid, sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    file_id: Mapped[uuid.UUID] = mapped_column(
-        sa.Uuid, sa.ForeignKey("files.id", ondelete="RESTRICT"), nullable=False
+    # Nullable so a soft-deleted row (`deleted_at` set) can detach from its
+    # file (`SourceService.remove`) instead of the `RESTRICT` FK permanently
+    # blocking deletion of a file whose only references have been removed.
+    file_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("files.id", ondelete="RESTRICT"), nullable=True
     )
     source_type: Mapped[SourceType] = mapped_column(
         sa.Enum(
@@ -138,6 +142,7 @@ class SourceRecord(Base):
         ),
         nullable=False,
         default=SourceStatus.ready,
+        server_default="ready",
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -171,6 +176,7 @@ class OutlineNodeRecord(Base):
             postgresql_where=sa.text("deleted_at IS NULL"),
             sqlite_where=sa.text("deleted_at IS NULL"),
         ),
+        sa.Index("ix_outline_nodes_project_id_cli_key", "project_id", "cli_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
@@ -183,7 +189,7 @@ class OutlineNodeRecord(Base):
     order_index: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     cli_key: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     title: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    summary: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    summary: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
     status: Mapped[NodeStatus] = mapped_column(
         sa.Enum(
             NodeStatus,
@@ -192,10 +198,13 @@ class OutlineNodeRecord(Base):
         ),
         nullable=False,
         default=NodeStatus.NOT_STARTED,
+        server_default="not_started",
     )
     target_pages: Mapped[float] = mapped_column(sa.Numeric(8, 2), nullable=False)
     word_budget: Mapped[int] = mapped_column(sa.Integer, nullable=False)
-    actual_words: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    actual_words: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
     equation_density_level: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     math_level: Mapped[MathLevel] = mapped_column(
         sa.Enum(
@@ -206,12 +215,20 @@ class OutlineNodeRecord(Base):
         nullable=False,
     )
     sub_prompt: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
-    content_markdown: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
-    content_latex: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
-    rag_citations: Mapped[list[dict]] = mapped_column(_jsonb(), nullable=False, default=list)
+    content_markdown: Mapped[str] = mapped_column(
+        sa.Text, nullable=False, default="", server_default=""
+    )
+    content_latex: Mapped[str] = mapped_column(
+        sa.Text, nullable=False, default="", server_default=""
+    )
+    rag_citations: Mapped[list[dict]] = mapped_column(
+        _jsonb(), nullable=False, default=list, server_default="[]"
+    )
     reviewer_score: Mapped[float | None] = mapped_column(sa.Numeric, nullable=True)
     reviewer_notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
-    structure_locked: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    structure_locked: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=True, server_default=sa.true()
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
@@ -289,12 +306,17 @@ class RunRecord(Base):
         ),
         nullable=False,
         default=RunStatus.queued,
+        server_default="queued",
     )
-    options: Mapped[dict] = mapped_column(_jsonb(), nullable=False, default=dict)
+    options: Mapped[dict] = mapped_column(
+        _jsonb(), nullable=False, default=dict, server_default="{}"
+    )
     work_dir: Mapped[str] = mapped_column(sa.Text, nullable=False)
     exit_code: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
-    cancel_requested: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    cancel_requested: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
     locked_by: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
@@ -316,6 +338,7 @@ class RunArtifactRecord(Base):
     __tablename__ = "run_artifacts"
     __table_args__ = (
         sa.UniqueConstraint("run_id", "relative_path", name="uq_run_artifacts_run_id_path"),
+        sa.Index("ix_run_artifacts_run_id", "run_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
@@ -340,6 +363,7 @@ class RunEventRecord(Base):
     __tablename__ = "run_events"
     __table_args__ = (
         sa.UniqueConstraint("run_id", "seq", name="uq_run_events_run_id_seq"),
+        sa.Index("ix_run_events_run_id", "run_id"),
     )
 
     # `BigInteger` primary keys don't get SQLite's "INTEGER PRIMARY KEY"

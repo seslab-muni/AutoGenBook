@@ -15,6 +15,15 @@ if str(REPO_ROOT) not in sys.path:
 from api.core.db import Base, to_async_url  # noqa: E402
 from api.core.settings import get_settings  # noqa: E402
 
+# Importing these registers every ORM table class (and the `File`/`Project`
+# etc. mapped classes some of them live on) on `Base.metadata` as a side
+# effect. Without this, `target_metadata` below is empty - `alembic upgrade
+# head` still works (the migrations are hand-written raw DDL), but
+# `alembic check`/`--autogenerate` see no tables at all and would generate a
+# migration that drops every one of them.
+import api.domain.models  # noqa: E402,F401
+import api.infrastructure.db.models  # noqa: E402,F401
+
 config = context.config
 
 if config.config_file_name is not None:
