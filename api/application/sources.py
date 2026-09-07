@@ -83,6 +83,7 @@ class SourceService:
             chunks_count=None,
             status=SourceStatus.ready,
             created_at=datetime.now(timezone.utc),
+            deleted_at=None,
         )
         source = await self._sources.add(source)
         return source, file
@@ -119,5 +120,10 @@ class SourceService:
         return source, file
 
     async def remove(self, project_id: uuid.UUID, source_id: uuid.UUID) -> None:
+        # Soft delete: the row stays around (for audit, and so `is_referenced`
+        # can tell a truly-active reference apart from a removed one) but
+        # disappears from `get`/`list`/`list_for_embed`, which all filter
+        # `deleted_at IS NULL`.
         source, _file = await self.get(project_id, source_id)
-        await self._sources.delete(source)
+        source.deleted_at = datetime.now(timezone.utc)
+        await self._sources.update(source)

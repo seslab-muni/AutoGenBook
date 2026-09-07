@@ -111,7 +111,7 @@ class SqlAlchemyProjectRepository:
         total = await self._session.scalar(
             select(func.count())
             .select_from(SourceRecord)
-            .where(SourceRecord.project_id == project_id)
+            .where(SourceRecord.project_id == project_id, SourceRecord.deleted_at.is_(None))
         )
         return total or 0
 

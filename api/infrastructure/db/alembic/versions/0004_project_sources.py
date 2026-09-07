@@ -69,12 +69,22 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.UniqueConstraint("project_id", "file_id", name="uq_project_sources_project_file"),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_project_sources_project_id", "project_sources", ["project_id"])
+    # Soft delete: a file can be re-attached to a project after its previous
+    # source row was removed, so uniqueness only applies to active rows.
+    op.create_index(
+        "uq_project_sources_project_file_active",
+        "project_sources",
+        ["project_id", "file_id"],
+        unique=True,
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("uq_project_sources_project_file_active", table_name="project_sources")
     op.drop_index("ix_project_sources_project_id", table_name="project_sources")
     op.drop_table("project_sources")
     op.execute("DROP TYPE IF EXISTS source_type")

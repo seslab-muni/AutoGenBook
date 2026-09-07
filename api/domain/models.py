@@ -97,6 +97,7 @@ class Source:
     chunks_count: int | None
     status: SourceStatus
     created_at: datetime
+    deleted_at: datetime | None
 
 
 class FileKind(str, enum.Enum):

@@ -86,8 +86,16 @@ class ProjectRecord(Base):
 class SourceRecord(Base):
     __tablename__ = "project_sources"
     __table_args__ = (
-        sa.UniqueConstraint(
-            "project_id", "file_id", name="uq_project_sources_project_file"
+        # Soft delete (`deleted_at`) means the same file can be re-attached
+        # to a project after its previous source row was removed, so the
+        # uniqueness constraint only applies to active (non-deleted) rows.
+        sa.Index(
+            "uq_project_sources_project_file_active",
+            "project_id",
+            "file_id",
+            unique=True,
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
         ),
     )
 
@@ -123,4 +131,7 @@ class SourceRecord(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
     )

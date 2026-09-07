@@ -3,6 +3,10 @@ from __future__ import annotations
 import uuid
 
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from api.infrastructure.db.models import SourceRecord
 
 PROJECT_PAYLOAD = {
     "title": "Widgets 101",
@@ -305,3 +309,104 @@ async def test_duplicate_project_copies_sources_pointing_at_same_files(
     original = await client.get(f"/api/v1/projects/{project['id']}")
     original_source = original.json()["sources"][0]
     assert duplicated_source["id"] != original_source["id"]
+
+
+async def test_duplicate_project_does_not_copy_soft_deleted_sources(
+    client: AsyncClient,
+) -> None:
+    project = await _create_project(client)
+    file = await _upload_file(client, "book.pdf")
+    add_response = await client.post(
+        f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+    )
+    source_id = add_response.json()["id"]
+    await client.delete(f"/api/v1/projects/{project['id']}/sources/{source_id}")
+
+    response = await client.post(f"/api/v1/projects/{project['id']}/duplicate")
+
+    assert response.status_code == 201
+    assert response.json()["sources"] == []
+
+
+async def test_removed_source_row_is_soft_deleted_not_erased(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project = await _create_project(client)
+    file = await _upload_file(client, "book.pdf")
+    add_response = await client.post(
+        f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+    )
+    source_id = add_response.json()["id"]
+
+    delete_response = await client.delete(
+        f"/api/v1/projects/{project['id']}/sources/{source_id}"
+    )
+    assert delete_response.status_code == 204
+
+    # Gone from the API...
+    assert (
+        await client.get(f"/api/v1/projects/{project['id']}/sources/{source_id}")
+    ).status_code == 404
+    list_response = await client.get(f"/api/v1/projects/{project['id']}/sources")
+    assert list_response.json()["total"] == 0
+    project_response = await client.get(f"/api/v1/projects/{project['id']}")
+    assert project_response.json()["sources"] == []
+
+    # ...but the row itself is still in the database, with `deleted_at` set.
+    async with session_factory() as session:
+        record = await session.get(SourceRecord, uuid.UUID(source_id))
+        assert record is not None
+        assert record.deleted_at is not None
+
+
+async def test_reattaching_file_after_soft_delete_succeeds(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    file = await _upload_file(client, "book.pdf")
+
+    first = await client.post(
+        f"/api/v1/projects/{project['id']}/sources",
+        json={"fileId": file["id"], "authors": "First attempt"},
+    )
+    assert first.status_code == 201
+    first_source_id = first.json()["id"]
+
+    delete_response = await client.delete(
+        f"/api/v1/projects/{project['id']}/sources/{first_source_id}"
+    )
+    assert delete_response.status_code == 204
+
+    second = await client.post(
+        f"/api/v1/projects/{project['id']}/sources",
+        json={"fileId": file["id"], "authors": "Second attempt"},
+    )
+
+    assert second.status_code == 201
+    assert second.json()["id"] != first_source_id
+    assert second.json()["authors"] == "Second attempt"
+
+    list_response = await client.get(f"/api/v1/projects/{project['id']}/sources")
+    assert list_response.json()["total"] == 1
+
+
+async def test_file_with_only_soft_deleted_source_is_no_longer_referenced(
+    client: AsyncClient,
+) -> None:
+    project = await _create_project(client)
+    file = await _upload_file(client, "book.pdf")
+    add_response = await client.post(
+        f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+    )
+    source_id = add_response.json()["id"]
+
+    # Still referenced while the source is active.
+    still_referenced = await client.delete(f"/api/v1/files/{file['id']}")
+    assert still_referenced.status_code == 409
+
+    remove_response = await client.delete(
+        f"/api/v1/projects/{project['id']}/sources/{source_id}"
+    )
+    assert remove_response.status_code == 204
+
+    # No longer referenced once the only source link was soft-deleted.
+    delete_response = await client.delete(f"/api/v1/files/{file['id']}")
+    assert delete_response.status_code == 204

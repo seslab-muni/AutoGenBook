@@ -69,5 +69,8 @@ class SourceRepository(Protocol):
     async def list_all(self, project_id: uuid.UUID) -> list[Source]: ...
 
     async def update(self, source: Source) -> Source: ...
-
-    async def delete(self, source: Source) -> None: ...
+    # No hard `delete`: `DELETE /projects/{id}/sources/{sourceId}` is a soft
+    # delete (`deleted_at` set via `update`), so a removed row stays around
+    # for audit purposes and to keep the file's `is_referenced` check honest
+    # about what's still attached. Project deletion still hard-deletes every
+    # row (soft-deleted or not) via the ORM cascade on `ProjectRecord`.
