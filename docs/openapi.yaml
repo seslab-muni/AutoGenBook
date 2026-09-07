@@ -1736,6 +1736,8 @@ components:
           type: number
         reviewerNotes:
           type: string
+        structureLocked:
+          type: boolean
 
     OutlineTreeReplaceNode:
       type: object

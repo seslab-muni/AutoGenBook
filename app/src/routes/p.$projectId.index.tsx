@@ -1,12 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
-import { createFileRoute } from '@tanstack/react-router';
-import { BookOpen, Bot, ListTree } from 'lucide-react';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { BookOpen, Bot } from 'lucide-react';
 
-import { outline } from '@/api/queries/outline';
 import { EmptyState } from '@/components/empty-state';
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { StudioLayout } from '@/components/layout/studio-layout';
+import { OutlinePane } from '@/features/outline/components/outline-pane';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 import { Route as ProjectRoute } from './p.$projectId';
@@ -19,25 +18,28 @@ function StudioPage() {
   const { projectId } = Route.useParams();
   const { node } = ProjectRoute.useSearch();
   const { project } = ProjectRoute.useLoaderData();
-  const { data: outlineNodes } = useQuery(outline.flat(projectId));
+  const navigate = useNavigate({ from: Route.fullPath });
   useDocumentTitle(project.title);
+
+  function handleSelectNode(nodeId: string | null) {
+    void navigate({
+      search: (prev) => {
+        const rest = { ...prev };
+        delete rest.node;
+        return nodeId ? { ...rest, node: nodeId } : rest;
+      },
+    });
+  }
 
   return (
     <StudioLayout
       outlinePane={
-        <>
-          <PaneToolbar>
-            <span className="text-xs font-semibold text-foreground">Outline</span>
-          </PaneToolbar>
-          <div className="flex-1 overflow-auto">
-            <EmptyState
-              icon={ListTree}
-              title="Outline tree coming soon"
-              description="Browsing and editing the outline lands in issue #19."
-            />
-          </div>
-          <PaneStatusBar>{outlineNodes?.total ?? 0} nodes</PaneStatusBar>
-        </>
+        <OutlinePane
+          projectId={projectId}
+          maxOutlineLevels={project.maxOutlineLevels}
+          selectedNodeId={node ?? null}
+          onSelectNode={handleSelectNode}
+        />
       }
       editorPane={
         <EmptyState
