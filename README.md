@@ -730,6 +730,20 @@ Full details: `docs/OPERATIONS.md` and `docs/TROUBLESHOOTING.md`. (`docs/OPERATI
 
 More details: `docs/DEVELOPER_GUIDE.md`. (`docs/DEVELOPER_GUIDE.md`)
 
+## Docker deployment
+
+The repository includes a production-oriented Compose stack for the starter web UI, FastAPI service, and PostgreSQL:
+
+```bash
+cp .env.example .env
+# Set OPENROUTER_API_KEY in .env when generation is enabled.
+docker compose up --build
+```
+
+Open `http://localhost:8080`. Only the Nginx web container is published to the host. The FastAPI service is available to Nginx at `http://api:8000`, and PostgreSQL is available only to the API on Docker's internal backend network. API calls from the UI should use relative `/api/...` URLs; Nginx proxies them internally. Generated files are persisted in `./output`, and PostgreSQL data is stored in the `postgres_data` named volume.
+
+The initial API contract exposes `GET /api/health` and `GET /api/ready`; the latter verifies the database connection. The UI remains mock-backed until its project and generation actions are wired to these endpoints.
+
 ## Security notes
 
 - Secrets are read from environment variables only. (`openrouter_llm.py:OpenRouterLLM.__init__`, `mcp_gateway.py:MCPGatewayClient.__init__`)
@@ -744,7 +758,7 @@ See `docs/INDEX.md` for the full documentation index. (`docs/INDEX.md`)
 
 ## Limitations
 
-- CLI only; no HTTP server is defined in the codebase. (`main.py:parse_args`, `autogenbook/orchestrator.py:run`)
+- The FastAPI layer currently provides deployment/health scaffolding; project and generation endpoints still need to be implemented. (`api/main.py`)
 - LLM calls require credentials for the configured endpoint (OpenRouter requires `OPENROUTER_API_KEY`). (`openrouter_llm.py:OpenRouterLLM.__init__`)
 - PDF generation requires LuaLaTeX. (`book_builder.py:compile_pdf`)
 

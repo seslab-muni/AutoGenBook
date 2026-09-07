@@ -1,0 +1,63 @@
+services:
+  web:
+    build:
+      context: ./app
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - frontend
+
+  api:
+    build:
+      context: .
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autogenbook}:${POSTGRES_PASSWORD:-autogenbook}@db:5432/${POSTGRES_DB:-autogenbook}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AUTOGENBOOK_LLM_BASE_URL: ${AUTOGENBOOK_LLM_BASE_URL:-}
+      AUTOGENBOOK_LLM_API_KEY: ${AUTOGENBOOK_LLM_API_KEY:-}
+    expose:
+      - "8000"
+    volumes:
+      - ./output:/app/output
+      - ./input:/app/input:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - frontend
+      - backend
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-autogenbook}
+      POSTGRES_USER: ${POSTGRES_USER:-autogenbook}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autogenbook}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+
+networks:
+  frontend:
+  backend:
+    internal: true
