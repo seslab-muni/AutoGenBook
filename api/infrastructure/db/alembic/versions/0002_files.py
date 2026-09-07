@@ -23,7 +23,6 @@ file_kind = sa.Enum("upload", "artifact", name="file_kind")
 
 
 def upgrade() -> None:
-    file_kind.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "files",
         sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
