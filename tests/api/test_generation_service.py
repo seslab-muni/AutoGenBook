@@ -10,7 +10,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.application.runs import GenerationService
+from api.application.runs import _DRAIN_MAX_CONSECUTIVE_FAILURES, GenerationService
 from api.core.settings import Settings
 from api.domain.models import (
     File,
@@ -27,6 +27,7 @@ from api.domain.models import (
     SourceType,
     TargetAudience,
 )
+from api.infrastructure.cli import book_command
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
@@ -366,3 +367,114 @@ async def test_execute_marks_cancelled_when_cancel_requested_mid_run(
 
     assert finished.status == RunStatus.cancelled
     assert finished.exit_code != 0
+
+
+async def test_execute_reports_clear_error_when_killed_by_cli_run_timeout(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
+) -> None:
+    """Regression for issue #80: a run killed by the API's own
+    `CLI_RUN_TIMEOUT_S` deadline used to be reported with the same opaque
+    `"CLI exited with code -9"` message as a genuine CLI crash, even though
+    it may have produced perfectly usable, resumable output sitting in the
+    work dir. The error message should make that distinction visible."""
+    monkeypatch.setenv("FAKE_CLI_STEP_SLEEP_S", "5.0")
+    monkeypatch.setattr(
+        book_command,
+        "ENV_ALLOWLIST",
+        book_command.ENV_ALLOWLIST + ("FAKE_CLI_STEP_SLEEP_S",),
+    )
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+        settings = _settings(cli_run_timeout_s=0.5, cli_cancel_grace_s=1.0)
+        service = _make_service(session, InMemoryFileStorage(), settings)
+
+        finished = await service.execute(run)
+
+    assert finished.status == RunStatus.failed
+    assert finished.error == "killed by API after 0.5s timeout"
+
+
+async def test_drain_loop_failure_kills_orphaned_subprocess_instead_of_leaving_it_running(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
+) -> None:
+    """Regression for issue #48: `_run_subprocess_and_drain` used to `await
+    asyncio.gather(run_subprocess(), drain_loop())` with no
+    `return_exceptions=True`, so a drain-loop exception (a transient DB
+    error in `append_batch`/`_runs.get`/`queue.heartbeat`) propagated
+    immediately and left the fake CLI subprocess running, unkilled, while
+    the run was already reported `failed`. Simulating a persistently
+    failing `RunRepository.get` (one of the drain loop's own per-iteration
+    calls, called unconditionally every iteration) should instead exhaust
+    the drain loop's bounded retry budget, set `cancel_event`, and tear the
+    still-running fake CLI down well before it would ever finish on its
+    own."""
+    # ENV_ALLOWLIST doesn't forward FAKE_CLI_STEP_SLEEP_S to the child by
+    # default (it's test-only plumbing) - extend it for this test so the
+    # fake CLI's steps are slow enough that an orphaned child would still
+    # be running long after this test's assertion deadline.
+    monkeypatch.setenv("FAKE_CLI_STEP_SLEEP_S", "5.0")
+    monkeypatch.setattr(
+        book_command,
+        "ENV_ALLOWLIST",
+        book_command.ENV_ALLOWLIST + ("FAKE_CLI_STEP_SLEEP_S",),
+    )
+
+    class _FlakyRunRepository:
+        """Proxies every `RunRepository` call to `inner` except `get`, which
+        raises for the first `fail_first_n` calls before recovering - a
+        transient DB blip (Postgres restart, connection reset, ...), not a
+        permanent outage, exactly as issue #48 describes."""
+
+        def __init__(self, inner, fail_first_n: int) -> None:
+            self._inner = inner
+            self._fail_first_n = fail_first_n
+            self._get_calls = 0
+
+        async def get(self, run_id):
+            self._get_calls += 1
+            if self._get_calls <= self._fail_first_n:
+                raise RuntimeError("simulated transient DB failure")
+            return await self._inner.get(run_id)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+        flaky_runs = _FlakyRunRepository(
+            SqlAlchemyRunRepository(session),
+            fail_first_n=_DRAIN_MAX_CONSECUTIVE_FAILURES + 1,
+        )
+        service = GenerationService(
+            run_repository=flaky_runs,
+            run_event_repository=SqlAlchemyRunEventRepository(session),
+            run_queue=SqlAlchemyRunQueue(session),
+            project_repository=SqlAlchemyProjectRepository(session),
+            outline_repository=SqlAlchemyOutlineRepository(session),
+            source_repository=SqlAlchemySourceRepository(session),
+            file_repository=SqlAlchemyFileRepository(session),
+            file_storage=InMemoryFileStorage(),
+            run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
+            settings=_settings(),
+            drain_poll_interval_s=0.05,
+        )
+
+        started = time.monotonic()
+        finished = await service.execute(run)
+        elapsed = time.monotonic() - started
+
+    assert finished.status == RunStatus.failed
+    assert finished.error is not None
+    assert "simulated transient DB failure" in finished.error
+    # With FAKE_CLI_STEP_SLEEP_S=5.0 and multiple steps (JSON/structure,
+    # two leaf sections, Markdown assembly), an orphaned fake CLI would
+    # still be running many seconds from now - torn down promptly instead,
+    # this returns quickly.
+    assert elapsed < 10

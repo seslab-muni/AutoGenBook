@@ -95,6 +95,15 @@ def _default_book_json(input_path: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
+    # For issue #76's regression test: LuaLaTeX/pandoc routinely write
+    # non-UTF-8 bytes to stderr, which `subprocess_runner.py` merges into
+    # stdout - simulate exactly that (one bad byte inline with an otherwise
+    # normal `[TAG]` line) so tests can assert the reader thread survives
+    # it (`errors="replace"`) instead of dying silently and hanging the run.
+    if os.environ.get("FAKE_CLI_EMIT_BAD_BYTE") == "1":
+        sys.stdout.buffer.write(b"[GEN] non-utf8 byte follows: \xff end\n")
+        sys.stdout.buffer.flush()
+
     input_path = Path(args.input).expanduser().resolve()
     if not input_path.exists():
         print(f"Chyba: vstupni soubor neexistuje: {input_path}", file=sys.stderr)

@@ -67,6 +67,8 @@ services:
       WORKER_POLL_INTERVAL_S: ${WORKER_POLL_INTERVAL_S:-2}
       WORKER_STALE_S: ${WORKER_STALE_S:-300}
       RUNS_RETENTION_DAYS: ${RUNS_RETENTION_DAYS:-30}
+      CLI_RUN_TIMEOUT_S: ${CLI_RUN_TIMEOUT_S:-21600}
+      CLI_CANCEL_GRACE_S: ${CLI_CANCEL_GRACE_S:-15}
     volumes:
       - runs_data:/app/runs
     depends_on:

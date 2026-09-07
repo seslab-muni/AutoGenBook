@@ -129,6 +129,7 @@ def run(
     poll_interval_s: float = GRAPH_POLL_INTERVAL_S,
     timeout_s: float | None = None,
     start_seq: int = 0,
+    timed_out: threading.Event | None = None,
 ) -> int:
     """Run `argv` as a subprocess, streaming events via `on_event`.
 
@@ -139,6 +140,12 @@ def run(
     True the process group is sent SIGTERM, then SIGKILL after
     `cancel_grace_s` seconds if it hasn't exited. `timeout_s`, if given,
     triggers the same SIGKILL directly once the wall-clock budget is spent.
+
+    `timed_out`, if given, is set the moment the `timeout_s` deadline
+    actually fires - the caller can check it afterwards to tell "the API
+    killed this after its timeout" (issue #80) apart from an ordinary
+    nonzero exit or a `should_cancel`-driven cancellation, and report a
+    clearer error than the bare exit code.
 
     `start_seq` seeds the emitted sequence numbers (the first event is
     `start_seq + 1`) - it must be the run's current max persisted `seq`
@@ -178,6 +185,8 @@ def run(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
     if os.name == "posix":
@@ -186,12 +195,28 @@ def run(
     proc = subprocess.Popen(argv, **popen_kwargs)  # noqa: S603 - argv built by book_command
 
     stop_event = threading.Event()
+    reader_failed = threading.Event()
 
     def read_stdout() -> None:
         assert proc.stdout is not None
-        for raw_line in proc.stdout:
-            stage, level, message = parse_line(raw_line)
-            emit(level, stage, message)
+        try:
+            for raw_line in proc.stdout:
+                stage, level, message = parse_line(raw_line)
+                emit(level, stage, message)
+        except Exception as exc:  # noqa: BLE001 - any decode/read error must not
+            # silently kill this thread: with `errors="replace"` above a bad
+            # byte no longer raises here, but this is the last line of
+            # defense against anything else going wrong mid-read (the pipe
+            # itself erroring out, etc). Emit an event and flip a flag the
+            # main loop checks so the process is terminated proactively
+            # instead of hanging until `timeout_s` with the pipe undrained
+            # (issue #76).
+            reader_failed.set()
+            emit(
+                "error",
+                "log",
+                f"stdout reader thread crashed: {exc!r}; terminating the process",
+            )
 
     reader_thread = threading.Thread(target=read_stdout, daemon=True)
     watcher_thread = threading.Thread(
@@ -212,7 +237,9 @@ def run(
             if exit_code is not None:
                 break
 
-            if should_cancel is not None and should_cancel() and cancel_requested_at is None:
+            if (
+                (should_cancel is not None and should_cancel()) or reader_failed.is_set()
+            ) and cancel_requested_at is None:
                 cancel_requested_at = time.monotonic()
                 _kill_process_group(proc, signal.SIGTERM)
 
@@ -223,6 +250,13 @@ def run(
                 _kill_process_group(proc, signal.SIGKILL)
 
             if timeout_s is not None and (time.monotonic() - started_at) >= timeout_s:
+                if timed_out is not None and not timed_out.is_set():
+                    timed_out.set()
+                    emit(
+                        "warning",
+                        "timeout",
+                        f"CLI exceeded its {timeout_s:g}s timeout; terminating",
+                    )
                 _kill_process_group(proc, signal.SIGKILL)
 
             time.sleep(_WAIT_POLL_INTERVAL_S)

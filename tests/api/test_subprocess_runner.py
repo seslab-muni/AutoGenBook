@@ -187,6 +187,41 @@ def test_cancel_mid_run_kills_process_within_grace_period(tmp_path):
     assert elapsed < 10
 
 
+def test_run_survives_a_non_utf8_byte_on_stdout(tmp_path):
+    """Regression for issue #76: LuaLaTeX/pandoc routinely write non-UTF-8
+    bytes to stderr, which is merged into stdout here via `stderr=STDOUT`.
+    Before this fix, `Popen(text=True)` decoded strictly, so the first such
+    byte raised `UnicodeDecodeError` inside the daemon reader thread,
+    killing it silently with zero events ever delivered and the run only
+    ending at `timeout_s` via SIGKILL. With `errors="replace"`, the bad
+    byte becomes a replacement character instead of killing the thread, and
+    the run completes normally."""
+    work_dir = _make_work_dir(tmp_path)
+    argv = _argv(work_dir, "--use-txt")
+    collector = _Collector()
+    env = _base_env(FAKE_CLI_EMIT_BAD_BYTE="1")
+
+    exit_code = subprocess_runner.run(
+        argv=argv,
+        env=env,
+        cwd=str(REPO_ROOT),
+        work_dir=work_dir,
+        on_event=collector,
+        timeout_s=15,
+    )
+
+    assert exit_code == 0
+    assert len(collector.events) > 0
+    seqs = [e.seq for e in collector.events]
+    assert seqs == sorted(seqs)
+    assert seqs == list(range(1, len(seqs) + 1))
+    # The reader thread must not have reported a crash - the bad byte was
+    # replaced, not fatal.
+    assert not any(e.level == "error" for e in collector.events)
+    section_events = [e for e in collector.events if e.stage == "section"]
+    assert len(section_events) >= 1
+
+
 def test_run_respects_timeout(tmp_path):
     work_dir = _make_work_dir(tmp_path)
     argv = _argv(work_dir, "--use-txt")
@@ -205,3 +240,28 @@ def test_run_respects_timeout(tmp_path):
 
     assert exit_code != 0
     assert elapsed < 5
+
+
+def test_run_sets_timed_out_flag_and_emits_warning_on_timeout(tmp_path):
+    """Regression for issue #80: the caller needs a way to tell "the API
+    killed this after its timeout" apart from an ordinary crash, so it can
+    report a clearer error than the bare exit code."""
+    work_dir = _make_work_dir(tmp_path)
+    argv = _argv(work_dir, "--use-txt")
+    env = _base_env(FAKE_CLI_STEP_SLEEP_S="5.0")
+    collector = _Collector()
+    timed_out = threading.Event()
+
+    exit_code = subprocess_runner.run(
+        argv=argv,
+        env=env,
+        cwd=str(REPO_ROOT),
+        work_dir=work_dir,
+        on_event=collector,
+        timeout_s=0.5,
+        timed_out=timed_out,
+    )
+
+    assert exit_code != 0
+    assert timed_out.is_set()
+    assert any(e.stage == "timeout" for e in collector.events)
