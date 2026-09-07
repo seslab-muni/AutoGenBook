@@ -49,13 +49,35 @@ def _kill_process_group(proc: subprocess.Popen, sig: int) -> None:
         pass
 
 
+def _initial_content_keys(graph_path: Path) -> set[str]:
+    """Node keys that already have `content_file_path` set before this
+    subprocess even starts - a `--resume` run (issue #11's `regenerate_
+    section`/`export`) reuses a `structure_graph.json` most of whose nodes
+    were completed by an earlier run. Seeding `_watch_structure_graph`'s
+    `seen_keys` with these keeps it from re-announcing every already-done
+    section as a fresh `"section"` event the moment it takes its first
+    poll; a `full` run's graph doesn't exist yet at this point, so this is
+    an empty set there and behavior is unchanged."""
+    try:
+        data = json.loads(graph_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    nodes = data.get("nodes") or {}
+    return {
+        key
+        for key, attrs in nodes.items()
+        if isinstance(attrs, dict) and attrs.get("content_file_path")
+    }
+
+
 def _watch_structure_graph(
     graph_path: Path,
     emit: Callable[[str, str, str, dict | None], None],
     stop_event: threading.Event,
     poll_interval_s: float,
+    initial_seen_keys: set[str] | None = None,
 ) -> None:
-    seen_keys: set[str] = set()
+    seen_keys: set[str] = set(initial_seen_keys) if initial_seen_keys else set()
     last_mtime: float | None = None
 
     def poll_once() -> None:
@@ -167,7 +189,7 @@ def run(
     reader_thread = threading.Thread(target=read_stdout, daemon=True)
     watcher_thread = threading.Thread(
         target=_watch_structure_graph,
-        args=(graph_path, emit, stop_event, poll_interval_s),
+        args=(graph_path, emit, stop_event, poll_interval_s, _initial_content_keys(graph_path)),
         daemon=True,
     )
     reader_thread.start()

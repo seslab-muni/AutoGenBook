@@ -273,6 +273,14 @@ class RunRecord(Base):
     target_node_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid, sa.ForeignKey("outline_nodes.id", ondelete="SET NULL"), nullable=True
     )
+    target_node_previous_status: Mapped[NodeStatus | None] = mapped_column(
+        sa.Enum(
+            NodeStatus,
+            name="node_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=True,
+    )
     status: Mapped[RunStatus] = mapped_column(
         sa.Enum(
             RunStatus,

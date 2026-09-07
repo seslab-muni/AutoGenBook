@@ -36,6 +36,22 @@ class RunOptionsIn(BaseSchema):
     export_tex_only: bool = False
 
 
+class RegenerateRequestIn(BaseSchema):
+    """Request body of `POST /projects/{id}/outline/{nodeId}/regenerate`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_modifier: str | None = None
+
+
+class ExportRequestIn(BaseSchema):
+    """Request body of `POST /runs/{id}/exports`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["latex", "pdf"]
+
+
 class RunOptionsOut(BaseSchema):
     outline: Literal["project", "generate"]
     output_format: Literal["markdown", "latex", "pdf"]
@@ -48,6 +64,7 @@ class RunOptionsOut(BaseSchema):
     fail_fast_schema: bool
     resume: bool
     export_tex_only: bool
+    prompt_modifier: str | None = None
 
 
 class Run(BaseSchema):

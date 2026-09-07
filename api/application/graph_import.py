@@ -39,6 +39,23 @@ from api.infrastructure.cli.book_command import OUT_DIRNAME
 _CITATION_TOKEN_RE = re.compile(r"\[([A-Za-z0-9_.:-]+)\]")
 _PAGE_RE = re.compile(r"(?:page|p\.?)[\s:]*([0-9]+)", re.IGNORECASE)
 
+# `StructureBuilder._build_node` (`book_spec.py`) sends the CLI a "summary"
+# that is actually `subPrompt`/`mathLevel`/`equationDensityLevel` mixed into
+# the node's real `summary` as one trailing "Writing instructions: ..."
+# block - the only way that per-node metadata reaches `book_builder.py:
+# generate_contents`, which reads nothing but a flat `section_summary`.
+# Strip that same trailer back off before ever treating a CLI-echoed
+# "summary" as a candidate update for the node's own `summary` column - the
+# user's own value already lives there and in its own `sub_prompt`/
+# `math_level`/`equation_density_level` columns; echoing the merged string
+# back would bake the trailer into `summary` and, on every subsequent full
+# run, compound another copy of it on top.
+_WRITING_INSTRUCTIONS_RE = re.compile(r"(?:\A|\n\n)Writing instructions:.*\Z", re.DOTALL)
+
+
+def _strip_synthesized_writing_instructions(summary: str) -> str:
+    return _WRITING_INSTRUCTIONS_RE.sub("", summary).strip()
+
 
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
@@ -120,7 +137,7 @@ def _matched_node_changes(
     cli_title = str(cli_node.get("title", "")).strip()
     if cli_title and cli_title != node.title:
         changes["title"] = cli_title
-    cli_summary = str(cli_node.get("summary", "")).strip()
+    cli_summary = _strip_synthesized_writing_instructions(str(cli_node.get("summary", "")))
     if cli_summary and cli_summary != node.summary:
         changes["summary"] = cli_summary
     cli_pages = cli_node.get("n_pages")
@@ -242,3 +259,41 @@ async def import_graph(
 
     if kb_index is not None:
         await _sync_source_chunk_counts(project, kb_index, source_repository)
+
+
+async def import_single_node(
+    project: Project,
+    work_dir: Path,
+    node_id: uuid.UUID,
+    outline_repository: OutlineRepository,
+) -> None:
+    """Sync-back for a succeeded `regenerate_section` run (issue #11) - unlike
+    `import_graph`, touches only the one node that was regenerated. A
+    `--resume` run leaves every other leaf's `sections/<key>.md` untouched,
+    so walking the whole graph here (as `import_graph` does) would needlessly
+    bump every other node's `updated_at`.
+
+    Deliberately does not propagate `title`/`summary` from the CLI node back
+    onto the outline row the way `import_graph`'s `_matched_node_changes`
+    does: this run's own `structure_graph.json` had its `summary` rewritten
+    with the prompt modifier before the CLI ran (`GenerationService.
+    _prepare_regenerate`), and echoing that back would permanently bake the
+    modifier text into the node's real summary.
+    """
+    out_dir = work_dir / OUT_DIRNAME
+    data = _load_json(out_dir / "structure_graph.json")
+    if data is None:
+        return
+
+    flat = await outline_repository.list(project.id)
+    positioned = {node.id: node for node in assign_positions(flat)}
+    node = positioned.get(node_id)
+    if node is None or not node.cli_key:
+        return
+
+    kb_index = _load_json(out_dir / "kb_sources.json")
+    changes = _leaf_content_changes(out_dir, node.cli_key, kb_index)
+    if changes:
+        await outline_repository.update(
+            dataclass_replace(node, **changes, updated_at=datetime.now(timezone.utc))
+        )

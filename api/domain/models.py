@@ -214,9 +214,19 @@ class RunOptions:
     fail_fast_schema: bool = False
     resume: bool = False
     # Re-run that only re-exports TeX/PDF from already-generated Markdown,
-    # without regenerating section content. Modeled now for issue #11; the
-    # CLI adapter does not implement it yet.
+    # without regenerating section content. There is no dedicated CLI flag
+    # for this (`book_command.build_command` never reads it) - the effect
+    # comes entirely from `resume=True` plus `GenerationService` not
+    # deleting any `sections/<key>.md` before invoking the CLI, so it skips
+    # every section and only rebuilds the requested export format.
     export_tex_only: bool = False
+    # Set on a `regenerate_section` run's own `RunOptions` (issue #11):
+    # appended as a "Writing instructions: ..." line to the target node's
+    # `summary` in the run's `structure_graph.json` before the CLI runs,
+    # since that `summary` is what `book_builder.py:generate_contents`
+    # sends the writer agent as `section_summary`. Ignored for every other
+    # run kind.
+    prompt_modifier: str | None = None
 
 
 @dataclass
@@ -279,6 +289,11 @@ class Run:
     options: RunOptions
     base_run_id: uuid.UUID | None
     target_node_id: uuid.UUID | None
+    # The target node's `status` immediately before this `regenerate_section`
+    # run started (`RunService.regenerate_node` sets it to `drafting` at
+    # creation and stashes the prior value here) - `GenerationService`
+    # restores it if the run doesn't succeed. `None` for every other kind.
+    target_node_previous_status: NodeStatus | None
     work_dir: str
     exit_code: int | None
     error: str | None

@@ -86,6 +86,7 @@ def _make_run(project_id: uuid.UUID, work_dir: Path, **overrides) -> Run:
         options=RunOptions(outline="generate", output_format="markdown"),
         base_run_id=None,
         target_node_id=None,
+        target_node_previous_status=None,
         work_dir=str(work_dir),
         exit_code=None,
         error=None,
