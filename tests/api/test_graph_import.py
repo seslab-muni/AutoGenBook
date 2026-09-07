@@ -19,6 +19,7 @@ from api.domain.models import (
     SourceType,
     TargetAudience,
 )
+from api.infrastructure.db.models import OutlineNodeRecord
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
@@ -287,6 +288,98 @@ async def test_import_graph_updates_source_chunk_counts_and_status(
     assert refreshed_missing is not None
     assert refreshed_missing.chunks_count == 0
     assert refreshed_missing.status == SourceStatus.error
+
+
+async def test_import_graph_recomputes_word_budget_when_target_pages_changes(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        node = await SqlAlchemyOutlineRepository(session).add(
+            _make_node(project.id, None, 0, target_pages=1.0, word_budget=350)
+        )
+
+        work_dir = tmp_path / "run"
+        out_dir = work_dir / "out"
+        (out_dir / "sections").mkdir(parents=True)
+        (out_dir / "sections" / "1.md").write_text("Body text.\n", encoding="utf-8")
+        _write_structure_graph(
+            out_dir,
+            nodes={"book": {}, "1": {"title": "Node 0", "n_pages": 4.0}},
+            edges=[["book", "1"]],
+        )
+
+        await import_graph(
+            project, work_dir, SqlAlchemyOutlineRepository(session), SqlAlchemySourceRepository(session)
+        )
+
+        refreshed = await SqlAlchemyOutlineRepository(session).get(node.id)
+
+    assert refreshed is not None
+    assert refreshed.target_pages == 4.0
+    assert refreshed.word_budget == 4 * 350
+
+
+async def test_import_graph_generate_mode_replaces_outline_instead_of_matching_positionally(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #65: with `outline="generate"` the CLI structured this run
+    entirely on its own - its keys have no relationship to the project's
+    existing, user-authored outline. Matching by recomputed positional
+    `cli_key` would silently overwrite "Chapter A"/"Chapter B" with
+    unrelated LLM-authored content; instead the whole outline is replaced
+    (soft-deleted, not merged in place)."""
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        outline_repo = SqlAlchemyOutlineRepository(session)
+        user_a = await outline_repo.add(
+            _make_node(project.id, None, 0, title="User Chapter A", target_pages=5.0)
+        )
+        user_b = await outline_repo.add(_make_node(project.id, None, 1, title="User Chapter B"))
+
+        work_dir = tmp_path / "run"
+        out_dir = work_dir / "out"
+        (out_dir / "sections").mkdir(parents=True)
+        (out_dir / "sections" / "1.md").write_text("LLM chapter one body.\n", encoding="utf-8")
+        _write_structure_graph(
+            out_dir,
+            nodes={
+                "book": {},
+                "1": {"title": "LLM Chapter One", "summary": "Auto summary", "n_pages": 3.0},
+                "2": {"title": "LLM Chapter Two", "n_pages": 2.0},
+            },
+            edges=[["book", "1"], ["book", "2"]],
+        )
+
+        await import_graph(
+            project,
+            work_dir,
+            outline_repo,
+            SqlAlchemySourceRepository(session),
+            outline_mode="generate",
+        )
+
+        flat = await outline_repo.list(project.id)
+        old_a = await outline_repo.get(user_a.id)
+        old_b = await outline_repo.get(user_b.id)
+
+    # The user's original chapters are gone from every live read...
+    live_ids = {n.id for n in flat}
+    assert user_a.id not in live_ids
+    assert user_b.id not in live_ids
+    by_title = {n.title: n for n in flat}
+    assert set(by_title) == {"LLM Chapter One", "LLM Chapter Two"}
+    assert by_title["LLM Chapter One"].content_markdown == "LLM chapter one body.\n"
+    assert by_title["LLM Chapter One"].target_pages == 3.0
+
+    # ...but soft-deleted, not destroyed - `target_pages=5.0` (the user's
+    # own value) was never overwritten by the LLM's unrelated "3.0".
+    assert old_a is None and old_b is None
+    async with session_factory() as session:
+        old_a_record = await session.get(OutlineNodeRecord, user_a.id)
+    assert old_a_record is not None
+    assert old_a_record.deleted_at is not None
+    assert old_a_record.target_pages == 5.0
 
 
 async def test_import_graph_is_a_noop_without_structure_graph_json(

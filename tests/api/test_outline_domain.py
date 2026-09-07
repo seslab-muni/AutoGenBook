@@ -129,6 +129,32 @@ def test_subtree_ids_includes_self_and_descendants_only() -> None:
     assert subtree_ids(ids["ch2"], flat) == {ids["ch2"]}
 
 
+def test_assign_positions_treats_a_node_with_a_missing_parent_as_a_root() -> None:
+    """A node whose `parent_id` isn't in `flat` (e.g. the parent was
+    soft-deleted and so filtered out of the live-only query that produced
+    `flat`) used to make `assign_positions` raise `KeyError` on its own
+    final lookup - every outline/project read going through it would 500
+    with no way to recover through the API (issue #75)."""
+    ids, flat = _book_outline()
+    orphan = uuid.uuid4()
+    grandchild = uuid.uuid4()
+    flat_with_orphan = flat + [
+        _node(orphan, ids["ch1"], 2, "Orphaned section"),
+        _node(grandchild, orphan, 0, "Orphaned sub-section"),
+    ]
+    # Simulate the missing parent: drop `ch1` itself out of `flat`, as the
+    # repository's `list()` would once it's soft-deleted.
+    flat_missing_parent = [n for n in flat_with_orphan if n.id != ids["ch1"]]
+
+    positioned = {n.id: n for n in assign_positions(flat_missing_parent)}
+
+    assert set(positioned) == {n.id for n in flat_missing_parent}
+    # Treated as an extra top-level root rather than crashing.
+    assert positioned[orphan].level == 1
+    assert positioned[grandchild].level == 2
+    assert positioned[grandchild].cli_key == f"{positioned[orphan].cli_key}-1"
+
+
 def test_subtree_ids_multi_level() -> None:
     root = uuid.uuid4()
     child = uuid.uuid4()

@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sse_starlette.sse import EventSourceResponse
 from starlette import status
 
-from api.application.runs import RunService
+from api.application.runs import RunService, build_done_event
 from api.core.db import get_sessionmaker
-from api.infrastructure.db.run_repository import SqlAlchemyRunEventRepository
+from api.domain.models import RunStatus
+from api.infrastructure.db.run_repository import SqlAlchemyRunEventRepository, SqlAlchemyRunRepository
 from api.presentation.deps import get_run_service
 from api.presentation.schemas.common import Page, PageParams
 from api.presentation.schemas.runs import (
@@ -31,6 +33,8 @@ router = APIRouter(tags=["runs"])
 # event arrives, per `GenerationService._emit_done`.
 _DONE_STAGE = "done"
 _SSE_POLL_INTERVAL_S = 1.0
+_SSE_EVENT_BATCH_LIMIT = 200
+_TERMINAL_RUN_STATUSES = {RunStatus.succeeded, RunStatus.failed, RunStatus.cancelled}
 
 
 @router.post(
@@ -159,6 +163,63 @@ def _sse_event_name(event: RunEvent) -> str:
     return "stage"
 
 
+async def _stream_events(
+    run_id: uuid.UUID,
+    after_seq: int,
+    is_disconnected: Callable[[], Awaitable[bool]],
+    session_factory: async_sessionmaker[AsyncSession],
+    poll_interval_s: float,
+) -> AsyncIterator[dict]:
+    """Split out of `stream_run_events` so it can be driven directly in
+    tests (a fake `is_disconnected`, no real network stream) instead of only
+    through a live SSE connection - see issue #63's regression test for the
+    "a run ends without ever emitting done" fallback below, which would
+    otherwise need to prove a stream polls forever to fail meaningfully."""
+    while True:
+        if await is_disconnected():
+            return
+        # A fresh, short-lived session per poll iteration: the `service`
+        # from `Depends(get_run_service)` is bound to a session that
+        # FastAPI closes as soon as this route function returns (i.e.
+        # before this generator starts streaming), so reusing it here
+        # would silently re-acquire and pin a pooled connection for the
+        # entire lifetime of the stream.
+        async with session_factory() as session:
+            events = await SqlAlchemyRunEventRepository(session).list_after(
+                run_id, after_seq, limit=_SSE_EVENT_BATCH_LIMIT
+            )
+            run = None
+            if len(events) < _SSE_EVENT_BATCH_LIMIT:
+                # Only worth the extra query once the event tail looks
+                # drained - cheap insurance against a run that ends
+                # without ever emitting "done" (issue #63), so this
+                # connection, its pooled DB connection, and this 1Hz
+                # query loop don't get held open forever.
+                run = await SqlAlchemyRunRepository(session).get(run_id)
+        done = False
+        for event in events:
+            after_seq = event.seq
+            schema = event_to_schema(event)
+            if schema.stage == _DONE_STAGE:
+                done = True
+            yield {
+                "event": _sse_event_name(schema),
+                "id": str(schema.seq),
+                "data": schema.model_dump_json(by_alias=True),
+            }
+        if done:
+            return
+        if run is not None and run.status in _TERMINAL_RUN_STATUSES:
+            synthetic = event_to_schema(build_done_event(run, after_seq + 1))
+            yield {
+                "event": _sse_event_name(synthetic),
+                "id": str(synthetic.seq),
+                "data": synthetic.model_dump_json(by_alias=True),
+            }
+            return
+        await asyncio.sleep(poll_interval_s)
+
+
 @router.get("/runs/{run_id}/events/stream")
 async def stream_run_events(
     run_id: uuid.UUID,
@@ -170,36 +231,9 @@ async def stream_run_events(
 
     last_event_id = request.headers.get("last-event-id")
     after_seq = int(last_event_id) if last_event_id and last_event_id.isdigit() else 0
-    poll_interval_s = _SSE_POLL_INTERVAL_S
 
-    async def event_generator():
-        nonlocal after_seq
-        while True:
-            if await request.is_disconnected():
-                return
-            # A fresh, short-lived session per poll iteration: the `service`
-            # from `Depends(get_run_service)` is bound to a session that
-            # FastAPI closes as soon as this route function returns (i.e.
-            # before this generator starts streaming), so reusing it here
-            # would silently re-acquire and pin a pooled connection for the
-            # entire lifetime of the stream.
-            async with session_factory() as session:
-                events = await SqlAlchemyRunEventRepository(session).list_after(
-                    run_id, after_seq, limit=200
-                )
-            done = False
-            for event in events:
-                after_seq = event.seq
-                schema = event_to_schema(event)
-                if schema.stage == _DONE_STAGE:
-                    done = True
-                yield {
-                    "event": _sse_event_name(schema),
-                    "id": str(schema.seq),
-                    "data": schema.model_dump_json(by_alias=True),
-                }
-            if done:
-                return
-            await asyncio.sleep(poll_interval_s)
-
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        _stream_events(
+            run_id, after_seq, request.is_disconnected, session_factory, _SSE_POLL_INTERVAL_S
+        )
+    )

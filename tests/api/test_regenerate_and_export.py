@@ -16,8 +16,12 @@ from pathlib import Path
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dataclasses import replace as dataclass_replace
+from datetime import datetime, timezone
+
 from api.application.runs import GenerationService
 from api.core.settings import Settings, get_settings
+from api.domain.models import NodeStatus, Run, RunKind, RunStatus
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
@@ -367,3 +371,141 @@ async def test_regenerate_reverts_node_status_when_the_run_fails(
 
     node_after = await _get_node(client, project_id, node["id"])
     assert node_after["status"] == "compiled"
+
+
+async def test_cancelling_a_queued_regenerate_run_reverts_the_node_status(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """issue #63: `regenerate_node` flips the target node to `drafting`
+    immediately, before the worker ever claims the run - if the run is
+    cancelled while still `queued`, the worker's own `_revert_node_status`
+    never gets a chance to run, and the node stayed at `drafting` forever."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+    node = await _create_node(client, project_id, "Chapter A")
+    await _run_full(client, project_id, session_factory, file_storage, settings)
+
+    node_before = await _get_node(client, project_id, node["id"])
+    assert node_before["status"] == "compiled"
+
+    regen_response = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate", json={}
+    )
+    regen_run = regen_response.json()
+
+    node_drafting = await _get_node(client, project_id, node["id"])
+    assert node_drafting["status"] == "drafting"
+
+    cancel_response = await client.post(f"/api/v1/runs/{regen_run['id']}/cancel")
+    assert cancel_response.status_code == 202
+    assert cancel_response.json()["status"] == "cancelled"
+
+    node_after = await _get_node(client, project_id, node["id"])
+    assert node_after["status"] == "compiled"
+
+    events_response = await client.get(f"/api/v1/runs/{regen_run['id']}/events")
+    assert events_response.json()["total"] == 1
+    assert events_response.json()["items"][0]["stage"] == "done"
+
+
+async def test_regenerate_409_for_a_non_leaf_node(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """issue #77: the CLI only ever writes `sections/<key>.md` for leaves,
+    so regenerating a parent node would run a full CLI invocation,
+    `--resume` every leaf, "succeed", import nothing, and leave the node
+    stuck at `drafting` forever. Reject it outright instead."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+    parent = await _create_node(client, project_id, "Chapter A")
+    await _create_node(client, project_id, "Section A.1", parentId=parent["id"])
+
+    await _run_full(client, project_id, session_factory, file_storage, settings)
+
+    parent_before = await _get_node(client, project_id, parent["id"])
+    assert parent_before["status"] == "not_started"
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{parent['id']}/regenerate", json={}
+    )
+    assert response.status_code == 409
+
+    parent_after = await _get_node(client, project_id, parent["id"])
+    assert parent_after["status"] == "not_started"
+
+
+async def test_regenerate_reverts_node_status_when_the_run_imports_no_content_change(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """Backstop half of issue #77's fix, exercised at the
+    `GenerationService`/`import_single_node` layer directly (bypassing
+    `RunService.regenerate_node`'s new 409, which already covers this for
+    runs created through the API) - a `regenerate_section` run that
+    "succeeds" without actually importing any content change must not
+    leave its target node stuck at `drafting`."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+    parent = await _create_node(client, project_id, "Chapter A")
+    await _create_node(client, project_id, "Section A.1", parentId=parent["id"])
+
+    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+
+    parent_before = await _get_node(client, project_id, parent["id"])
+    assert parent_before["status"] == "not_started"
+
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        base = await SqlAlchemyRunRepository(session).get(uuid.UUID(base_run["id"]))
+        assert base is not None
+        run = Run(
+            id=uuid.uuid4(),
+            project_id=uuid.UUID(project_id),
+            kind=RunKind.regenerate_section,
+            status=RunStatus.queued,
+            options=dataclass_replace(base.options, resume=True),
+            base_run_id=base.id,
+            target_node_id=uuid.UUID(parent["id"]),
+            target_node_previous_status=NodeStatus.NOT_STARTED,
+            work_dir=base.work_dir,
+            exit_code=None,
+            error=None,
+            cancel_requested=False,
+            locked_by=None,
+            heartbeat_at=None,
+            queued_at=now,
+            started_at=None,
+            finished_at=None,
+            total_tokens=None,
+            total_cost_usd=None,
+        )
+        await SqlAlchemyRunRepository(session).add(run)
+
+    finished = await _drive_generation(str(run.id), session_factory, file_storage, settings)
+    assert finished.status.value == "succeeded", finished.error
+
+    parent_after = await _get_node(client, project_id, parent["id"])
+    assert parent_after["status"] == "not_started"
+
+    project_after = await client.get(f"/api/v1/projects/{project_id}")
+    assert project_after.json()["lastRunId"] == base_run["id"]

@@ -3,11 +3,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.domain.models import Run, RunKind, RunOptions, RunStatus
+from api.core.errors import NotFound
+from api.domain.models import MathLevel, NodeStatus, OutlineNode, Run, RunKind, RunOptions, RunStatus
 from api.infrastructure.db.models import OutlineNodeRecord
+from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 
 MINIMAL_PROJECT = {
@@ -30,6 +33,37 @@ async def _create_node(client: AsyncClient, project_id: str, **overrides) -> dic
     response = await client.post(f"/api/v1/projects/{project_id}/outline", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def _domain_node(
+    project_id: uuid.UUID, parent_id: uuid.UUID | None, order_index: int, **overrides
+) -> OutlineNode:
+    now = datetime.now(timezone.utc)
+    defaults = dict(
+        id=uuid.uuid4(),
+        project_id=project_id,
+        parent_id=parent_id,
+        order_index=order_index,
+        title="Untitled",
+        summary="",
+        status=NodeStatus.NOT_STARTED,
+        target_pages=1.0,
+        word_budget=350,
+        actual_words=0,
+        equation_density_level=2,
+        math_level=MathLevel.RIGOROUS,
+        sub_prompt=None,
+        content_markdown="",
+        content_latex="",
+        rag_citations=[],
+        reviewer_score=None,
+        reviewer_notes=None,
+        structure_locked=True,
+        created_at=now,
+        updated_at=now,
+    )
+    defaults.update(overrides)
+    return OutlineNode(**defaults)
 
 
 async def test_create_chapter_and_subsections_yields_expected_numbers_and_keys(
@@ -372,6 +406,99 @@ async def test_delete_node_404(client: AsyncClient) -> None:
     )
 
     assert response.status_code == 404
+
+
+async def test_outline_reads_survive_a_live_node_under_a_soft_deleted_parent(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Reproduces issue #75 directly: a child left live under a
+    soft-deleted parent (the state a `POST /outline` racing a `DELETE
+    /outline/{parent}` used to be able to produce) must not turn every
+    outline/project read into a 500."""
+    project = await _create_project(client)
+    project_id = project["id"]
+    chapter = await _create_node(client, project_id, title="Chapter 1")
+    section = await _create_node(
+        client, project_id, title="Section 1.1", parentId=chapter["id"]
+    )
+
+    async with session_factory() as session:
+        record = await session.get(OutlineNodeRecord, uuid.UUID(chapter["id"]))
+        assert record is not None
+        record.deleted_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    flat_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    assert flat_response.status_code == 200
+    remaining_ids = {n["id"] for n in flat_response.json()["items"]}
+    assert remaining_ids == {section["id"]}
+
+    project_response = await client.get(f"/api/v1/projects/{project_id}")
+    assert project_response.status_code == 200
+
+
+async def test_repository_add_rejects_a_node_under_a_soft_deleted_parent(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Repository-level guard for issue #75's other race (`POST /outline`
+    racing a concurrent `DELETE /outline/{parent}`): calling `add()` on a
+    parent that's already soft-deleted must raise `NotFound`, whether or
+    not a caller's own (necessarily earlier-read) snapshot still thought it
+    was live - `OutlineService.create` already rejects this using its own
+    snapshot, so exercise the repository directly to isolate this second,
+    independent check."""
+    project = await _create_project(client)
+    project_id = uuid.UUID(project["id"])
+    chapter = await _create_node(client, str(project_id), title="Chapter 1")
+    chapter_id = uuid.UUID(chapter["id"])
+
+    async with session_factory() as session:
+        record = await session.get(OutlineNodeRecord, chapter_id)
+        assert record is not None
+        record.deleted_at = datetime.now(timezone.utc)
+        await session.commit()
+
+        with pytest.raises(NotFound):
+            await SqlAlchemyOutlineRepository(session).add(
+                _domain_node(project_id, chapter_id, 0, title="Section 1.1")
+            )
+
+
+async def test_repository_delete_subtree_recomputes_descendants_at_call_time(
+    session_factory: async_sessionmaker[AsyncSession], client: AsyncClient
+) -> None:
+    """The other half of issue #75's race: `delete_subtree` takes only the
+    target node's id (never a caller-supplied descendant list, unlike the
+    pre-fix signature) and must find every live descendant itself,
+    including ones a caller's own `flat` snapshot could never have known
+    about - e.g. a child the worker's `import_graph` inserts, or a second
+    `POST /outline`, landing after that snapshot was read but before this
+    call runs."""
+    project = await _create_project(client)
+    project_id = uuid.UUID(project["id"])
+
+    async with session_factory() as session:
+        outline_repo = SqlAlchemyOutlineRepository(session)
+        chapter = await outline_repo.add(_domain_node(project_id, None, 0, title="Chapter 1"))
+        child = await outline_repo.add(
+            _domain_node(project_id, chapter.id, 0, title="Section 1.1")
+        )
+        grandchild = await outline_repo.add(
+            _domain_node(project_id, child.id, 0, title="Section 1.1.1")
+        )
+
+        await outline_repo.delete_subtree(project_id, chapter.id)
+
+        remaining = await outline_repo.list(project_id)
+        assert remaining == []
+
+        deleted_chapter = await session.get(OutlineNodeRecord, chapter.id)
+        deleted_child = await session.get(OutlineNodeRecord, child.id)
+        deleted_grandchild = await session.get(OutlineNodeRecord, grandchild.id)
+
+    assert deleted_chapter is not None and deleted_chapter.deleted_at is not None
+    assert deleted_child is not None and deleted_child.deleted_at is not None
+    assert deleted_grandchild is not None and deleted_grandchild.deleted_at is not None
 
 
 async def test_replace_outline_creates_full_tree_and_returns_flat(

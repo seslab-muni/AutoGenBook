@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.errors import NotFound
 from api.domain.models import OutlineNode
 from api.infrastructure.db.models import OutlineNodeRecord
 
@@ -95,7 +96,21 @@ class SqlAlchemyOutlineRepository:
             return None
         return _to_domain(record)
 
+    async def _assert_live_parent(self, parent_id: uuid.UUID | None) -> None:
+        """Re-check the parent inside this call rather than trusting a
+        `flat` snapshot the caller (e.g. `OutlineService.create`) read
+        earlier - a concurrent `DELETE /outline/{parent}` landing between
+        that read and this write would otherwise leave a live child under a
+        soft-deleted parent, which is exactly the state that used to 500
+        every subsequent outline/project read (issue #75)."""
+        if parent_id is None:
+            return
+        parent = await self._session.get(OutlineNodeRecord, parent_id)
+        if parent is None or parent.deleted_at is not None:
+            raise NotFound(f"parent node {parent_id} does not exist")
+
     async def add(self, node: OutlineNode) -> OutlineNode:
+        await self._assert_live_parent(node.parent_id)
         record = OutlineNodeRecord(id=node.id)
         _apply_domain_to_record(node, record)
         record.created_at = node.created_at
@@ -105,6 +120,7 @@ class SqlAlchemyOutlineRepository:
         return _to_domain(record)
 
     async def update(self, node: OutlineNode) -> OutlineNode:
+        await self._assert_live_parent(node.parent_id)
         record = await self._session.get(OutlineNodeRecord, node.id)
         assert record is not None
         _apply_domain_to_record(node, record)
@@ -112,21 +128,37 @@ class SqlAlchemyOutlineRepository:
         await self._session.refresh(record)
         return _to_domain(record)
 
-    async def delete_subtree(
-        self, project_id: uuid.UUID, node_ids: Sequence[uuid.UUID]
-    ) -> None:
-        """Soft-delete every id in `node_ids` (the caller passes the target
-        node plus its whole subtree, via `api.domain.outline.subtree_ids`) -
-        never a SQL `DELETE`. The `ON DELETE CASCADE` FKs on this table exist
-        for when a *project* is actually hard-deleted, not for this path."""
-        if not node_ids:
-            return
+    async def delete_subtree(self, project_id: uuid.UUID, root_id: uuid.UUID) -> None:
+        """Soft-delete `root_id` and every live descendant reachable from it
+        - never a SQL `DELETE`. The `ON DELETE CASCADE` FKs on this table
+        exist for when a *project* is actually hard-deleted, not for this
+        path.
+
+        The descendant set is recomputed here with a recursive CTE rather
+        than trusting a precomputed id list from the caller's `flat`
+        snapshot: a child inserted under `root_id` after that snapshot was
+        read (e.g. a concurrent `POST /outline`, or the worker's
+        `import_graph` subdividing a node) would otherwise survive as a live
+        row under a now-deleted parent - the same bricked state issue #75
+        also closes off in `assign_positions`/`add`/`update`.
+        """
+        anchor = select(OutlineNodeRecord.id, OutlineNodeRecord.parent_id).where(
+            OutlineNodeRecord.project_id == project_id,
+            OutlineNodeRecord.id == root_id,
+            OutlineNodeRecord.deleted_at.is_(None),
+        )
+        subtree = anchor.cte("outline_subtree", recursive=True)
+        children = select(
+            OutlineNodeRecord.id, OutlineNodeRecord.parent_id
+        ).where(
+            OutlineNodeRecord.project_id == project_id,
+            OutlineNodeRecord.deleted_at.is_(None),
+            OutlineNodeRecord.parent_id == subtree.c.id,
+        )
+        subtree = subtree.union_all(children)
         await self._session.execute(
             update(OutlineNodeRecord)
-            .where(
-                OutlineNodeRecord.project_id == project_id,
-                OutlineNodeRecord.id.in_(list(node_ids)),
-            )
+            .where(OutlineNodeRecord.id.in_(select(subtree.c.id)))
             .values(deleted_at=datetime.now(timezone.utc))
         )
         await self._session.commit()

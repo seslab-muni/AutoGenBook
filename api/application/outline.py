@@ -227,16 +227,17 @@ class OutlineService:
         return positioned[node_id]
 
     async def delete(self, project_id: uuid.UUID, node_id: uuid.UUID) -> None:
-        """Soft-delete `node_id` and its whole subtree - `flat` (and so
-        `subtree_ids`) only ever sees live rows, and
-        `OutlineRepository.delete_subtree` sets `deleted_at` rather than
-        issuing a SQL `DELETE`, so the rows still exist afterwards."""
+        """Soft-delete `node_id` and its whole subtree - `OutlineRepository.
+        delete_subtree` sets `deleted_at` rather than issuing a SQL `DELETE`,
+        so the rows still exist afterwards. The descendant set is recomputed
+        by the repository itself at delete time (not from this `flat`
+        snapshot) so a child inserted after this read still gets swept up -
+        see `SqlAlchemyOutlineRepository.delete_subtree` (issue #75)."""
         await self._get_project(project_id)
         await self._reject_if_run_active(project_id)
         flat = await self._outline_repository.list(project_id)
         await self._get_node(project_id, node_id, flat)
-        ids = subtree_ids(node_id, flat)
-        await self._outline_repository.delete_subtree(project_id, list(ids))
+        await self._outline_repository.delete_subtree(project_id, node_id)
 
     async def replace(
         self, project_id: uuid.UUID, tree: list[dict[str, Any]]

@@ -31,7 +31,7 @@ import uuid
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from api.application.outline import WORDS_PER_PAGE
 from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project, SourceStatus
@@ -146,6 +146,12 @@ def _matched_node_changes(
     cli_pages = cli_node.get("n_pages")
     if isinstance(cli_pages, (int, float)) and abs(float(cli_pages) - node.target_pages) > 1e-9:
         changes["target_pages"] = float(cli_pages)
+        # `word_budget` is derived from `target_pages` at creation time
+        # (`OutlineService.create`/`replace`) but was never recomputed here
+        # when the CLI's own subdivision changed a node's page count -
+        # leaving it stale relative to the `target_pages` shown right next
+        # to it (issue #65).
+        changes["word_budget"] = int(WORDS_PER_PAGE * float(cli_pages))
     changes.update(_leaf_content_changes(out_dir, cli_key, kb_index))
     return changes
 
@@ -208,6 +214,8 @@ async def import_graph(
     work_dir: Path,
     outline_repository: OutlineRepository,
     source_repository: SourceRepository,
+    *,
+    outline_mode: Literal["project", "generate"] = "project",
 ) -> None:
     out_dir = work_dir / OUT_DIRNAME
     data = _load_json(out_dir / "structure_graph.json")
@@ -223,7 +231,36 @@ async def import_graph(
         children_by_parent.setdefault(parent, []).append(child)
 
     kb_index = _load_json(out_dir / "kb_sources.json")
+    now = datetime.now(timezone.utc)
 
+    if outline_mode == "generate":
+        await _replace_outline_from_cli_graph(
+            project, nodes_json, children_by_parent, out_dir, kb_index, outline_repository, now
+        )
+    else:
+        await _merge_cli_graph_into_outline(
+            project, nodes_json, children_by_parent, out_dir, kb_index, outline_repository, now
+        )
+
+    if kb_index is not None:
+        await _sync_source_chunk_counts(project, kb_index, source_repository)
+
+
+async def _merge_cli_graph_into_outline(
+    project: Project,
+    nodes_json: dict[str, dict[str, Any]],
+    children_by_parent: dict[str, list[str]],
+    out_dir: Path,
+    kb_index: dict[str, Any] | None,
+    outline_repository: OutlineRepository,
+    now: datetime,
+) -> None:
+    """`outline="project"`: the CLI structured this run from the project's
+    own outline (`GenerationService._prepare_work_dir` only writes
+    `book_structure.json` in this mode), so its keys line up with the
+    outline's current tree shape - match by recomputed `cli_key` and update
+    matched rows in place, inserting only the nodes the CLI subdivided on
+    its own."""
     flat = await outline_repository.list(project.id)
     positioned = assign_positions(flat)
     by_cli_key = {node.cli_key: node for node in positioned if node.cli_key}
@@ -232,8 +269,6 @@ async def import_graph(
         next_order_by_parent[node.parent_id] = max(
             next_order_by_parent.get(node.parent_id, -1), node.order_index
         ) + 1
-
-    now = datetime.now(timezone.utc)
 
     async def walk(cli_key: str, parent_id: uuid.UUID | None) -> uuid.UUID:
         cli_node = nodes_json.get(cli_key) or {}
@@ -260,8 +295,37 @@ async def import_graph(
     for root_key in children_by_parent.get("book", []):
         await walk(root_key, None)
 
-    if kb_index is not None:
-        await _sync_source_chunk_counts(project, kb_index, source_repository)
+
+async def _replace_outline_from_cli_graph(
+    project: Project,
+    nodes_json: dict[str, dict[str, Any]],
+    children_by_parent: dict[str, list[str]],
+    out_dir: Path,
+    kb_index: dict[str, Any] | None,
+    outline_repository: OutlineRepository,
+    now: datetime,
+) -> None:
+    """`outline="generate"`: the CLI structured this run entirely on its
+    own (no project outline was ever sent to it), so its keys have no
+    relationship to whatever the project's outline currently holds -
+    matching by recomputed positional `cli_key` here would silently
+    overwrite unrelated, possibly user-authored nodes (issue #65). Replace
+    the whole outline instead, the same soft-delete-and-recreate `PUT
+    /outline` already uses, so the previous outline stays recoverable in
+    the database rather than merged/clobbered in place."""
+    flat_nodes: list[OutlineNode] = []
+
+    def build(cli_key: str, parent_id: uuid.UUID | None, order_index: int) -> None:
+        cli_node = nodes_json.get(cli_key) or {}
+        node = _new_node(project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now)
+        flat_nodes.append(node)
+        for index, child_key in enumerate(children_by_parent.get(cli_key, [])):
+            build(child_key, node.id, index)
+
+    for index, root_key in enumerate(children_by_parent.get("book", [])):
+        build(root_key, None, index)
+
+    await outline_repository.replace_all(project.id, flat_nodes)
 
 
 async def import_single_node(
@@ -269,7 +333,7 @@ async def import_single_node(
     work_dir: Path,
     node_id: uuid.UUID,
     outline_repository: OutlineRepository,
-) -> None:
+) -> bool:
     """Sync-back for a succeeded `regenerate_section` run (issue #11) - unlike
     `import_graph`, touches only the one node that was regenerated. A
     `--resume` run leaves every other leaf's `sections/<key>.md` untouched,
@@ -282,21 +346,30 @@ async def import_single_node(
     with the prompt modifier before the CLI ran (`GenerationService.
     _prepare_regenerate`), and echoing that back would permanently bake the
     modifier text into the node's real summary.
+
+    Returns whether any content change was actually applied, so the caller
+    (`GenerationService._import_target_node`) can revert the node's status
+    when a "succeeded" run produced nothing to import - e.g. `sections/
+    <cli_key>.md` never existed because the target was a non-leaf (issue
+    #77; blocked at `RunService.regenerate_node` for new runs, kept here as
+    a backstop for a run created before that check existed).
     """
     out_dir = work_dir / OUT_DIRNAME
     data = _load_json(out_dir / "structure_graph.json")
     if data is None:
-        return
+        return False
 
     flat = await outline_repository.list(project.id)
     positioned = {node.id: node for node in assign_positions(flat)}
     node = positioned.get(node_id)
     if node is None or not node.cli_key:
-        return
+        return False
 
     kb_index = _load_json(out_dir / "kb_sources.json")
     changes = _leaf_content_changes(out_dir, node.cli_key, kb_index)
-    if changes:
-        await outline_repository.update(
-            dataclass_replace(node, **changes, updated_at=datetime.now(timezone.utc))
-        )
+    if not changes:
+        return False
+    await outline_repository.update(
+        dataclass_replace(node, **changes, updated_at=datetime.now(timezone.utc))
+    )
+    return True
