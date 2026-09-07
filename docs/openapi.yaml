@@ -47,7 +47,7 @@ tags:
     description: Implemented health/readiness endpoints (issue #1).
   - name: files
     description: >
-      Contract baseline (issue #3). Standalone file storage (MinIO-backed); every
+      Implemented (issue #3). Standalone file storage (MinIO-backed); every
       other resource references files by `fileId` only.
   - name: projects
     description: Contract baseline (issue #4). Project (book) CRUD.
@@ -89,19 +89,19 @@ paths:
       x-status: implemented
       description: >
         **Implemented** (`api/presentation/routers/system.py:ready`). Runs
-        `SELECT 1` through the async session. `GET /api/v1/ready` also calls the
-        object-storage adapter's `healthcheck()` once issue #3 lands.
+        `SELECT 1` through the async session, then calls the object-storage
+        adapter's `healthcheck()` (`api/infrastructure/storage/s3.py`).
       responses:
         "200":
-          description: Database (and, from issue #3, object storage) check succeeded.
+          description: Database and object storage checks both succeeded.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadyStatus"
         "503":
           description: >
-            A dependency (database today; object storage from issue #3) is
-            unreachable. `api/core/errors.py:StorageError`.
+            A dependency (database or object storage) is unreachable.
+            `api/core/errors.py:StorageError`.
           content:
             application/problem+json:
               schema:
@@ -112,8 +112,7 @@ paths:
       tags: [files]
       operationId: listFiles
       summary: List uploaded/artifact files
-      x-status: planned
-      x-issue: 3
+      x-status: implemented
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -128,8 +127,7 @@ paths:
       tags: [files]
       operationId: uploadFile
       summary: Upload a file
-      x-status: planned
-      x-issue: 3
+      x-status: implemented
       requestBody:
         required: true
         content:
@@ -164,8 +162,7 @@ paths:
       tags: [files]
       operationId: getFile
       summary: Get file metadata
-      x-status: planned
-      x-issue: 3
+      x-status: implemented
       responses:
         "200":
           description: File metadata.
@@ -183,8 +180,7 @@ paths:
       tags: [files]
       operationId: deleteFile
       summary: Delete a file
-      x-status: planned
-      x-issue: 3
+      x-status: implemented
       responses:
         "204":
           description: File deleted.
@@ -210,8 +206,7 @@ paths:
       tags: [files]
       operationId: getFileContent
       summary: Download file bytes
-      x-status: planned
-      x-issue: 3
+      x-status: implemented
       description: >
         Streamed response with `Content-Disposition: attachment`,
         `Content-Length` and `ETag: "<sha256>"`.
@@ -1175,8 +1170,7 @@ components:
 
     File:
       type: object
-      x-status: planned
-      x-issue: 3
+      x-status: implemented
       properties:
         id:
           type: string

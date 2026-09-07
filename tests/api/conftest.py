@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from api.core.db import Base, get_session
+from api.infrastructure.storage.memory import InMemoryFileStorage
 from api.main import create_app
+from api.presentation.deps import get_file_storage
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "sqlite+aiosqlite://")
 
@@ -36,7 +38,12 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
 
 
 @pytest_asyncio.fixture
-async def app(session_factory: async_sessionmaker[AsyncSession]):
+def file_storage() -> InMemoryFileStorage:
+    return InMemoryFileStorage()
+
+
+@pytest_asyncio.fixture
+async def app(session_factory: async_sessionmaker[AsyncSession], file_storage: InMemoryFileStorage):
     application = create_app()
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
@@ -44,6 +51,7 @@ async def app(session_factory: async_sessionmaker[AsyncSession]):
             yield session
 
     application.dependency_overrides[get_session] = override_get_session
+    application.dependency_overrides[get_file_storage] = lambda: file_storage
     try:
         yield application
     finally:
