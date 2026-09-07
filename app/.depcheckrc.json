@@ -1,0 +1,10 @@
+{
+  "ignorePatterns": ["_reference", "dist", "coverage"],
+  "ignores": [
+    "@fontsource-variable/*",
+    "tailwindcss",
+    "tw-animate-css",
+    "prettier-plugin-tailwindcss",
+    "@testing-library/user-event"
+  ]
+}
