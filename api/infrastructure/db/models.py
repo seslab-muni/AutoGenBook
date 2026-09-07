@@ -12,6 +12,8 @@ from api.domain.models import (
     MathLevel,
     NodeStatus,
     OutputFormat,
+    RunKind,
+    RunStatus,
     SourceStatus,
     SourceType,
     TargetAudience,
@@ -223,3 +225,105 @@ class OutlineNodeRecord(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
+
+
+class RunRecord(Base):
+    __tablename__ = "runs"
+    __table_args__ = (
+        # The queue claim query (`SqlAlchemyRunQueue.claim`) and the "does
+        # this project already have an active run" check
+        # (`RunRepository.get_active_for_project`) both filter on this;
+        # partial so the index stays small as terminal runs accumulate.
+        sa.Index(
+            "ix_runs_status_active",
+            "status",
+            postgresql_where=sa.text("status IN ('queued', 'running')"),
+            sqlite_where=sa.text("status IN ('queued', 'running')"),
+        ),
+        # Backstop for "one active run per project" under concurrent
+        # requests: `RunService.create`'s own check-then-insert has a TOCTOU
+        # gap between two racing requests, so the invariant is enforced here
+        # instead - `SqlAlchemyRunRepository.add` turns the resulting
+        # `IntegrityError` into a `Conflict`.
+        sa.Index(
+            "uq_runs_project_active",
+            "project_id",
+            unique=True,
+            postgresql_where=sa.text("status IN ('queued', 'running')"),
+            sqlite_where=sa.text("status IN ('queued', 'running')"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[RunKind] = mapped_column(
+        sa.Enum(
+            RunKind,
+            name="run_kind",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+    )
+    base_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+    target_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("outline_nodes.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[RunStatus] = mapped_column(
+        sa.Enum(
+            RunStatus,
+            name="run_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=RunStatus.queued,
+    )
+    options: Mapped[dict] = mapped_column(_jsonb(), nullable=False, default=dict)
+    work_dir: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    exit_code: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    locked_by: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    queued_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    total_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    total_cost_usd: Mapped[float | None] = mapped_column(sa.Numeric, nullable=True)
+
+
+class RunEventRecord(Base):
+    __tablename__ = "run_events"
+    __table_args__ = (
+        sa.UniqueConstraint("run_id", "seq", name="uq_run_events_run_id_seq"),
+    )
+
+    # `BigInteger` primary keys don't get SQLite's "INTEGER PRIMARY KEY"
+    # rowid-alias autoincrement behavior (only a plain `Integer` column
+    # does), so the sqlite test suite needs the `Integer` variant to get a
+    # server-assigned id back at all; Postgres keeps the real `bigserial`.
+    id: Mapped[int] = mapped_column(
+        sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    ts: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    level: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    stage: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    message: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(_jsonb(), nullable=True)

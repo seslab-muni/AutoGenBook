@@ -179,6 +179,20 @@ class File(Base):
     )
 
 
+class RunKind(str, enum.Enum):
+    full = "full"
+    regenerate_section = "regenerate_section"
+    export = "export"
+
+
+class RunStatus(str, enum.Enum):
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 @dataclass
 class RunOptions:
     """Generation options for one book-mode CLI run.
@@ -215,3 +229,33 @@ class RunEvent:
     stage: str
     message: str
     payload: dict[str, Any] | None = None
+
+
+@dataclass
+class Run:
+    """One book-mode CLI execution: a queue entry plus its outcome.
+
+    `options` is this run's own snapshot of `RunOptions` (never re-read from
+    the project afterward), so a run started before a project setting
+    changed keeps running/reporting under the options it was actually
+    launched with.
+    """
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    kind: RunKind
+    status: RunStatus
+    options: RunOptions
+    base_run_id: uuid.UUID | None
+    target_node_id: uuid.UUID | None
+    work_dir: str
+    exit_code: int | None
+    error: str | None
+    cancel_requested: bool
+    locked_by: str | None
+    heartbeat_at: datetime | None
+    queued_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    total_tokens: int | None
+    total_cost_usd: float | None
