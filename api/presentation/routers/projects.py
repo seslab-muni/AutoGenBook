@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.application.book_spec import SpecRenderer, StructureBuilder
 from api.application.outline import OutlineService
 from api.application.projects import ProjectService
 from api.application.sources import SourceService
@@ -189,3 +191,24 @@ async def duplicate_project(
     await outline_service.duplicate_from(project_id, project.id)
     outline = await _outline_tree(project.id, outline_service)
     return await _to_schema(project, source_service, outline)
+
+
+@router.get("/{project_id}/spec", response_model=None)
+async def get_project_spec(
+    project_id: uuid.UUID,
+    format: str = Query(default="txt", pattern="^(txt|json)$"),
+    include_outline: bool = Query(default=True, alias="includeOutline"),
+    service: ProjectService = Depends(get_project_service),
+    outline_service: OutlineService = Depends(get_outline_service),
+) -> Response:
+    project = await service.get(project_id)
+    tree, _total = await outline_service.list(project_id, format="tree")
+    if format == "json":
+        # `--use-json`: the project's own outline is rendered as the CLI's
+        # structure directly, its nodes locked against LLM re-subdivision.
+        structure = StructureBuilder.build(project, tree, lock_nodes=True)
+        return JSONResponse(structure)
+    # `--use-txt`: natural-language spec; when it carries outline headings
+    # the CLI parses them verbatim instead of asking the LLM to structure it.
+    text = SpecRenderer.render(project, tree, include_outline=include_outline)
+    return PlainTextResponse(text)
