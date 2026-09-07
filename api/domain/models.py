@@ -4,6 +4,7 @@ import enum
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any, Literal
 
 from sqlalchemy import Boolean, CHAR, BigInteger, DateTime, Enum as SqlEnum, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
@@ -86,3 +87,41 @@ class File(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+@dataclass
+class RunOptions:
+    """Generation options for one book-mode CLI run.
+
+    This is the API's own vocabulary for "how to run the CLI" — it is
+    translated into concrete `main.py` flags in exactly one place,
+    `api/infrastructure/cli/book_command.py:build_command`. Nothing outside
+    that module should know or care what the underlying CLI flags are.
+    """
+
+    outline: Literal["project", "generate"]
+    output_format: Literal["markdown", "latex", "pdf"] = "markdown"
+    allow_subdivision: bool = True
+    enable_web_rag: bool = False
+    audit_book: bool = False
+    audit_book_mode: Literal["off", "warn", "strict"] = "warn"
+    legacy_tex: bool = False
+    rebuild_kb: bool = False
+    fail_fast_schema: bool = False
+    resume: bool = False
+    # Re-run that only re-exports TeX/PDF from already-generated Markdown,
+    # without regenerating section content. Modeled now for issue #11; the
+    # CLI adapter does not implement it yet.
+    export_tex_only: bool = False
+
+
+@dataclass
+class RunEvent:
+    """One structured progress event parsed out of a CLI subprocess run."""
+
+    seq: int
+    ts: datetime
+    level: str
+    stage: str
+    message: str
+    payload: dict[str, Any] | None = None
