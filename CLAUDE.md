@@ -34,6 +34,12 @@ python -m autogenbook.smoke_test
 # Scan a LaTeX compile log for common errors
 python scripts/check_latex_log.py <file.log>
 
+# API service: install deps, run its pytest suite, apply DB migrations
+pip install -r api/requirements-dev.txt
+pytest tests/api
+DATABASE_URL="postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook" \
+  alembic -c api/alembic.ini upgrade head
+
 # Minimal real run (Markdown-first, no PDF)
 export OPENROUTER_API_KEY="..."
 python main.py --mode book --input input/book/book_input.txt --out-dir output/book/out_book --no-pdf
@@ -41,14 +47,14 @@ python main.py --mode book --input input/book/book_input.txt --out-dir output/bo
 
 There is no linter/formatter configured for the Python code. The frontend (`app/`) uses `pnpm lint` (which is just `tsc --noEmit`), `pnpm dev`, and `pnpm build`.
 
-### Docker stack (web UI + FastAPI + Postgres)
+### Docker stack (web UI + FastAPI + Postgres + MinIO + worker)
 
 ```bash
 cp .env.example .env   # set OPENROUTER_API_KEY if generation is enabled
 docker compose up --build
 ```
 
-Nginx (`web`, port 8080 by default) is the only container exposed to the host; it proxies `/api/...` to `api` (FastAPI, `api/main.py`), which talks to `db` (Postgres) on an internal-only network. The API currently only exposes `GET /api/health` and `GET /api/ready` — project/generation endpoints are not wired up yet, and `app/` is still a mock-backed frontend. See `docs/WEB_API_REFERENCE.md` / `docs/openapi.yaml` for the implemented endpoints and the proposed contract for project/generation endpoints.
+Nginx (`web`, port 8080 by default) is the only container exposed to the host; it proxies `/api/...` to `api` (FastAPI, `api/main.py`), which talks to `db` (Postgres) and `minio` (S3-compatible object store) on an internal-only network. `minio-init` is a one-shot job that creates the upload bucket before `api`/`worker` start. `worker` (`python -m api.worker`) runs the CLI as a subprocess against a `runs_data` volume shared with `api` (the API reads run directories for events/resume; the worker writes them). The API currently only exposes `GET/POST` system endpoints (`/api/v1/health`, `/api/v1/ready`, plus legacy `/api/health` and `/api/ready` aliases) — project/generation endpoints are not wired up yet, and `app/` is still a mock-backed frontend. See `docs/WEB_API_REFERENCE.md` / `docs/openapi.yaml` for the implemented endpoints and the proposed contract for project/generation endpoints, and `docs/OPERATIONS.md` for the full service/volume breakdown.
 
 ## Architecture
 
@@ -73,5 +79,5 @@ Key subsystems:
 - `autogenbook/` (repo root) is the real package used at runtime; `src/autogenbook/` is an unrelated stub left over from `uv init` scaffolding (just a placeholder `main()`) and is not part of the actual pipelines — don't confuse the two when searching for implementation.
 - `prompts/<mode>/` prompt packs are plain Markdown edited directly; keep `{GLOBAL_SYSTEM_POLICY}`/`{GLOBAL_EVIDENCE_INSTRUCTIONS}` placeholders intact, and re-run `python -m autogenbook.smoke_prompts` after edits. Book/paper prompts have `_md.md` variants used by the Markdown-first path; the non-`_md` versions are for `--legacy-tex`.
 - `app/` is a separate pnpm/Vite/React 19 + Tailwind frontend (currently mock-backed, originally an AI Studio export) served by nginx in the Docker stack; it is not part of the Python package.
-- `api/` is a minimal FastAPI service (health/readiness only so far) that the Docker Compose stack builds from the root `Dockerfile`.
+- `api/` is a FastAPI service (`api/core`, `api/domain`, `api/application`, `api/infrastructure`, `api/presentation`, `api/worker`; only system endpoints and the worker skeleton are wired up so far) that the Docker Compose stack builds from the root `Dockerfile`; API-only Python deps live in `api/requirements.txt` (dev extras in `api/requirements-dev.txt`) so upstream CLI-fork merges of the root `requirements.txt` never conflict. Its own tests live in `tests/api/` and run via `pytest` (`pytest tests/api`), separate from the CLI's `python -m unittest` suite.
 - `output/`, `input/`, `tests/out_smoke*` contain generated run artifacts and sample/test fixtures, not source.
