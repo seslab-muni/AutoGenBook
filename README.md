@@ -447,6 +447,7 @@ Source: `main.py:parse_args`, `autogenbook/pipelines/reviewer_pipeline.py:run_re
 | `AUTOGENBOOK_KB_OCR` | No | Enable OCR for PDFs. | `rag_kb.py:KnowledgeBase.build_from_directory` |
 | `AUTOGENBOOK_KB_OCR_LANG` | No | OCR language (default `eng`). | `rag_kb.py:KnowledgeBase.build_from_directory` |
 | `AUTOGENBOOK_KB_HEADING_CHUNKS` | No | Chunk Markdown by headings. | `rag_kb.py:KnowledgeBase.build_from_directory` |
+| `AUTOGENBOOK_KB_EXTRACT_CACHE_DIR` | No | Directory for a per-file extraction cache keyed by file content (sha256), skipping re-extraction/OCR of a document already seen under any name/path/`--kb-dir`. Unset (the default) disables it, matching prior behavior. | `rag_kb.py:KnowledgeBase.build_from_directory` |
 
 ### MCP retrieval cache
 

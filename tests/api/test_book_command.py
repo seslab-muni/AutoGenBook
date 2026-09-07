@@ -161,6 +161,18 @@ def test_cwd_is_repo_root_not_work_dir(settings: Settings, work_dir: Path):
     assert cwd != str(work_dir)
 
 
+def test_kb_extract_cache_dir_always_set_from_settings(work_dir: Path):
+    settings = Settings(
+        cli_python="python3",
+        cli_entrypoint="main.py",
+        repo_root="/repo",
+        kb_extract_cache_dir="/data/kb_cache",
+    )
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env["AUTOGENBOOK_KB_EXTRACT_CACHE_DIR"] == "/data/kb_cache"
+
+
 def test_env_forwards_only_allowlisted_vars_present_in_parent(settings, work_dir, monkeypatch):
     for key in ENV_ALLOWLIST:
         monkeypatch.delenv(key, raising=False)
@@ -186,8 +198,11 @@ def test_env_forwards_only_allowlisted_vars_present_in_parent(settings, work_dir
     for key, value in FORCED_ENV.items():
         assert env[key] == value
 
-    # Nothing beyond the (present) allow-list + forced vars.
-    assert set(env) <= set(ENV_ALLOWLIST) | set(FORCED_ENV)
+    assert env["AUTOGENBOOK_KB_EXTRACT_CACHE_DIR"] == settings.kb_extract_cache_dir
+
+    # Nothing beyond the (present) allow-list + forced vars + the settings-derived
+    # extraction-cache path (always set, regardless of the parent environment).
+    assert set(env) <= set(ENV_ALLOWLIST) | set(FORCED_ENV) | {"AUTOGENBOOK_KB_EXTRACT_CACHE_DIR"}
 
 
 def test_forced_env_overrides_parent_env(settings, work_dir, monkeypatch):

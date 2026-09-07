@@ -15,6 +15,7 @@ x-app-env: &app-env
   S3_BUCKET: ${S3_BUCKET:-autogenbook}
   RUNS_DIR: /app/runs
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
+  KB_EXTRACT_CACHE_DIR: /app/kb_cache
 
 services:
   web:
@@ -69,6 +70,11 @@ services:
       RUNS_RETENTION_DAYS: ${RUNS_RETENTION_DAYS:-30}
     volumes:
       - runs_data:/app/runs
+      # Content-hash-keyed cache of extracted document text (rag_kb.py), deliberately
+      # separate from runs_data: it's shared across every project/run rather than
+      # scoped to one run's work dir, and must survive `sweep_stale_work_dirs`
+      # deleting individual runs.
+      - kb_extract_cache:/app/kb_cache
     depends_on:
       db:
         condition: service_healthy
@@ -137,6 +143,7 @@ volumes:
   postgres_data:
   minio_data:
   runs_data:
+  kb_extract_cache:
 
 networks:
   frontend:

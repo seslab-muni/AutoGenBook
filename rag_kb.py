@@ -173,6 +173,46 @@ def _read_pptx(path: Path) -> List[Tuple[str, str]]:
     return slides
 
 
+def _file_sha256(path: Path, block_size: int = 1 << 20) -> str:
+    """
+    Content hash of a file's bytes, independent of its path/filename/mtime.
+    Used to key the extraction cache below so the *same document* uploaded
+    under different names or into different projects/runs is only ever
+    parsed once, while any change to its actual bytes is always detected.
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(block_size), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _extraction_cache_path(cache_dir: Path, file_sha256: str, params_tag: str) -> Path:
+    key = hashlib.sha256(f"{file_sha256}:{params_tag}".encode("utf-8")).hexdigest()[:40]
+    return cache_dir / f"extract_{key}.json"
+
+
+def _load_extraction_cache(cache_path: Path) -> Optional[dict]:
+    if not cache_path.exists():
+        return None
+    try:
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _store_extraction_cache(cache_path: Path, payload: dict) -> None:
+    # Write-then-rename so a run reading this entry concurrently with another
+    # run writing it never sees a partial file (os.replace is atomic on the
+    # same filesystem, unlike writing cache_path directly).
+    try:
+        tmp_path = cache_path.with_name(cache_path.name + f".tmp-{os.getpid()}")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp_path, cache_path)
+    except Exception:
+        pass
+
+
 def _dir_fingerprint(dir_path: Path) -> str:
     """
     Hash of relative paths + sizes + mtimes for supported files.
@@ -257,6 +297,7 @@ class KnowledgeBase:
         enable_ocr: Optional[bool] = None,
         heading_chunks: Optional[bool] = None,
         ocr_lang: Optional[str] = None,
+        extract_cache_dir: Optional[Path] = None,
     ) -> "KnowledgeBase":
         dir_path = dir_path.expanduser().resolve()
         if not dir_path.exists() or not dir_path.is_dir():
@@ -289,6 +330,18 @@ class KnowledgeBase:
         )
         ocr_lang = ocr_lang or _env_str("AUTOGENBOOK_KB_OCR_LANG", "eng")
 
+        # Per-file extraction cache: keyed by file *content* hash rather than path, so the
+        # same document re-uploaded under a different name, or attached to a different
+        # project/run, is only ever parsed/OCR'd once. Disabled unless a directory is
+        # configured (a plain `--kb-dir` CLI run has none set and behaves exactly as
+        # before); the web app points this at a persistent, cross-run volume distinct
+        # from the per-run `cache_dir` above, which lives inside an ephemeral work dir.
+        if extract_cache_dir is None:
+            configured = _env_str("AUTOGENBOOK_KB_EXTRACT_CACHE_DIR", "")
+            extract_cache_dir = Path(configured).expanduser().resolve() if configured else None
+        if extract_cache_dir is not None:
+            extract_cache_dir.mkdir(parents=True, exist_ok=True)
+
         chunks: List[Chunk] = []
         for file_path in sorted(dir_path.rglob("*")):
             if not file_path.is_file():
@@ -299,8 +352,26 @@ class KnowledgeBase:
 
             try:
                 source_id = _source_id_from_path(file_path, dir_path)
+                file_cache_path = None
+                if extract_cache_dir is not None:
+                    file_sha256 = _file_sha256(file_path)
+                    params_tag = (
+                        f"pdf:ocr={int(enable_ocr)}:lang={ocr_lang}" if ext == ".pdf" else ext
+                    )
+                    file_cache_path = _extraction_cache_path(extract_cache_dir, file_sha256, params_tag)
+
                 if ext in {".txt", ".md"}:
-                    text = _read_txt_md(file_path)
+                    cached = (
+                        _load_extraction_cache(file_cache_path)
+                        if file_cache_path and not force_rebuild
+                        else None
+                    )
+                    if cached is not None:
+                        text = cached["text"]
+                    else:
+                        text = _read_txt_md(file_path)
+                        if file_cache_path is not None:
+                            _store_extraction_cache(file_cache_path, {"text": text})
                     if heading_chunks and ext == ".md":
                         parts = _chunk_text_by_headings(text, chunk_chars, overlap_chars)
                     else:
@@ -321,7 +392,20 @@ class KnowledgeBase:
                         )
 
                 elif ext == ".pdf":
-                    _, pages = _read_pdf(file_path, enable_ocr=enable_ocr, ocr_lang=ocr_lang)
+                    cached = (
+                        _load_extraction_cache(file_cache_path)
+                        if file_cache_path and not force_rebuild
+                        else None
+                    )
+                    if cached is not None:
+                        pages = [(p["loc"], p["text"]) for p in cached["pages"]]
+                    else:
+                        _, pages = _read_pdf(file_path, enable_ocr=enable_ocr, ocr_lang=ocr_lang)
+                        if file_cache_path is not None:
+                            _store_extraction_cache(
+                                file_cache_path,
+                                {"pages": [{"loc": loc, "text": text} for loc, text in pages]},
+                            )
                     for loc, page_text in pages:
                         for j, chunk in enumerate(_chunk_text(page_text, chunk_chars, overlap_chars), start=1):
                             rid = _make_rid(source_id, loc, j)
@@ -338,7 +422,17 @@ class KnowledgeBase:
                             )
 
                 elif ext == ".docx":
-                    text = _read_docx(file_path)
+                    cached = (
+                        _load_extraction_cache(file_cache_path)
+                        if file_cache_path and not force_rebuild
+                        else None
+                    )
+                    if cached is not None:
+                        text = cached["text"]
+                    else:
+                        text = _read_docx(file_path)
+                        if file_cache_path is not None:
+                            _store_extraction_cache(file_cache_path, {"text": text})
                     for j, chunk in enumerate(_chunk_text(text, chunk_chars, overlap_chars), start=1):
                         loc_base = "chunk"
                         rid = _make_rid(source_id, loc_base, j)
@@ -355,7 +449,20 @@ class KnowledgeBase:
                         )
 
                 elif ext == ".pptx":
-                    slides = _read_pptx(file_path)
+                    cached = (
+                        _load_extraction_cache(file_cache_path)
+                        if file_cache_path and not force_rebuild
+                        else None
+                    )
+                    if cached is not None:
+                        slides = [(p["loc"], p["text"]) for p in cached["pages"]]
+                    else:
+                        slides = _read_pptx(file_path)
+                        if file_cache_path is not None:
+                            _store_extraction_cache(
+                                file_cache_path,
+                                {"pages": [{"loc": loc, "text": text} for loc, text in slides]},
+                            )
                     for loc, slide_text in slides:
                         for j, chunk in enumerate(_chunk_text(slide_text, chunk_chars, overlap_chars), start=1):
                             rid = _make_rid(source_id, loc, j)

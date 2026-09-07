@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     runs_dir: str = Field(default="/app/runs", alias="RUNS_DIR")
     max_upload_mb: int = Field(default=200, alias="MAX_UPLOAD_MB")
 
+    # Deliberately outside `runs_dir`: entries here are keyed by uploaded-file content
+    # hash, not by run id, so they must survive `sweep_stale_work_dirs` deleting
+    # individual runs' work directories and must be shared across every project/run
+    # that happens to attach the same source file (see `rag_kb.py`'s extraction cache).
+    kb_extract_cache_dir: str = Field(default="/app/kb_cache", alias="KB_EXTRACT_CACHE_DIR")
+
     worker_concurrency: int = Field(default=1, alias="WORKER_CONCURRENCY")
     worker_poll_interval_s: float = Field(default=2.0, alias="WORKER_POLL_INTERVAL_S")
     worker_stale_s: int = Field(default=300, alias="WORKER_STALE_S")
