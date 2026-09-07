@@ -1,15 +1,8 @@
 """outline_nodes
 
 Revision ID: 0005_outline_nodes
-Revises: 0003_projects
+Revises: 0004_project_sources
 Create Date: 2026-09-07 00:00:00.000000
-
-NOTE: this is deliberately chained onto `0003_projects` rather than
-`0004_project_sources` (issue #5, developed concurrently in a sibling
-worktree off the same base and not yet visible here). If `0004_project_sources`
-has landed on `main` by the time this branch is rebased, this migration's
-`down_revision` must be updated to `'0004_project_sources'` before merging so
-the two migrations chain instead of forking the history.
 
 `deleted_at` and the *partial* (not deferrable) unique index below implement
 soft delete: `DELETE /outline/{nodeId}` (and a `PUT` full-tree replace) only
@@ -36,7 +29,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = '0005_outline_nodes'
-down_revision: Union[str, None] = '0003_projects'
+down_revision: Union[str, None] = '0004_project_sources'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

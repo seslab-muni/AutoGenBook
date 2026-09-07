@@ -6,7 +6,7 @@ from fastapi import APIRouter, FastAPI
 
 from api.core.db import get_engine
 from api.core.errors import install_error_handlers
-from api.presentation.routers import files, outline, projects, system
+from api.presentation.routers import files, outline, projects, sources, system
 
 
 @asynccontextmanager
@@ -23,6 +23,7 @@ def create_app() -> FastAPI:
     api_router.include_router(system.router)
     api_router.include_router(files.router)
     api_router.include_router(projects.router)
+    api_router.include_router(sources.router)
     api_router.include_router(outline.router)
     app.include_router(api_router)
 
