@@ -38,6 +38,18 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt -r api/requirements-dev.txt
 
+      - name: Apply Alembic migrations and check for model/migration drift
+        # Runs first, against the service container's pristine database:
+        # `tests/api/conftest.py`'s `session_factory` fixture does its own
+        # `drop_all`/`create_all` per test (see that file), which would
+        # otherwise leave `pytest tests/api` having already created every
+        # table and enum type through SQLAlchemy - colliding with Alembic's
+        # own `CREATE TYPE`/`CREATE TABLE` statements (e.g. `DuplicateObject:
+        # type "file_kind" already exists`) if it ran second.
+        run: |
+          alembic -c api/alembic.ini upgrade head
+          alembic -c api/alembic.ini check
+
       - name: Run api/ test suite (pytest, against Postgres)
         run: pytest tests/api
 
@@ -48,11 +60,6 @@ jobs:
         # explicitly instead. Covers the same tests CLAUDE.md's documented
         # `python -m unittest` is meant to run.
         run: python -m unittest discover -s tests -p "test_*.py"
-
-      - name: Apply Alembic migrations and check for model/migration drift
-        run: |
-          alembic -c api/alembic.ini upgrade head
-          alembic -c api/alembic.ini check
 
       - name: Prompt pack completeness check
         run: python -m autogenbook.smoke_prompts
