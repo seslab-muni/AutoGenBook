@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
+import type { OutlineNode, Project } from '@/api/types';
 import { db } from '@/mocks/db';
 import { renderWithProviders } from '@/test/component-test-utils';
 
@@ -20,6 +21,10 @@ const mockedSubscribe = vi.mocked(subscribeRunEvents);
 const PROJECT_ID = 'book-consensus-quantum-2026';
 const NODE_ID = 'sec-1-2';
 
+function getProject(): Project {
+  return db.projects.get(PROJECT_ID)! as Project;
+}
+
 describe('CopilotDrawer', () => {
   beforeEach(() => {
     mockedSubscribe.mockReturnValue(() => {});
@@ -30,16 +35,18 @@ describe('CopilotDrawer', () => {
     db.outlineNodes.set(NODE_ID, { ...node, reviewerScore: null, reviewerNotes: null });
   });
 
-  function renderDrawer(tab: 'copilot' | 'citations' | 'review') {
-    const project = db.projects.get(PROJECT_ID)!;
-    const node = db.outlineNodes.get(NODE_ID)!;
+  function renderDrawer(
+    tab: 'copilot' | 'citations' | 'review',
+    options: { node?: OutlineNode | null; onTabChange?: () => void } = {},
+  ) {
+    const node = options.node !== undefined ? options.node : db.outlineNodes.get(NODE_ID)!;
     return renderWithProviders(
       <CopilotDrawer
         projectId={PROJECT_ID}
-        project={project}
+        project={getProject()}
         node={node}
         tab={tab}
-        onTabChange={vi.fn()}
+        onTabChange={options.onTabChange ?? vi.fn()}
       />,
     );
   }
@@ -47,17 +54,7 @@ describe('CopilotDrawer', () => {
   it('renders the real Copilot panel content and switches to Citations', async () => {
     const user = userEvent.setup();
     const onTabChange = vi.fn();
-    const project = db.projects.get(PROJECT_ID)!;
-    const node = db.outlineNodes.get(NODE_ID)!;
-    renderWithProviders(
-      <CopilotDrawer
-        projectId={PROJECT_ID}
-        project={project}
-        node={node}
-        tab="copilot"
-        onTabChange={onTabChange}
-      />,
-    );
+    renderDrawer('copilot', { onTabChange });
 
     expect(await screen.findByText('Quick actions')).toBeInTheDocument();
 
@@ -67,20 +64,11 @@ describe('CopilotDrawer', () => {
 
   it('shows citations when the citations tab is active and a node is selected', async () => {
     renderDrawer('citations');
-    expect(await screen.findByText('Castro_Liskov_PBFT_TOCS.pdf')).toBeInTheDocument();
+    expect(await screen.findByText('Castro & Liskov, 2002')).toBeInTheDocument();
   });
 
   it('shows an empty state for citations/review when no node is selected', () => {
-    const project = db.projects.get(PROJECT_ID)!;
-    renderWithProviders(
-      <CopilotDrawer
-        projectId={PROJECT_ID}
-        project={project}
-        node={null}
-        tab="citations"
-        onTabChange={vi.fn()}
-      />,
-    );
+    renderDrawer('citations', { node: null });
     expect(screen.getByText('No section selected')).toBeInTheDocument();
   });
 
@@ -97,7 +85,9 @@ describe('CopilotDrawer', () => {
   it('shows the selected section in the status bar', async () => {
     renderDrawer('copilot');
     await waitFor(() => {
-      expect(screen.getByText('§1.2 Byzantine Quorum Intersection & Threshold Bounds')).toBeInTheDocument();
+      expect(
+        screen.getByText('§1.2 Byzantine Quorum Intersection & Threshold Bounds'),
+      ).toBeInTheDocument();
     });
   });
 });
