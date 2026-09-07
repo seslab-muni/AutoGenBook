@@ -71,8 +71,11 @@ Use a local OpenAI-compatible server (e.g., LM Studio):
 export AUTOGENBOOK_LLM_BASE_URL="http://localhost:1234/v1"
 # Optional if your server requires a key:
 export AUTOGENBOOK_LLM_API_KEY="local-key"
+# The default model id (openai/gpt-5-mini) is an OpenRouter/OpenAI id; point it at
+# whatever your endpoint actually serves (check its /v1/models list):
+export AUTOGENBOOK_LLM_MODEL="your-model-id"
 ```
-Source: `openrouter_llm.py:OpenRouterLLM.__init__`
+Source: `openrouter_llm.py:OpenRouterLLM.__init__`, `openrouter_llm.py:default_model_name`
 
 Book mode (sample input; Markdown-first):
 
@@ -434,7 +437,9 @@ Source: `main.py:parse_args`, `autogenbook/pipelines/reviewer_pipeline.py:run_re
 | --- | --- | --- | --- |
 | `AUTOGENBOOK_LLM_BASE_URL` | No | Override OpenAI-compatible base URL for all LLM calls. | `openrouter_llm.py:OpenRouterLLM.__init__` |
 | `AUTOGENBOOK_LLM_API_KEY` | No | Optional API key override for non-OpenRouter endpoints. | `openrouter_llm.py:OpenRouterLLM.__init__` |
-| `AUTOGENBOOK_FORCE_MINI_MODEL` | No | Forces `openai/gpt-5-mini` for all runs. | `openrouter_llm.py:OpenRouterLLM.__init__` |
+| `AUTOGENBOOK_LLM_MODEL` | No | Base chat model (`openai/gpt-5-mini` if unset), used wherever no more specific model override is given — book/paper mode, the book redundancy check, and proposal/reviewer roles left unset. Needed for non-OpenRouter/OpenAI-compatible endpoints. | `openrouter_llm.py:default_model_name` |
+| `AUTOGENBOOK_LLM_MINI_MODEL` | No | Cheap chat model used only when `AUTOGENBOOK_FORCE_MINI_MODEL` is on; falls back to `AUTOGENBOOK_LLM_MODEL` if unset. Set this to a smaller/cheaper model id from your endpoint to cut costs on dev/test runs. | `openrouter_llm.py:mini_model_name` |
+| `AUTOGENBOOK_FORCE_MINI_MODEL` | No | Forces `AUTOGENBOOK_LLM_MINI_MODEL` for every LLM call in the run, even ones with an explicit stronger model override. Meant for cheap dev/test runs — leave unset (or `0`) in production so each role gets its intended model. | `openrouter_llm.py:OpenRouterLLM.__init__` |
 | `AUTOGENBOOK_FAIL_FAST_SCHEMA` | No | Fail immediately on schema validation. | `main.py:main`, `autogenbook/agents/base.py:BaseAgent._validate_with_repair` |
 | `AUTOGENBOOK_NONINTERACTIVE` | No | Skip interactive prompts. | `autogenbook/pipelines/book_pipeline.py:_ask_choice`, `autogenbook/pipelines/proposal_pipeline.py:_is_noninteractive` |
 | `AUTOGENBOOK_ASSUME_YES` | No | Auto-accept yes/no prompts (book). | `autogenbook/pipelines/book_pipeline.py:_ask_yes_no` |

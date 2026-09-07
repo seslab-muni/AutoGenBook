@@ -22,7 +22,7 @@ from book_builder import (
     save_graph_json,
     subdivide_graph,
 )
-from openrouter_llm import LLMConfig, OpenRouterLLM
+from openrouter_llm import LLMConfig, OpenRouterLLM, default_model_name
 from autogenbook.audit.latex_auditor import AuditorConfig, audit_latex
 from autogenbook.audit.types import AuditSeverity
 from autogenbook.llm_usage import log_usage, write_run_meta
@@ -126,7 +126,6 @@ def _revise_book_json_for_redundancy(
 
     llm = OpenRouterLLM(
         LLMConfig(
-            model="openai/gpt-5-pro",
             temperature=0.2,
         )
     )
@@ -177,7 +176,7 @@ def _write_run_meta(
 ) -> None:
     models = {
         "primary": llm.config.model if llm is not None else None,
-        "redundancy": "openai/gpt-5-pro",
+        "redundancy": default_model_name(),
     }
     token_totals = {
         "primary": llm.get_total_tokens() if llm is not None else 0,
