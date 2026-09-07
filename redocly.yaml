@@ -1,0 +1,11 @@
+apis:
+  main:
+    root: docs/openapi.yaml
+
+extends:
+  - recommended
+
+rules:
+  # The service has no auth yet (see docs/openapi.yaml info.description) - this is
+  # documented intentionally, not an oversight, until the backend defines one.
+  security-defined: off
