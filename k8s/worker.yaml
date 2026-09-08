@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: worker}
+  template:
+    metadata:
+      labels: {app: worker}
+    spec:
+      securityContext:
+        fsGroupChangePolicy: OnRootMismatch
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: worker
+        image: cerit.io/conerzyo/autogenbook:<TAG>
+        command: ["python", "-m", "api.worker"]
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+        envFrom:
+        - configMapRef: {name: autogenbook-config}
+        - secretRef: {name: autogenbook-secrets}
+        resources:
+          requests: {cpu: 500m, memory: 1Gi}
+          limits: {cpu: "2", memory: 4Gi}
+        volumeMounts:
+        - {name: runs, mountPath: /app/runs}
+        - {name: kb-cache, mountPath: /app/kb_cache}
+      volumes:
+      - {name: runs, persistentVolumeClaim: {claimName: runs-data}}
+      - {name: kb-cache, persistentVolumeClaim: {claimName: kb-extract-cache}}

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autogenbook-config
+data:
+  POSTGRES_DB: "autogenbook"
+  POSTGRES_USER: "autogenbook"
+  S3_ENDPOINT_URL: "http://minio:9000"
+  S3_ACCESS_KEY: "autogenbook"
+  S3_BUCKET: "autogenbook"
+  RUNS_DIR: "/app/runs"
+  KB_EXTRACT_CACHE_DIR: "/app/kb_cache"
+  MAX_UPLOAD_MB: "200"
+  WORKER_CONCURRENCY: "1"
+  WORKER_POLL_INTERVAL_S: "2"
+  WORKER_STALE_S: "300"
+  RUNS_RETENTION_DAYS: "30"
+  CLI_RUN_TIMEOUT_S: "21600"
+  CLI_CANCEL_GRACE_S: "15"
+  AUTOGENBOOK_KB_OCR: "1"
+  AUTOGENBOOK_KB_OCR_LANG: "eng"
+  MCP_GATEWAY_ENABLE: "0"

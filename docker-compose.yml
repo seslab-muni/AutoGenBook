@@ -36,7 +36,7 @@ services:
       # default so the stack isn't reachable from the network out of the
       # box. Set WEB_BIND_HOST=0.0.0.0 (and put a real auth/proxy layer in
       # front) to expose it beyond the host.
-      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-8080}:80"
+      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     depends_on:
       api:
         condition: service_healthy

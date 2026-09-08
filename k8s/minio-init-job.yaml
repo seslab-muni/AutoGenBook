@@ -1,0 +1,28 @@
+# Apply after `minio` is Ready; delete and re-apply to re-run (e.g. after rotating the bucket).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: mc
+        image: minio/mc:RELEASE.2024-08-17T11-33-50Z
+        securityContext:
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+        envFrom:
+        - configMapRef: {name: autogenbook-config}
+        - secretRef: {name: autogenbook-secrets}
+        command: ["sh", "-c"]
+        args:
+        - >
+          mc alias set local "$S3_ENDPOINT_URL" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" &&
+          mc mb --ignore-existing "local/$S3_BUCKET"

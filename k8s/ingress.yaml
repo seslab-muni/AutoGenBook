@@ -1,0 +1,24 @@
+# Do NOT `kubectl apply` this until the auth mechanism (docs/DEPLOY_GUIDE.md section 12) is
+# actually wired in - as-is, applying this exposes an unauthenticated API to the public
+# internet. Add auth annotations (basic auth / e-infra SSO / IP allowlist, or drop this
+# Ingress-level gate entirely once real application-level auth ships) before applying.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  annotations:
+    kubernetes.io/tls-acme: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts: ["seslab-autogenbook.dyn.cloud.e-infra.cz"]
+    secretName: seslab-autogenbook-dyn-cloud-e-infra-cz-tls
+  rules:
+  - host: "seslab-autogenbook.dyn.cloud.e-infra.cz"
+    http:
+      paths:
+      - path: /
+        pathType: ImplementationSpecific
+        backend:
+          service: {name: web, port: {number: 80}}

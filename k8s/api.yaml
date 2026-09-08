@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: api}
+  template:
+    metadata:
+      labels: {app: api}
+    spec:
+      securityContext:
+        fsGroupChangePolicy: OnRootMismatch
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: api
+        image: cerit.io/conerzyo/autogenbook:<TAG>
+        command: ["sh", "-c", "alembic -c api/alembic.ini upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+        envFrom:
+        - configMapRef: {name: autogenbook-config}
+        - secretRef: {name: autogenbook-secrets}
+        ports: [{containerPort: 8000}]
+        resources:
+          requests: {cpu: 250m, memory: 512Mi}
+          limits: {cpu: "1", memory: 2Gi}
+        volumeMounts:
+        - {name: runs, mountPath: /app/runs}
+        readinessProbe:
+          httpGet: {path: /api/v1/ready, port: 8000}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /api/v1/health, port: 8000}
+          initialDelaySeconds: 10
+          periodSeconds: 20
+      volumes:
+      - {name: runs, persistentVolumeClaim: {claimName: runs-data}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector: {app: api}
+  ports: [{port: 8000, targetPort: 8000}]

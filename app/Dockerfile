@@ -6,7 +6,7 @@ RUN corepack enable && pnpm install --frozen-lockfile --config.minimum-release-a
 COPY . .
 RUN pnpm build
 
-FROM nginx:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 # `.template` files here are rendered with `envsubst` (only for names that
 # are actual environment variables in the container, so nginx's own `$host`
 # etc. are left untouched) by the base image's entrypoint at startup, into
@@ -14,4 +14,4 @@ FROM nginx:1.27-alpine
 # with `MAX_UPLOAD_MB` (issue #47) without a custom entrypoint script.
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
+EXPOSE 8080
