@@ -12,6 +12,7 @@ from api.application.projects import ProjectService
 from api.application.sources import SourceService
 from api.core.db import get_session
 from api.domain.models import Project as ProjectDomain
+from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 from api.presentation.deps import get_outline_service
@@ -30,13 +31,17 @@ from api.presentation.schemas.sources import source_to_schema
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-async def current_owner() -> uuid.UUID | None:
+def current_owner() -> uuid.UUID | None:
     # No auth yet; ownership filtering switches on later without route changes.
     return None
 
 
 def get_project_service(session: AsyncSession = Depends(get_session)) -> ProjectService:
-    return ProjectService(SqlAlchemyProjectRepository(session), SqlAlchemyRunRepository(session))
+    return ProjectService(
+        SqlAlchemyProjectRepository(session),
+        SqlAlchemyRunRepository(session),
+        SqlAlchemyOutlineRepository(session),
+    )
 
 
 async def _outline_tree(

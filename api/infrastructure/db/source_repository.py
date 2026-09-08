@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.errors import NotFound
 from api.domain.models import Source
 from api.infrastructure.db.models import SourceRecord
 
@@ -116,7 +117,13 @@ class SqlAlchemySourceRepository:
 
     async def update(self, source: Source) -> Source:
         record = await self._session.get(SourceRecord, source.id)
-        assert record is not None
+        if record is None:
+            # The row disappeared between the caller's read and this write
+            # (e.g. a concurrent hard delete) - a proper `NotFound` (404)
+            # instead of a bare `AssertionError` (a 500 that, under
+            # `python -O`, disappears entirely and lets the next line raise
+            # a confusing `AttributeError` instead; issue #62).
+            raise NotFound(f"source {source.id} does not exist")
         record.file_id = source.file_id
         record.authors = source.authors
         record.year = source.year

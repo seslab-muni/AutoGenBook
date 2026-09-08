@@ -455,6 +455,46 @@ async def test_import_graph_recomputes_word_budget_when_target_pages_changes(
     assert refreshed.word_budget == 4 * 350
 
 
+async def test_cli_key_is_persisted_by_import_and_survives_a_fresh_query(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Regression for issue #62: `cli_key` is genuinely written to the
+    `outline_nodes.cli_key` column for a node an import matches, not just
+    held on the in-memory node this module already had - `RunService.
+    regenerate_node`'s drift check depends on reading that value back via a
+    fresh `OutlineRepository.list`/`get`. A node that's never been through
+    an import has no run to derive a key from, so it stays `None` until one
+    is (see `graph_import.py`'s module docstring)."""
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        node = await SqlAlchemyOutlineRepository(session).add(
+            _make_node(project.id, None, 0, title="Ch A")
+        )
+
+    async with session_factory() as fresh_session:
+        before_import = await SqlAlchemyOutlineRepository(fresh_session).get(node.id)
+    assert before_import is not None
+    assert before_import.cli_key is None
+
+    async with session_factory() as session:
+        outline_repo = SqlAlchemyOutlineRepository(session)
+        work_dir = tmp_path / "run"
+        out_dir = work_dir / "out"
+        (out_dir / "sections").mkdir(parents=True)
+        (out_dir / "sections" / "1.md").write_text("Content A\n", encoding="utf-8")
+        _write_structure_graph(
+            out_dir,
+            nodes={"book": {}, "1": {"title": "Ch A", "summary": "", "n_pages": 1.0}},
+            edges=[["book", "1"]],
+        )
+        await import_graph(project, work_dir, outline_repo, SqlAlchemySourceRepository(session))
+
+    async with session_factory() as fresh_session:
+        after_import = await SqlAlchemyOutlineRepository(fresh_session).get(node.id)
+    assert after_import is not None
+    assert after_import.cli_key == "1"
+
+
 async def test_import_graph_generate_mode_replaces_outline_instead_of_matching_positionally(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:

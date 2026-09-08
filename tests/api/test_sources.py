@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.core.errors import NotFound
 from api.infrastructure.db.models import SourceRecord
+from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
 
 PROJECT_PAYLOAD = {
     "title": "Widgets 101",
@@ -474,3 +477,36 @@ async def test_file_with_only_soft_deleted_source_is_no_longer_referenced(
     # No longer referenced once the only source link was soft-deleted.
     delete_response = await client.delete(f"/api/v1/files/{file['id']}")
     assert delete_response.status_code == 204
+
+
+async def test_source_repository_update_raises_not_found_when_row_vanishes(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #62: `SqlAlchemySourceRepository.update` used to
+    `assert record is not None` when the row disappeared between the
+    caller's read and this write (e.g. a concurrent hard delete) - a bare
+    `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
+    entirely and lets the next line raise a confusing `AttributeError`
+    instead). Must raise a proper `NotFound` (404-mapped) error instead."""
+    project = await _create_project(client)
+    file = await _upload_file(client, "paper.pdf")
+    add_response = await client.post(
+        f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+    )
+    assert add_response.status_code == 201, add_response.text
+    source_id = uuid.UUID(add_response.json()["id"])
+    project_id = uuid.UUID(project["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemySourceRepository(session).get(project_id, source_id)
+    assert baseline is not None
+
+    async with session_factory() as session:
+        record = await session.get(SourceRecord, source_id)
+        assert record is not None
+        await session.delete(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(NotFound):
+            await SqlAlchemySourceRepository(session).update(baseline)

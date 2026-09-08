@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.errors import NotFound
 from api.domain.models import Project
 from api.infrastructure.db.models import OutlineNodeRecord, ProjectRecord, SourceRecord
 
@@ -151,7 +152,13 @@ class SqlAlchemyProjectRepository:
         `PATCH /projects/{id}` that read the project in between (issue
         #56)."""
         record = await self._session.get(ProjectRecord, project.id)
-        assert record is not None
+        if record is None:
+            # The row disappeared between the caller's read and this write
+            # (e.g. a concurrent hard delete) - a proper `NotFound` (404)
+            # instead of a bare `AssertionError` (a 500 that, under
+            # `python -O`, disappears entirely and lets the next line raise
+            # a confusing `AttributeError` instead; issue #62).
+            raise NotFound(f"project {project.id} does not exist")
         for name in _ALL_MUTABLE_FIELDS if fields is None else fields:
             setattr(record, name, getattr(project, name))
         record.updated_at = project.updated_at

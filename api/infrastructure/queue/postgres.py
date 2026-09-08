@@ -73,7 +73,16 @@ class SqlAlchemyRunQueue:
             return None
 
         record = await self._session.get(RunRecord, candidate_id)
-        assert record is not None
+        if record is None:
+            # Should be unreachable - the UPDATE above just wrote this row in
+            # this same transaction - but this runs in the worker loop, not
+            # behind an HTTP router, so there's no exception handler to turn
+            # an `AssertionError` into a clean response. Treat a vanished row
+            # the same as any other failed claim (the caller already handles
+            # `None` as "nothing claimed this cycle") instead of raising into
+            # an unhandled crash the worker slot has no reason to catch
+            # (issue #62).
+            return None
         return run_to_domain(record)
 
     async def heartbeat(self, run_id: uuid.UUID, worker_id: str | None = None) -> bool:

@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.core.errors import NotFound
 from api.infrastructure.db.models import ProjectRecord
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 
@@ -406,3 +407,80 @@ async def test_update_project_rejects_bounds_violations(client: AsyncClient) -> 
     )
 
     assert response.status_code == 422
+
+
+async def test_update_project_rejects_lowering_max_outline_levels_below_existing_depth(
+    client: AsyncClient,
+) -> None:
+    """Regression for issue #68: `PATCH /projects/{id}` used to apply a
+    lowered `maxOutlineLevels` without checking the outline that already
+    exists - the outline kept its deeper nodes, permanently inconsistent
+    with the project's own limit, with no way for the wizard to repair it
+    short of deleting nodes. Must be rejected with 422 instead."""
+    created = await _create_project(client, maxOutlineLevels=3)
+    project_id = created["id"]
+
+    level1 = await client.post(
+        f"/api/v1/projects/{project_id}/outline", json={"title": "L1"}
+    )
+    assert level1.status_code == 201, level1.text
+    level2 = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "L2", "parentId": level1.json()["id"]},
+    )
+    assert level2.status_code == 201, level2.text
+    level3 = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "L3", "parentId": level2.json()["id"]},
+    )
+    assert level3.status_code == 201, level3.text
+
+    response = await client.patch(
+        f"/api/v1/projects/{project_id}", json={"maxOutlineLevels": 2}
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+    unchanged = await client.get(f"/api/v1/projects/{project_id}")
+    assert unchanged.json()["maxOutlineLevels"] == 3
+
+
+async def test_update_project_allows_raising_max_outline_levels(client: AsyncClient) -> None:
+    created = await _create_project(client, maxOutlineLevels=1)
+    project_id = created["id"]
+    await client.post(f"/api/v1/projects/{project_id}/outline", json={"title": "L1"})
+
+    response = await client.patch(
+        f"/api/v1/projects/{project_id}", json={"maxOutlineLevels": 5}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["maxOutlineLevels"] == 5
+
+
+async def test_project_repository_update_raises_not_found_when_row_vanishes(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #62: `SqlAlchemyProjectRepository.update` used
+    to `assert record is not None` when the row disappeared between the
+    caller's read and this write (e.g. a concurrent hard delete) - a bare
+    `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
+    entirely and lets the next line raise a confusing `AttributeError`
+    instead). Must raise a proper `NotFound` (404-mapped) error instead."""
+    created = await _create_project(client)
+    project_id = uuid.UUID(created["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemyProjectRepository(session).get(project_id)
+    assert baseline is not None
+
+    async with session_factory() as session:
+        record = await session.get(ProjectRecord, project_id)
+        assert record is not None
+        await session.delete(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(NotFound):
+            await SqlAlchemyProjectRepository(session).update(baseline, fields=("title",))

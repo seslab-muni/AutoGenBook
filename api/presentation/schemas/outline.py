@@ -12,9 +12,15 @@ from api.presentation.schemas.common import BaseSchema
 class OutlineNode(BaseSchema):
     """Flat shape - one row, addressed by `parentId` + `orderIndex`.
 
-    `level`, `sectionNumber` and `cliKey` are always derived from the current
-    tree shape (`api.domain.outline.assign_positions`) - never persisted
-    client-supplied values.
+    `level`, `sectionNumber` and `cliKey` returned here are always the
+    current tree shape's derived value (`api.domain.outline.
+    assign_positions`), never a client-supplied one - a client can't set any
+    of the three (`OutlineNodeCreate`/`OutlineNodeUpdate` don't accept them).
+    The `cli_key` *column*, unlike `level`/`section_number`, is genuinely
+    persisted for a node a run has imported/regenerated (`graph_import.py`'s
+    `_new_node`) - `RunService.regenerate_node` reads that stored value back
+    to detect outline drift since the node's base run. See `graph_import.
+    py`'s module docstring for the full read/write story.
     """
 
     id: uuid.UUID
