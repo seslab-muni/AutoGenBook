@@ -120,7 +120,8 @@ function RunPage() {
             </div>
             <p className="truncate text-xs text-muted-foreground">
               {run.targetNodeId ? `Target node ${run.targetNodeId} · ` : ''}
-              Queued {new Date(run.queuedAt).toLocaleString()}
+              Queued {new Date(run.queuedAt).toLocaleString()} · Started by{' '}
+              {run.startedByName ?? '—'}
             </p>
           </div>
         </div>

@@ -1,12 +1,18 @@
-# Issue #50: `/api/v1` has no authentication or per-client quota of its own
-# (see `api/main.py`'s module docstring and `docs/OPERATIONS.md`) - uploads,
-# downloads and run creation (which spends `OPENROUTER_API_KEY` budget) are
-# all reachable by anyone who can reach this proxy. Until the backend grows
-# real auth, throttle at this, the only boundary actually exposed to the
-# host (see docker-compose.yml's `WEB_BIND_HOST`/`WEB_PORT`), so a single
-# client can't exhaust connections or LLM spend.
+# `/api/v1` now requires a login session for everything but `POST
+# /auth/login` and the health/ready probes (issue #96), but this - the only
+# boundary actually exposed to the host (see docker-compose.yml's
+# `WEB_BIND_HOST`/`WEB_PORT`) - is still the right place for a per-client
+# quota: uploads, downloads and run creation (which spends
+# `OPENROUTER_API_KEY` budget) shouldn't let one *authenticated* client
+# exhaust connections or LLM spend either.
 limit_req_zone $binary_remote_addr zone=api_req:10m rate=10r/s;
 limit_conn_zone $binary_remote_addr zone=api_conn:10m;
+# A tighter, dedicated backstop for the login endpoint itself (issue #96):
+# it's the one route reachable with no session at all, so it's the only
+# route a credential-stuffing/brute-force attempt against this stack's 4
+# accounts could actually hit. `burst=5` absorbs a user mistyping their
+# password a couple of times in a row without a hard lockout.
+limit_req_zone $binary_remote_addr zone=login_req:10m rate=5r/m;
 
 server {
     # 8080, not 80: the container runs as the non-root `nginx` user (see
@@ -16,6 +22,20 @@ server {
 
     root /usr/share/nginx/html;
     index index.html;
+
+    # Exact match, so this wins over the general `/api/` prefix location
+    # below regardless of block order (issue #96's login brute-force
+    # backstop).
+    location = /api/v1/auth/login {
+        limit_req zone=login_req burst=5 nodelay;
+
+        proxy_pass http://api:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 
     location /api/ {
         # `burst` absorbs a page load's natural cluster of requests;

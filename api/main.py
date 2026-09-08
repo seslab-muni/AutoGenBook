@@ -3,14 +3,15 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.routing import APIRoute
 
 from api.core.db import get_engine
 from api.core.errors import install_error_handlers
 from api.core.request_logging import RequestIdMiddleware, configure_request_logging
 from api.core.settings import default_credentials_warning, get_settings
-from api.presentation.routers import files, outline, projects, runs, sources, system
+from api.presentation.deps import current_user, require_csrf_header
+from api.presentation.routers import auth, files, outline, projects, runs, sources, system
 
 configure_request_logging()
 logger = logging.getLogger("api")
@@ -41,8 +42,12 @@ def create_app() -> FastAPI:
         description=(
             "HTTP API for AutoGenBook, served by this FastAPI app and reached "
             "through the nginx-fronted Docker Compose stack. Every route is "
-            "mounted under /api/v1; there is no authentication and no CORS "
-            "middleware. Error responses use RFC 9457 problem details "
+            "mounted under /api/v1 and requires a session cookie (set by "
+            "POST /api/v1/auth/login) except that route itself and the "
+            "health/ready probes; there is no CORS middleware. Non-GET/HEAD/"
+            "OPTIONS requests additionally require an "
+            "'X-Requested-With: XMLHttpRequest' header or are rejected with "
+            "403. Error responses use RFC 9457 problem details "
             "(application/problem+json); list endpoints return a "
             "{items, total, limit, offset} page envelope."
         ),
@@ -51,14 +56,33 @@ def create_app() -> FastAPI:
     install_error_handlers(app)
     app.add_middleware(RequestIdMiddleware)
 
-    api_router = APIRouter(prefix="/api/v1")
-    api_router.include_router(system.router)
-    api_router.include_router(files.router)
-    api_router.include_router(projects.router)
-    api_router.include_router(sources.router)
-    api_router.include_router(outline.router)
-    api_router.include_router(runs.router)
-    app.include_router(api_router)
+    # An explicit "public" router (login, health, ready) beats a path
+    # allowlist on the guarded one: a new route added to any of the routers
+    # below is guarded by default, not accidentally public by omission
+    # (issue #96's acceptance criteria - enforced for real by the
+    # route-walk test in tests/api/test_auth.py). Still carries
+    # `require_csrf_header` (unlike `current_user`): the CSRF rule is stated
+    # unconditionally over all of `/api/v1`, and costs nothing here since
+    # GET /health and GET /ready are safe methods it already no-ops for.
+    public_router = APIRouter(
+        prefix="/api/v1", dependencies=[Depends(require_csrf_header)]
+    )
+    public_router.include_router(auth.public_router)
+    public_router.include_router(system.router)
+
+    guarded_router = APIRouter(
+        prefix="/api/v1",
+        dependencies=[Depends(current_user), Depends(require_csrf_header)],
+    )
+    guarded_router.include_router(auth.router)
+    guarded_router.include_router(files.router)
+    guarded_router.include_router(projects.router)
+    guarded_router.include_router(sources.router)
+    guarded_router.include_router(outline.router)
+    guarded_router.include_router(runs.router)
+
+    app.include_router(public_router)
+    app.include_router(guarded_router)
 
     # Legacy aliases kept until the compose healthcheck (issue 02) moves to
     # /api/v1/ready; excluded from the OpenAPI schema so they don't leak as

@@ -93,6 +93,8 @@ class MockDatabase {
     if (!row) return undefined;
     return {
       id: row.id,
+      ownerId: row.ownerId ?? null,
+      ownerName: row.ownerName ?? null,
       title: row.title,
       subtitle: row.subtitle,
       authors: row.authors,

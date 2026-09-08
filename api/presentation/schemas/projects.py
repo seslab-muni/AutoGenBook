@@ -54,6 +54,8 @@ class ProjectUpdate(BaseSchema):
 
 class Project(BaseSchema):
     id: uuid.UUID
+    owner_id: uuid.UUID | None = None
+    owner_name: str | None = None
     title: str
     subtitle: str
     authors: list[str]
@@ -75,6 +77,8 @@ class Project(BaseSchema):
 
 class ProjectSummary(BaseSchema):
     id: uuid.UUID
+    owner_id: uuid.UUID | None = None
+    owner_name: str | None = None
     title: str
     subtitle: str
     authors: list[str]

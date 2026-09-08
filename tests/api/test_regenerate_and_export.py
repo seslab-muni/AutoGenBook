@@ -84,29 +84,29 @@ async def _drive_generation(
         return await service.execute(run)
 
 
-async def _create_project(client: AsyncClient, **overrides) -> dict:
+async def _create_project(authed_client: AsyncClient, **overrides) -> dict:
     payload = {**MINIMAL_PROJECT, **overrides}
-    response = await client.post("/api/v1/projects", json=payload)
+    response = await authed_client.post("/api/v1/projects", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
 
-async def _create_node(client: AsyncClient, project_id: str, title: str, **overrides) -> dict:
+async def _create_node(authed_client: AsyncClient, project_id: str, title: str, **overrides) -> dict:
     payload = {"title": title, "targetPages": 2, **overrides}
-    response = await client.post(f"/api/v1/projects/{project_id}/outline", json=payload)
+    response = await authed_client.post(f"/api/v1/projects/{project_id}/outline", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
 
 async def _run_full(
-    client: AsyncClient,
+    authed_client: AsyncClient,
     project_id: str,
     session_factory: async_sessionmaker[AsyncSession],
     storage,
     settings: Settings,
     **overrides,
 ) -> dict:
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/runs", json={"outline": "project", **overrides}
     )
     assert response.status_code == 202, response.text
@@ -116,15 +116,15 @@ async def _run_full(
     return run
 
 
-async def _get_node(client: AsyncClient, project_id: str, node_id: str) -> dict:
-    response = await client.get(f"/api/v1/projects/{project_id}/outline/{node_id}")
+async def _get_node(authed_client: AsyncClient, project_id: str, node_id: str) -> dict:
+    response = await authed_client.get(f"/api/v1/projects/{project_id}/outline/{node_id}")
     assert response.status_code == 200
     return response.json()
 
 
 async def test_regenerate_end_to_end_touches_only_the_target_node(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -132,18 +132,18 @@ async def test_regenerate_end_to_end_touches_only_the_target_node(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node_a = await _create_node(client, project_id, "Chapter A")
-    node_b = await _create_node(client, project_id, "Chapter B")
+    node_a = await _create_node(authed_client, project_id, "Chapter A")
+    node_b = await _create_node(authed_client, project_id, "Chapter B")
 
-    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+    base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    node_a_before = await _get_node(client, project_id, node_a["id"])
-    node_b_before = await _get_node(client, project_id, node_b["id"])
+    node_a_before = await _get_node(authed_client, project_id, node_a["id"])
+    node_b_before = await _get_node(authed_client, project_id, node_b["id"])
     assert node_a_before["contentMarkdown"].strip() != ""
 
-    regen_response = await client.post(
+    regen_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node_a['id']}/regenerate",
         json={"promptModifier": "add worked examples"},
     )
@@ -157,19 +157,19 @@ async def test_regenerate_end_to_end_touches_only_the_target_node(
 
     # The node flips to "drafting" as soon as the run is created, before the
     # worker has even picked it up.
-    node_a_drafting = await _get_node(client, project_id, node_a["id"])
+    node_a_drafting = await _get_node(authed_client, project_id, node_a["id"])
     assert node_a_drafting["status"] == "drafting"
 
     finished = await _drive_generation(regen_run["id"], session_factory, file_storage, settings)
     assert finished.status.value == "succeeded", finished.error
 
-    events_response = await client.get(f"/api/v1/runs/{regen_run['id']}/events?limit=1000")
+    events_response = await authed_client.get(f"/api/v1/runs/{regen_run['id']}/events?limit=1000")
     assert events_response.status_code == 200
     section_events = [e for e in events_response.json()["items"] if e["stage"] == "section"]
     assert len(section_events) == 1
 
-    node_a_after = await _get_node(client, project_id, node_a["id"])
-    node_b_after = await _get_node(client, project_id, node_b["id"])
+    node_a_after = await _get_node(authed_client, project_id, node_a["id"])
+    node_b_after = await _get_node(authed_client, project_id, node_b["id"])
 
     assert node_a_after["status"] == "compiled"
     assert "Writing instructions: add worked examples" in node_a_after["contentMarkdown"]
@@ -185,11 +185,11 @@ async def test_regenerate_end_to_end_touches_only_the_target_node(
     assert len(regen_history) == 1
 
     # project.lastRunId re-chains onto the regenerate run.
-    project_after = await client.get(f"/api/v1/projects/{project_id}")
+    project_after = await authed_client.get(f"/api/v1/projects/{project_id}")
     assert project_after.json()["lastRunId"] == regen_run["id"]
 
     # New artifacts were uploaded for the regenerate run itself.
-    artifacts_response = await client.get(f"/api/v1/runs/{regen_run['id']}/artifacts")
+    artifacts_response = await authed_client.get(f"/api/v1/runs/{regen_run['id']}/artifacts")
     assert artifacts_response.status_code == 200
     kinds = {item["kind"] for item in artifacts_response.json()["items"]}
     assert "section" in kinds
@@ -197,7 +197,7 @@ async def test_regenerate_end_to_end_touches_only_the_target_node(
 
 async def test_export_end_to_end_does_not_regenerate_sections(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -205,14 +205,14 @@ async def test_export_end_to_end_does_not_regenerate_sections(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node = await _create_node(client, project_id, "Chapter A")
+    node = await _create_node(authed_client, project_id, "Chapter A")
 
-    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
-    node_before = await _get_node(client, project_id, node["id"])
+    base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
+    node_before = await _get_node(authed_client, project_id, node["id"])
 
-    export_response = await client.post(
+    export_response = await authed_client.post(
         f"/api/v1/runs/{base_run['id']}/exports", json={"format": "pdf"}
     )
     assert export_response.status_code == 202, export_response.text
@@ -226,27 +226,27 @@ async def test_export_end_to_end_does_not_regenerate_sections(
     finished = await _drive_generation(export_run["id"], session_factory, file_storage, settings)
     assert finished.status.value == "succeeded", finished.error
 
-    events_response = await client.get(f"/api/v1/runs/{export_run['id']}/events?limit=1000")
+    events_response = await authed_client.get(f"/api/v1/runs/{export_run['id']}/events?limit=1000")
     section_events = [e for e in events_response.json()["items"] if e["stage"] == "section"]
     assert section_events == []
 
-    artifacts_response = await client.get(f"/api/v1/runs/{export_run['id']}/artifacts")
+    artifacts_response = await authed_client.get(f"/api/v1/runs/{export_run['id']}/artifacts")
     kinds = {item["kind"] for item in artifacts_response.json()["items"]}
     assert {"tex", "pdf"} <= kinds
 
-    node_after = await _get_node(client, project_id, node["id"])
+    node_after = await _get_node(authed_client, project_id, node["id"])
     assert node_after["contentMarkdown"] == node_before["contentMarkdown"]
     assert node_after["updatedAt"] == node_before["updatedAt"]
 
     # export doesn't chain project.lastRunId - a later regenerate should
     # still resolve its base run from the original full run.
-    project_after = await client.get(f"/api/v1/projects/{project_id}")
+    project_after = await authed_client.get(f"/api/v1/projects/{project_id}")
     assert project_after.json()["lastRunId"] == base_run["id"]
 
 
 async def test_regenerate_resolves_previous_succeeded_run_after_a_later_run_never_succeeds(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -263,13 +263,13 @@ async def test_regenerate_resolves_previous_succeeded_run_after_a_later_run_neve
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node = await _create_node(client, project_id, "Chapter A")
+    node = await _create_node(authed_client, project_id, "Chapter A")
 
-    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+    base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    second_run_response = await client.post(
+    second_run_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/runs", json={"outline": "project"}
     )
     assert second_run_response.status_code == 202, second_run_response.text
@@ -277,17 +277,17 @@ async def test_regenerate_resolves_previous_succeeded_run_after_a_later_run_neve
 
     # Queueing the second run must not overwrite `lastRunId` before it has
     # actually succeeded.
-    project_after_queue = await client.get(f"/api/v1/projects/{project_id}")
+    project_after_queue = await authed_client.get(f"/api/v1/projects/{project_id}")
     assert project_after_queue.json()["lastRunId"] == base_run["id"]
 
-    cancel_response = await client.post(f"/api/v1/runs/{second_run['id']}/cancel")
+    cancel_response = await authed_client.post(f"/api/v1/runs/{second_run['id']}/cancel")
     assert cancel_response.status_code == 202, cancel_response.text
     assert cancel_response.json()["status"] == "cancelled"
 
-    project_after_cancel = await client.get(f"/api/v1/projects/{project_id}")
+    project_after_cancel = await authed_client.get(f"/api/v1/projects/{project_id}")
     assert project_after_cancel.json()["lastRunId"] == base_run["id"]
 
-    regen_response = await client.post(
+    regen_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate", json={}
     )
     assert regen_response.status_code == 202, regen_response.text
@@ -295,11 +295,11 @@ async def test_regenerate_resolves_previous_succeeded_run_after_a_later_run_neve
 
 
 async def test_regenerate_404_for_missing_node(
-    app, client: AsyncClient, tmp_path: Path
+    app, authed_client: AsyncClient, tmp_path: Path
 ) -> None:
     app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
-    project = await _create_project(client)
-    response = await client.post(
+    project = await _create_project(authed_client)
+    response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/outline/"
         f"00000000-0000-0000-0000-000000000000/regenerate",
         json={},
@@ -308,13 +308,13 @@ async def test_regenerate_404_for_missing_node(
 
 
 async def test_regenerate_409_when_no_previous_run(
-    app, client: AsyncClient, tmp_path: Path
+    app, authed_client: AsyncClient, tmp_path: Path
 ) -> None:
     app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
-    project = await _create_project(client)
-    node = await _create_node(client, project["id"], "Chapter A")
+    project = await _create_project(authed_client)
+    node = await _create_node(authed_client, project["id"], "Chapter A")
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/outline/{node['id']}/regenerate", json={}
     )
     assert response.status_code == 409
@@ -322,7 +322,7 @@ async def test_regenerate_409_when_no_previous_run(
 
 async def test_regenerate_409_when_outline_changed_since_base_run(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -330,15 +330,15 @@ async def test_regenerate_409_when_outline_changed_since_base_run(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node_a = await _create_node(client, project_id, "Chapter A")
-    await _run_full(client, project_id, session_factory, file_storage, settings)
+    node_a = await _create_node(authed_client, project_id, "Chapter A")
+    await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
     # Structural edit after the base run: a new outline node.
-    await _create_node(client, project_id, "Chapter C (added later)")
+    await _create_node(authed_client, project_id, "Chapter C (added later)")
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node_a['id']}/regenerate", json={}
     )
     assert response.status_code == 409
@@ -346,7 +346,7 @@ async def test_regenerate_409_when_outline_changed_since_base_run(
 
 async def test_regenerate_succeeds_for_an_untouched_generate_mode_node(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -358,10 +358,10 @@ async def test_regenerate_succeeds_for_an_untouched_generate_mode_node(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/runs", json={"outline": "generate"}
     )
     assert response.status_code == 202, response.text
@@ -370,12 +370,12 @@ async def test_regenerate_succeeds_for_an_untouched_generate_mode_node(
     )
     assert finished.status.value == "succeeded", finished.error
 
-    outline_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    outline_response = await authed_client.get(f"/api/v1/projects/{project_id}/outline")
     nodes = outline_response.json()["items"]
     target = next(n for n in nodes if n["title"] == "Chapter One")
     assert target["cliKey"] == "1"
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{target['id']}/regenerate", json={}
     )
     assert response.status_code == 202, response.text
@@ -383,7 +383,7 @@ async def test_regenerate_succeeds_for_an_untouched_generate_mode_node(
 
 async def test_regenerate_409_when_outline_changed_since_a_generate_mode_base_run(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -402,10 +402,10 @@ async def test_regenerate_409_when_outline_changed_since_a_generate_mode_base_ru
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/runs", json={"outline": "generate"}
     )
     assert response.status_code == 202, response.text
@@ -414,7 +414,7 @@ async def test_regenerate_409_when_outline_changed_since_a_generate_mode_base_ru
     )
     assert finished.status.value == "succeeded", finished.error
 
-    outline_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    outline_response = await authed_client.get(f"/api/v1/projects/{project_id}/outline")
     nodes = outline_response.json()["items"]
     target = next(n for n in nodes if n["title"] == "Chapter One")
     assert target["cliKey"] == "1"
@@ -423,9 +423,9 @@ async def test_regenerate_409_when_outline_changed_since_a_generate_mode_base_ru
     # target, shifting its recomputed `cliKey` - the TXT's outline section
     # doesn't exist in generate mode, so nothing about this edit is visible
     # to the project-mode hash check.
-    await _create_node(client, project_id, "Inserted First", orderIndex=0)
+    await _create_node(authed_client, project_id, "Inserted First", orderIndex=0)
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{target['id']}/regenerate", json={}
     )
     assert response.status_code == 409
@@ -433,7 +433,7 @@ async def test_regenerate_409_when_outline_changed_since_a_generate_mode_base_ru
 
 async def test_regenerate_409_when_project_has_an_active_run(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -441,37 +441,37 @@ async def test_regenerate_409_when_project_has_an_active_run(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node = await _create_node(client, project_id, "Chapter A")
-    await _run_full(client, project_id, session_factory, file_storage, settings)
+    node = await _create_node(authed_client, project_id, "Chapter A")
+    await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
     # A second run left queued (never driven) is still "active".
-    await client.post(f"/api/v1/projects/{project_id}/runs", json={"outline": "project"})
+    await authed_client.post(f"/api/v1/projects/{project_id}/runs", json={"outline": "project"})
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate", json={}
     )
     assert response.status_code == 409
 
 
 async def test_export_409_when_base_run_not_succeeded(
-    app, client: AsyncClient, tmp_path: Path
+    app, authed_client: AsyncClient, tmp_path: Path
 ) -> None:
     app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
-    project = await _create_project(client)
-    run_response = await client.post(
+    project = await _create_project(authed_client)
+    run_response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/runs", json={"outline": "project"}
     )
     run = run_response.json()  # left "queued" - never driven.
 
-    response = await client.post(f"/api/v1/runs/{run['id']}/exports", json={"format": "pdf"})
+    response = await authed_client.post(f"/api/v1/runs/{run['id']}/exports", json={"format": "pdf"})
     assert response.status_code == 409
 
 
-async def test_export_404_for_missing_run(app, client: AsyncClient, tmp_path: Path) -> None:
+async def test_export_404_for_missing_run(app, authed_client: AsyncClient, tmp_path: Path) -> None:
     app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
-    response = await client.post(
+    response = await authed_client.post(
         "/api/v1/runs/00000000-0000-0000-0000-000000000000/exports",
         json={"format": "latex"},
     )
@@ -480,7 +480,7 @@ async def test_export_404_for_missing_run(app, client: AsyncClient, tmp_path: Pa
 
 async def test_regenerate_reverts_node_status_when_the_run_fails(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -488,20 +488,20 @@ async def test_regenerate_reverts_node_status_when_the_run_fails(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node = await _create_node(client, project_id, "Chapter A")
-    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+    node = await _create_node(authed_client, project_id, "Chapter A")
+    base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    node_before = await _get_node(client, project_id, node["id"])
+    node_before = await _get_node(authed_client, project_id, node["id"])
     assert node_before["status"] == "compiled"
 
-    regen_response = await client.post(
+    regen_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate", json={}
     )
     regen_run = regen_response.json()
 
-    node_drafting = await _get_node(client, project_id, node["id"])
+    node_drafting = await _get_node(authed_client, project_id, node["id"])
     assert node_drafting["status"] == "drafting"
 
     # Sabotage the work directory the regenerate run was meant to reuse, so
@@ -512,13 +512,13 @@ async def test_regenerate_reverts_node_status_when_the_run_fails(
     finished = await _drive_generation(regen_run["id"], session_factory, file_storage, settings)
     assert finished.status.value == "failed"
 
-    node_after = await _get_node(client, project_id, node["id"])
+    node_after = await _get_node(authed_client, project_id, node["id"])
     assert node_after["status"] == "compiled"
 
 
 async def test_regenerate_failure_after_prepare_restores_the_base_work_dir(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -536,19 +536,19 @@ async def test_regenerate_failure_after_prepare_restores_the_base_work_dir(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node = await _create_node(client, project_id, "Chapter A")
-    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+    node = await _create_node(authed_client, project_id, "Chapter A")
+    base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    node_before = await _get_node(client, project_id, node["id"])
+    node_before = await _get_node(authed_client, project_id, node["id"])
     cli_key = node_before["cliKey"]
     work_dir = Path(settings.runs_dir) / base_run["id"]
     out_dir = work_dir / "out"
     graph_before = (out_dir / "structure_graph.json").read_text(encoding="utf-8")
     section_before = (out_dir / "sections" / f"{cli_key}.md").read_text(encoding="utf-8")
 
-    regen_response = await client.post(
+    regen_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate",
         json={"promptModifier": "add worked examples"},
     )
@@ -573,14 +573,14 @@ async def test_regenerate_failure_after_prepare_restores_the_base_work_dir(
     assert not (out_dir / "regen_history" / "structure_graph.json.prev").exists()
     assert not (out_dir / "regen_history" / f"{cli_key}.md.prev").exists()
 
-    node_after = await _get_node(client, project_id, node["id"])
+    node_after = await _get_node(authed_client, project_id, node["id"])
     assert node_after["status"] == "compiled"
     assert node_after["contentMarkdown"] == node_before["contentMarkdown"]
 
     # A later export from the same base run should just rebuild TeX/PDF -
     # not silently regenerate the section the failed attempt deleted, with
     # a modifier the user's regenerate request never actually completed.
-    export_response = await client.post(
+    export_response = await authed_client.post(
         f"/api/v1/runs/{base_run['id']}/exports", json={"format": "pdf"}
     )
     assert export_response.status_code == 202, export_response.text
@@ -590,14 +590,14 @@ async def test_regenerate_failure_after_prepare_restores_the_base_work_dir(
     )
     assert export_finished.status.value == "succeeded", export_finished.error
 
-    events_response = await client.get(f"/api/v1/runs/{export_run['id']}/events?limit=1000")
+    events_response = await authed_client.get(f"/api/v1/runs/{export_run['id']}/events?limit=1000")
     section_events = [e for e in events_response.json()["items"] if e["stage"] == "section"]
     assert section_events == []
 
 
 async def test_regenerate_does_not_stack_writing_instructions_across_attempts(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -611,12 +611,12 @@ async def test_regenerate_does_not_stack_writing_instructions_across_attempts(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node = await _create_node(client, project_id, "Chapter A")
-    await _run_full(client, project_id, session_factory, file_storage, settings)
+    node = await _create_node(authed_client, project_id, "Chapter A")
+    await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    first = await client.post(
+    first = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate",
         json={"promptModifier": "first modifier"},
     )
@@ -626,7 +626,7 @@ async def test_regenerate_does_not_stack_writing_instructions_across_attempts(
     )
     assert finished_first.status.value == "succeeded", finished_first.error
 
-    second = await client.post(
+    second = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate",
         json={"promptModifier": "second modifier"},
     )
@@ -636,14 +636,14 @@ async def test_regenerate_does_not_stack_writing_instructions_across_attempts(
     )
     assert finished_second.status.value == "succeeded", finished_second.error
 
-    node_after = await _get_node(client, project_id, node["id"])
+    node_after = await _get_node(authed_client, project_id, node["id"])
     assert "Writing instructions: second modifier" in node_after["contentMarkdown"]
     assert "first modifier" not in node_after["contentMarkdown"]
 
 
 async def test_cancelling_a_queued_regenerate_run_reverts_the_node_status(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -655,37 +655,37 @@ async def test_cancelling_a_queued_regenerate_run_reverts_the_node_status(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    node = await _create_node(client, project_id, "Chapter A")
-    await _run_full(client, project_id, session_factory, file_storage, settings)
+    node = await _create_node(authed_client, project_id, "Chapter A")
+    await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    node_before = await _get_node(client, project_id, node["id"])
+    node_before = await _get_node(authed_client, project_id, node["id"])
     assert node_before["status"] == "compiled"
 
-    regen_response = await client.post(
+    regen_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate", json={}
     )
     regen_run = regen_response.json()
 
-    node_drafting = await _get_node(client, project_id, node["id"])
+    node_drafting = await _get_node(authed_client, project_id, node["id"])
     assert node_drafting["status"] == "drafting"
 
-    cancel_response = await client.post(f"/api/v1/runs/{regen_run['id']}/cancel")
+    cancel_response = await authed_client.post(f"/api/v1/runs/{regen_run['id']}/cancel")
     assert cancel_response.status_code == 202
     assert cancel_response.json()["status"] == "cancelled"
 
-    node_after = await _get_node(client, project_id, node["id"])
+    node_after = await _get_node(authed_client, project_id, node["id"])
     assert node_after["status"] == "compiled"
 
-    events_response = await client.get(f"/api/v1/runs/{regen_run['id']}/events")
+    events_response = await authed_client.get(f"/api/v1/runs/{regen_run['id']}/events")
     assert events_response.json()["total"] == 1
     assert events_response.json()["items"][0]["stage"] == "done"
 
 
 async def test_regenerate_409_for_a_non_leaf_node(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -697,28 +697,28 @@ async def test_regenerate_409_for_a_non_leaf_node(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    parent = await _create_node(client, project_id, "Chapter A")
-    await _create_node(client, project_id, "Section A.1", parentId=parent["id"])
+    parent = await _create_node(authed_client, project_id, "Chapter A")
+    await _create_node(authed_client, project_id, "Section A.1", parentId=parent["id"])
 
-    await _run_full(client, project_id, session_factory, file_storage, settings)
+    await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    parent_before = await _get_node(client, project_id, parent["id"])
+    parent_before = await _get_node(authed_client, project_id, parent["id"])
     assert parent_before["status"] == "not_started"
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline/{parent['id']}/regenerate", json={}
     )
     assert response.status_code == 409
 
-    parent_after = await _get_node(client, project_id, parent["id"])
+    parent_after = await _get_node(authed_client, project_id, parent["id"])
     assert parent_after["status"] == "not_started"
 
 
 async def test_regenerate_reverts_node_status_when_the_run_imports_no_content_change(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -732,14 +732,14 @@ async def test_regenerate_reverts_node_status_when_the_run_imports_no_content_ch
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
     project_id = project["id"]
-    parent = await _create_node(client, project_id, "Chapter A")
-    await _create_node(client, project_id, "Section A.1", parentId=parent["id"])
+    parent = await _create_node(authed_client, project_id, "Chapter A")
+    await _create_node(authed_client, project_id, "Section A.1", parentId=parent["id"])
 
-    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+    base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
 
-    parent_before = await _get_node(client, project_id, parent["id"])
+    parent_before = await _get_node(authed_client, project_id, parent["id"])
     assert parent_before["status"] == "not_started"
 
     now = datetime.now(timezone.utc)
@@ -772,8 +772,8 @@ async def test_regenerate_reverts_node_status_when_the_run_imports_no_content_ch
     finished = await _drive_generation(str(run.id), session_factory, file_storage, settings)
     assert finished.status.value == "succeeded", finished.error
 
-    parent_after = await _get_node(client, project_id, parent["id"])
+    parent_after = await _get_node(authed_client, project_id, parent["id"])
     assert parent_after["status"] == "not_started"
 
-    project_after = await client.get(f"/api/v1/projects/{project_id}")
+    project_after = await authed_client.get(f"/api/v1/projects/{project_id}")
     assert project_after.json()["lastRunId"] == base_run["id"]

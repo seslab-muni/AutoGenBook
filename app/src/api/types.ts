@@ -50,3 +50,7 @@ export type RunArtifact = components['schemas']['RunArtifact'];
 export type RegenerateRequest = components['schemas']['RegenerateRequest'];
 export type ExportFormat = components['schemas']['ExportFormat'];
 export type ExportRequest = components['schemas']['ExportRequest'];
+
+/** The signed-in user, as returned by `POST /auth/login` and `GET /auth/me`. */
+export type AuthUser = components['schemas']['UserOut'];
+export type LoginRequest = components['schemas']['LoginRequest'];

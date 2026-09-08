@@ -6,18 +6,22 @@ import {
   Database,
   Download,
   History,
+  LogOut,
   Loader2,
   Play,
   Plus,
   Settings,
   Square,
+  UserRound,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
+import { auth } from '@/api/queries/auth';
 import { projects } from '@/api/queries/projects';
 import { useCancelRunMutation } from '@/api/queries/runs';
 import type { Project, Run } from '@/api/types';
+import { signOut } from '@/auth/session';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -46,6 +50,9 @@ export function AppHeader({ project, activeRun }: AppHeaderProps) {
   const navigate = useNavigate();
   const openModal = useUiStore((state) => state.openModal);
   const { data: projectList } = useQuery(projects.list({ limit: 50 }));
+  // `requireAuth`'s `beforeLoad` has already populated this cache, so this reads it without
+  // another round trip rather than re-deriving it from route context.
+  const { data: currentUser } = useQuery(auth.me());
   const isRunning = activeRun ? RUNNING_STATUSES.has(activeRun.status) : false;
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const cancelMutation = useCancelRunMutation();
@@ -109,6 +116,10 @@ export function AppHeader({ project, activeRun }: AppHeaderProps) {
             </div>
             <p className="truncate text-xs font-medium text-muted-foreground">
               {project.authors[0] ?? project.topic}
+              <span className="font-normal text-muted-foreground/70">
+                {' '}
+                · Created by {project.ownerName ?? '—'}
+              </span>
             </p>
           </div>
         </div>
@@ -181,6 +192,27 @@ export function AppHeader({ project, activeRun }: AppHeaderProps) {
           </Button>
 
           <ThemeToggle />
+
+          {currentUser ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Account menu">
+                  <UserRound />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel className="flex flex-col">
+                  <span className="font-semibold text-foreground">{currentUser.displayName}</span>
+                  <span className="font-normal text-muted-foreground">{currentUser.email}</span>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => signOut()}>
+                  <LogOut />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
         </div>
       </header>
 

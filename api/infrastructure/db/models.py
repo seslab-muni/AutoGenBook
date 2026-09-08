@@ -27,6 +27,34 @@ def _jsonb() -> sa.types.TypeEngine:
     return postgresql.JSONB().with_variant(sa.JSON(), "sqlite")
 
 
+class UserRecord(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    # Always stored lowercased (`AuthService`/`api/scripts/users.py` both
+    # normalize before writing) so `get_by_email` can do a plain equality
+    # lookup instead of a case-insensitive one.
+    email: Mapped[str] = mapped_column(sa.Text, unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    password_hash: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True, server_default=sa.true())
+    # Bumped on every password change; `AuthService.verify_token` rejects any
+    # token whose `iat` predates this, so rotating a password is also "log
+    # everyone out of that account" - the only revocation story #96 needs.
+    password_changed_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
+        nullable=False,
+    )
+
+
 class ProjectRecord(Base):
     __tablename__ = "projects"
     __table_args__ = (
@@ -43,7 +71,12 @@ class ProjectRecord(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
-    owner_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, nullable=True)
+    # Nullable both for a legacy project predating this column and for one
+    # whose owner account was later removed (`ON DELETE SET NULL`) - "Created
+    # by -" in the UI, never a hard failure.
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     title: Mapped[str] = mapped_column(sa.Text, nullable=False)
     subtitle: Mapped[str] = mapped_column(sa.Text, nullable=False)
     authors: Mapped[list[str]] = mapped_column(_jsonb(), nullable=False, default=list)
@@ -407,6 +440,12 @@ class RunRecord(Base):
     )
     total_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     total_cost_usd: Mapped[float | None] = mapped_column(sa.Numeric, nullable=True)
+    # Nullable for the same reason as `projects.owner_id`: legacy runs
+    # predate this column, and the triggering user's account may later be
+    # removed - "Started by -" in the UI either way.
+    started_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class RunArtifactRecord(Base):

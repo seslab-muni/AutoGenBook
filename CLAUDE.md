@@ -38,6 +38,7 @@ python scripts/check_latex_log.py <file.log>
 pip install -r api/requirements-dev.txt
 pytest tests/api
 DATABASE_URL="postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook" \
+  AUTH_JWT_SECRET="$(openssl rand -hex 32)" \
   alembic -c api/alembic.ini upgrade head
 
 # Minimal real run (Markdown-first, no PDF)
@@ -61,11 +62,13 @@ pnpm dev       # dev server on :3000
 ### Docker stack (web UI + FastAPI + Postgres + MinIO + worker)
 
 ```bash
-cp .env.example .env   # set OPENROUTER_API_KEY if generation is enabled
+cp .env.example .env   # set OPENROUTER_API_KEY if generation is enabled, and AUTH_JWT_SECRET (openssl rand -hex 32) - the API refuses to boot without it
 docker compose up --build
+# Seed the first account (no self-service signup):
+docker compose run --rm api python -m api.scripts.users create --email you@example.com --name "Your Name"
 ```
 
-Nginx (`web`, port 8080 by default) is the only container exposed to the host; it proxies `/api/...` to `api` (FastAPI, `api/main.py`), which talks to `db` (Postgres) and `minio` (S3-compatible object store) on an internal-only network. `minio-init` is a one-shot job that creates the upload bucket before `api`/`worker` start. `worker` (`python -m api.worker`) runs the CLI as a subprocess against a `runs_data` volume shared with `api` (the API reads run directories for events/resume; the worker writes them). The API implements the full project/generation surface — files, projects, sources, outline, runs (including SSE run-event streaming) — alongside system health checks (`/api/v1/health`, `/api/v1/ready`, plus legacy `/api/health`/`/api/ready` aliases kept only for the Compose healthcheck); `app/` has real screens wired to these endpoints (a projects hub, and per-project source/outline/editor/runs views). See `docs/WEB_API_REFERENCE.md` / `docs/openapi.yaml` for the full endpoint contract and `docs/OPERATIONS.md` for the full service/volume breakdown (including the worker/CLI environment variables) rather than re-deriving it here.
+Nginx (`web`, port 8080 by default) is the only container exposed to the host; it proxies `/api/...` to `api` (FastAPI, `api/main.py`), which talks to `db` (Postgres) and `minio` (S3-compatible object store) on an internal-only network. `minio-init` is a one-shot job that creates the upload bucket before `api`/`worker` start. `worker` (`python -m api.worker`) runs the CLI as a subprocess against a `runs_data` volume shared with `api` (the API reads run directories for events/resume; the worker writes them). Every `/api/v1` route requires a login session (`POST /api/v1/auth/login`, an httpOnly cookie) except that route itself and the health/ready probes (issue #96) - accounts are managed with `api/scripts/users.py`, never self-service signup. The API implements the full project/generation surface — files, projects, sources, outline, runs (including SSE run-event streaming) — alongside system health checks (`/api/v1/health`, `/api/v1/ready`, plus legacy `/api/health`/`/api/ready` aliases kept only for the Compose healthcheck); `app/` has real screens wired to these endpoints (a login screen, a projects hub, and per-project source/outline/editor/runs views). See `docs/WEB_API_REFERENCE.md` / `docs/openapi.yaml` for the full endpoint contract and `docs/OPERATIONS.md` for the full service/volume breakdown (including the worker/CLI environment variables) rather than re-deriving it here.
 
 ## Architecture
 

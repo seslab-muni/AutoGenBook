@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login */
+        post: operations["auth-login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -30,6 +47,40 @@ export interface paths {
         };
         /** Ready */
         get: operations["system-ready"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["auth-logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Me */
+        get: operations["auth-me"];
         put?: never;
         post?: never;
         delete?: never;
@@ -473,6 +524,13 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** LoginRequest */
+        LoginRequest: {
+            /** Email */
+            email: string;
+            /** Password */
+            password: string;
+        };
         /**
          * MathLevel
          * @enum {string}
@@ -788,6 +846,10 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Ownerid */
+            ownerId?: string | null;
+            /** Ownername */
+            ownerName?: string | null;
             /** Title */
             title: string;
             /** Subtitle */
@@ -880,6 +942,10 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Ownerid */
+            ownerId?: string | null;
+            /** Ownername */
+            ownerName?: string | null;
             /** Title */
             title: string;
             /** Subtitle */
@@ -979,6 +1045,10 @@ export interface components {
             finishedAt: string | null;
             /** Resumable */
             resumable: boolean;
+            /** Startedbyid */
+            startedById?: string | null;
+            /** Startedbyname */
+            startedByName?: string | null;
         };
         /** RunArtifact */
         RunArtifact: {
@@ -1221,6 +1291,18 @@ export interface components {
          * @enum {string}
          */
         TargetAudience: "undergraduate" | "graduate" | "phd_researcher" | "industry_practitioner";
+        /** UserOut */
+        UserOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Email */
+            email: string;
+            /** Displayname */
+            displayName: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1243,6 +1325,39 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    "auth-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     "system-health": {
         parameters: {
             query?: never;
@@ -1283,6 +1398,44 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    "auth-logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "auth-me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
                 };
             };
         };

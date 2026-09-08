@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.errors import Conflict, NotFound
 from api.domain.models import Run, RunEvent, RunOptions, RunStatus
-from api.infrastructure.db.models import RunEventRecord, RunRecord
+from api.infrastructure.db.models import RunEventRecord, RunRecord, UserRecord
 
 _ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
 
@@ -39,7 +39,7 @@ def _run_options_from_json(data: dict) -> RunOptions:
     return RunOptions(**{k: v for k, v in data.items() if k in _RUN_OPTIONS_FIELDS})
 
 
-def run_to_domain(record: RunRecord) -> Run:
+def run_to_domain(record: RunRecord, started_by_name: str | None = None) -> Run:
     return Run(
         id=record.id,
         project_id=record.project_id,
@@ -62,6 +62,8 @@ def run_to_domain(record: RunRecord) -> Run:
         total_cost_usd=(
             float(record.total_cost_usd) if record.total_cost_usd is not None else None
         ),
+        started_by=record.started_by,
+        started_by_name=started_by_name,
     )
 
 
@@ -84,6 +86,7 @@ def _apply_domain_to_record(run: Run, record: RunRecord) -> None:
     record.finished_at = run.finished_at
     record.total_tokens = run.total_tokens
     record.total_cost_usd = run.total_cost_usd
+    record.started_by = run.started_by
 
 
 class SqlAlchemyRunRepository:
@@ -91,8 +94,24 @@ class SqlAlchemyRunRepository:
         self._session = session
 
     async def get(self, run_id: uuid.UUID) -> Run | None:
-        record = await self._session.get(RunRecord, run_id)
-        return run_to_domain(record) if record is not None else None
+        row = (
+            await self._session.execute(
+                select(RunRecord, UserRecord.display_name)
+                .outerjoin(UserRecord, UserRecord.id == RunRecord.started_by)
+                .where(RunRecord.id == run_id)
+            )
+        ).first()
+        if row is None:
+            return None
+        record, started_by_name = row
+        return run_to_domain(record, started_by_name)
+
+    async def _started_by_name(self, started_by: uuid.UUID | None) -> str | None:
+        if started_by is None:
+            return None
+        return await self._session.scalar(
+            select(UserRecord.display_name).where(UserRecord.id == started_by)
+        )
 
     async def get_active_for_project(self, project_id: uuid.UUID) -> Run | None:
         record = await self._session.scalar(
@@ -115,13 +134,16 @@ class SqlAlchemyRunRepository:
             .where(RunRecord.project_id == project_id)
         )
         result = await self._session.execute(
-            select(RunRecord)
+            select(RunRecord, UserRecord.display_name)
+            .outerjoin(UserRecord, UserRecord.id == RunRecord.started_by)
             .where(RunRecord.project_id == project_id)
             .order_by(RunRecord.queued_at.desc())
             .limit(limit)
             .offset(offset)
         )
-        return [run_to_domain(record) for record in result.scalars().all()], total or 0
+        return [
+            run_to_domain(record, started_by_name) for record, started_by_name in result.all()
+        ], total or 0
 
     async def rollback(self) -> None:
         """Recover the shared session from a poisoned ("pending rollback")
@@ -149,7 +171,8 @@ class SqlAlchemyRunRepository:
                 f"project {run.project_id} already has an active run"
             ) from exc
         await self._session.refresh(record)
-        return run_to_domain(record)
+        started_by_name = await self._started_by_name(record.started_by)
+        return run_to_domain(record, started_by_name)
 
     async def update(self, run: Run) -> Run:
         record = await self._session.get(RunRecord, run.id)
@@ -163,7 +186,8 @@ class SqlAlchemyRunRepository:
         _apply_domain_to_record(run, record)
         await self._session.commit()
         await self._session.refresh(record)
-        return run_to_domain(record)
+        started_by_name = await self._started_by_name(record.started_by)
+        return run_to_domain(record, started_by_name)
 
     async def finalize(self, run: Run, *, expected_locked_by: str | None = None) -> Run | None:
         """Persist `run`'s terminal outcome (status/exit_code/error/
@@ -248,7 +272,8 @@ class SqlAlchemyRunRepository:
         if record is None:
             return None
         await self._session.refresh(record)
-        return run_to_domain(record)
+        started_by_name = await self._started_by_name(record.started_by)
+        return run_to_domain(record, started_by_name)
 
     async def list_stale_work_dirs(self, cutoff: datetime) -> list[str]:
         """`work_dir`s safe to `rmtree` for `sweep_stale_work_dirs`: a

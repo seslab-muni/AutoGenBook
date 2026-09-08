@@ -23,23 +23,23 @@ MINIMAL_PROJECT = {
 }
 
 
-async def _create_project(client: AsyncClient, **overrides) -> dict:
+async def _create_project(authed_client: AsyncClient, **overrides) -> dict:
     payload = {**MINIMAL_PROJECT, **overrides}
-    response = await client.post("/api/v1/projects", json=payload)
+    response = await authed_client.post("/api/v1/projects", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
 
-async def _create_run(client: AsyncClient, project_id: str, **overrides) -> dict:
-    response = await client.post(f"/api/v1/projects/{project_id}/runs", json=overrides)
+async def _create_run(authed_client: AsyncClient, project_id: str, **overrides) -> dict:
+    response = await authed_client.post(f"/api/v1/projects/{project_id}/runs", json=overrides)
     assert response.status_code == 202, response.text
     return response.json()
 
 
-async def test_create_run_applies_defaults_from_project(client: AsyncClient) -> None:
-    project = await _create_project(client, outputFormat="latex")
+async def test_create_run_applies_defaults_from_project(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client, outputFormat="latex")
 
-    body = await _create_run(client, project["id"])
+    body = await _create_run(authed_client, project["id"])
 
     assert uuid.UUID(body["id"])
     assert body["projectId"] == project["id"]
@@ -54,11 +54,11 @@ async def test_create_run_applies_defaults_from_project(client: AsyncClient) -> 
     assert body["queuedAt"]
 
 
-async def test_create_run_accepts_explicit_options(client: AsyncClient) -> None:
-    project = await _create_project(client)
+async def test_create_run_accepts_explicit_options(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
 
     body = await _create_run(
-        client,
+        authed_client,
         project["id"],
         outline="generate",
         outputFormat="pdf",
@@ -77,68 +77,68 @@ async def test_create_run_accepts_explicit_options(client: AsyncClient) -> None:
 
 
 async def test_create_run_does_not_set_project_last_run_id_before_it_succeeds(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
     """issue #66: `lastRunId` is only ever advanced by the worker once a run
     actually succeeds (`GenerationService._import_graph`/
     `_import_target_node`) - queueing one must not overwrite it eagerly, or
     a later failed/cancelled/still-queued run would permanently point
     `lastRunId` at something regenerate/export can't resume from."""
-    project = await _create_project(client)
-    await _create_run(client, project["id"])
+    project = await _create_project(authed_client)
+    await _create_run(authed_client, project["id"])
 
-    response = await client.get(f"/api/v1/projects/{project['id']}")
+    response = await authed_client.get(f"/api/v1/projects/{project['id']}")
     assert response.status_code == 200
     assert response.json()["lastRunId"] is None
 
 
-async def test_create_run_404_for_missing_project(client: AsyncClient) -> None:
-    response = await client.post(f"/api/v1/projects/{uuid.uuid4()}/runs", json={})
+async def test_create_run_404_for_missing_project(authed_client: AsyncClient) -> None:
+    response = await authed_client.post(f"/api/v1/projects/{uuid.uuid4()}/runs", json={})
     assert response.status_code == 404
 
 
-async def test_create_run_409_when_project_already_has_active_run(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    await _create_run(client, project["id"])
+async def test_create_run_409_when_project_already_has_active_run(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    await _create_run(authed_client, project["id"])
 
-    response = await client.post(f"/api/v1/projects/{project['id']}/runs", json={})
+    response = await authed_client.post(f"/api/v1/projects/{project['id']}/runs", json={})
     assert response.status_code == 409
 
 
-async def test_create_run_rejects_legacy_tex_with_markdown_output(client: AsyncClient) -> None:
+async def test_create_run_rejects_legacy_tex_with_markdown_output(authed_client: AsyncClient) -> None:
     # `legacyTex` + `outputFormat: "markdown"` used to "succeed" with no
     # document at all: `content_format="latex"` disables the Markdown
     # assembly path, and no `tex`/`pdf` output was requested either
     # (issue #79).
-    project = await _create_project(client, outputFormat="markdown")
+    project = await _create_project(authed_client, outputFormat="markdown")
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/runs",
         json={"legacyTex": True, "outputFormat": "markdown"},
     )
     assert response.status_code == 422, response.text
 
-    list_response = await client.get(f"/api/v1/projects/{project['id']}/runs")
+    list_response = await authed_client.get(f"/api/v1/projects/{project['id']}/runs")
     assert list_response.json()["total"] == 0
 
 
 async def test_create_run_rejects_legacy_tex_defaulting_to_project_markdown_format(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
-    project = await _create_project(client, outputFormat="markdown")
+    project = await _create_project(authed_client, outputFormat="markdown")
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/runs", json={"legacyTex": True}
     )
     assert response.status_code == 422, response.text
 
 
-async def test_create_run_rejects_audit_book_with_markdown_output(client: AsyncClient) -> None:
+async def test_create_run_rejects_audit_book_with_markdown_output(authed_client: AsyncClient) -> None:
     # `auditBook` needs a `tex_path` the markdown assembly path never
     # produces - the option used to be silently ignored (issue #79).
-    project = await _create_project(client, outputFormat="markdown")
+    project = await _create_project(authed_client, outputFormat="markdown")
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/runs",
         json={"auditBook": True, "outputFormat": "markdown"},
     )
@@ -146,63 +146,63 @@ async def test_create_run_rejects_audit_book_with_markdown_output(client: AsyncC
 
 
 async def test_create_run_allows_legacy_tex_and_audit_book_with_latex_output(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
-    project = await _create_project(client, outputFormat="markdown")
+    project = await _create_project(authed_client, outputFormat="markdown")
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/runs",
         json={"legacyTex": True, "auditBook": True, "outputFormat": "latex"},
     )
     assert response.status_code == 202, response.text
 
 
-async def test_get_run(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+async def test_get_run(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
-    response = await client.get(f"/api/v1/runs/{created['id']}")
+    response = await authed_client.get(f"/api/v1/runs/{created['id']}")
     assert response.status_code == 200
     assert response.json()["id"] == created["id"]
 
 
-async def test_get_run_404(client: AsyncClient) -> None:
-    response = await client.get(f"/api/v1/runs/{uuid.uuid4()}")
+async def test_get_run_404(authed_client: AsyncClient) -> None:
+    response = await authed_client.get(f"/api/v1/runs/{uuid.uuid4()}")
     assert response.status_code == 404
 
 
-async def test_list_runs_for_project(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+async def test_list_runs_for_project(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
-    response = await client.get(f"/api/v1/projects/{project['id']}/runs")
+    response = await authed_client.get(f"/api/v1/projects/{project['id']}/runs")
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 1
     assert body["items"][0]["id"] == created["id"]
 
 
-async def test_cancel_queued_run_is_immediately_cancelled(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+async def test_cancel_queued_run_is_immediately_cancelled(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
-    response = await client.post(f"/api/v1/runs/{created['id']}/cancel")
+    response = await authed_client.post(f"/api/v1/runs/{created['id']}/cancel")
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "cancelled"
 
 
-async def test_cancel_already_terminal_run_is_409(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
-    await client.post(f"/api/v1/runs/{created['id']}/cancel")
+async def test_cancel_already_terminal_run_is_409(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
+    await authed_client.post(f"/api/v1/runs/{created['id']}/cancel")
 
-    response = await client.post(f"/api/v1/runs/{created['id']}/cancel")
+    response = await authed_client.post(f"/api/v1/runs/{created['id']}/cancel")
     assert response.status_code == 409
 
 
 async def test_run_to_schema_stats_the_work_dir_off_the_event_loop(
-    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession], monkeypatch
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession], monkeypatch
 ) -> None:
     """Regression for issue #55: `run_to_schema`'s `resumable` field did a
     plain `Path(run.work_dir).is_dir()` - a blocking `stat(2)` against the
@@ -213,8 +213,8 @@ async def test_run_to_schema_stats_the_work_dir_off_the_event_loop(
 
     from api.presentation.schemas import runs as runs_schema_module
 
-    project = await _create_project(client)
-    await _create_run(client, project["id"])
+    project = await _create_project(authed_client)
+    await _create_run(authed_client, project["id"])
 
     main_thread = threading.current_thread()
     stat_threads: list[threading.Thread] = []
@@ -226,7 +226,7 @@ async def test_run_to_schema_stats_the_work_dir_off_the_event_loop(
 
     monkeypatch.setattr(runs_schema_module.Path, "is_dir", spy_is_dir)
 
-    response = await client.get(f"/api/v1/projects/{project['id']}/runs")
+    response = await authed_client.get(f"/api/v1/projects/{project['id']}/runs")
 
     assert response.status_code == 200
     assert stat_threads, "expected run_to_schema to check work_dir.is_dir()"
@@ -234,7 +234,7 @@ async def test_run_to_schema_stats_the_work_dir_off_the_event_loop(
 
 
 async def test_cancel_does_not_revert_a_run_the_worker_just_finished(
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -254,8 +254,8 @@ async def test_cancel_does_not_revert_a_run_the_worker_just_finished(
     session commits the run as `succeeded` - exactly as if the worker's own
     `_finalize` landed in that window.
     """
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
     run_id = uuid.UUID(created["id"])
 
     async with session_factory() as session:
@@ -296,7 +296,7 @@ async def test_cancel_does_not_revert_a_run_the_worker_just_finished(
         SqlAlchemyRunRepository, "request_cancel", _request_cancel_after_worker_finishes
     )
 
-    response = await client.post(f"/api/v1/runs/{run_id}/cancel")
+    response = await authed_client.post(f"/api/v1/runs/{run_id}/cancel")
 
     async with session_factory() as session:
         final = await SqlAlchemyRunRepository(session).get(run_id)
@@ -311,22 +311,22 @@ async def test_cancel_does_not_revert_a_run_the_worker_just_finished(
     assert final.total_tokens == 42
 
 
-async def test_cancel_run_404(client: AsyncClient) -> None:
-    response = await client.post(f"/api/v1/runs/{uuid.uuid4()}/cancel")
+async def test_cancel_run_404(authed_client: AsyncClient) -> None:
+    response = await authed_client.post(f"/api/v1/runs/{uuid.uuid4()}/cancel")
     assert response.status_code == 404
 
 
-async def test_cancel_queued_run_persists_a_done_event(client: AsyncClient) -> None:
+async def test_cancel_queued_run_persists_a_done_event(authed_client: AsyncClient) -> None:
     """issue #63: the worker's own `_finalize`/`_fail` (and its `_emit_done`)
     never run for a run cancelled while still `queued` - without this,
     `GET /runs/{id}/events` stayed empty forever and `.../events/stream`
     would poll forever waiting for a "done" event that was never coming."""
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
-    await client.post(f"/api/v1/runs/{created['id']}/cancel")
+    await authed_client.post(f"/api/v1/runs/{created['id']}/cancel")
 
-    response = await client.get(f"/api/v1/runs/{created['id']}/events")
+    response = await authed_client.get(f"/api/v1/runs/{created['id']}/events")
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 1
@@ -334,11 +334,11 @@ async def test_cancel_queued_run_persists_a_done_event(client: AsyncClient) -> N
     assert body["items"][0]["payload"]["status"] == "cancelled"
 
 
-async def test_list_run_events_empty_for_freshly_created_run(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+async def test_list_run_events_empty_for_freshly_created_run(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
-    response = await client.get(f"/api/v1/runs/{created['id']}/events")
+    response = await authed_client.get(f"/api/v1/runs/{created['id']}/events")
     assert response.status_code == 200
     body = response.json()
     assert body["items"] == []
@@ -346,16 +346,16 @@ async def test_list_run_events_empty_for_freshly_created_run(client: AsyncClient
 
 
 async def test_list_run_events_reports_after_seq_not_a_row_offset(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
     """Regression for issue #61: this endpoint pages by `seq`, not row
     position, so the response used to (mis)reuse `Page`'s `offset` field to
     carry `afterSeq` - it must have its own `afterSeq` field instead, with no
     misleading `offset` key at all."""
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
-    response = await client.get(
+    response = await authed_client.get(
         f"/api/v1/runs/{created['id']}/events", params={"afterSeq": 5}
     )
 
@@ -365,24 +365,24 @@ async def test_list_run_events_reports_after_seq_not_a_row_offset(
     assert "offset" not in body
 
 
-async def test_list_run_events_404_for_missing_run(client: AsyncClient) -> None:
-    response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/events")
+async def test_list_run_events_404_for_missing_run(authed_client: AsyncClient) -> None:
+    response = await authed_client.get(f"/api/v1/runs/{uuid.uuid4()}/events")
     assert response.status_code == 404
 
 
-async def test_list_run_artifacts_empty_for_freshly_created_run(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+async def test_list_run_artifacts_empty_for_freshly_created_run(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
-    response = await client.get(f"/api/v1/runs/{created['id']}/artifacts")
+    response = await authed_client.get(f"/api/v1/runs/{created['id']}/artifacts")
     assert response.status_code == 200
     body = response.json()
     assert body["items"] == []
     assert body["total"] == 0
 
 
-async def test_list_run_artifacts_404_for_missing_run(client: AsyncClient) -> None:
-    response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/artifacts")
+async def test_list_run_artifacts_404_for_missing_run(authed_client: AsyncClient) -> None:
+    response = await authed_client.get(f"/api/v1/runs/{uuid.uuid4()}/artifacts")
     assert response.status_code == 404
 
 
@@ -414,7 +414,7 @@ async def _add_artifact(
 
 
 async def test_list_run_artifacts_query_count_stays_flat_as_artifacts_grow(
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     count_statements,
 ) -> None:
@@ -425,14 +425,14 @@ async def test_list_run_artifacts_query_count_stays_flat_as_artifacts_grow(
     that into one `SELECT ... WHERE id IN (...)` instead, so the statement
     count for one page must stay flat regardless of how many artifacts are
     on it."""
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
     run_id = uuid.UUID(created["id"])
 
     await _add_artifact(session_factory, run_id, "sections/1.md")
 
     with count_statements() as statements:
-        response = await client.get(f"/api/v1/runs/{run_id}/artifacts")
+        response = await authed_client.get(f"/api/v1/runs/{run_id}/artifacts")
     assert response.status_code == 200
     assert response.json()["total"] == 1
     first_page_statement_count = len(statements)
@@ -441,21 +441,21 @@ async def test_list_run_artifacts_query_count_stays_flat_as_artifacts_grow(
         await _add_artifact(session_factory, run_id, f"sections/{i + 2}.md")
 
     with count_statements() as statements:
-        response = await client.get(f"/api/v1/runs/{run_id}/artifacts")
+        response = await authed_client.get(f"/api/v1/runs/{run_id}/artifacts")
     assert response.status_code == 200
     assert response.json()["total"] == 10
     assert len(statements) == first_page_statement_count
 
 
-async def test_get_run_resumable_false_before_execution(client: AsyncClient) -> None:
-    project = await _create_project(client)
-    created = await _create_run(client, project["id"])
+async def test_get_run_resumable_false_before_execution(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    created = await _create_run(authed_client, project["id"])
 
     assert created["resumable"] is False
 
 
 async def test_run_repository_update_raises_not_found_when_row_vanishes(
-    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     """Regression for issue #62: `SqlAlchemyRunRepository.update` used to
     `assert record is not None` when the row disappeared between the
@@ -463,8 +463,8 @@ async def test_run_repository_update_raises_not_found_when_row_vanishes(
     `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
     entirely and lets the next line raise a confusing `AttributeError`
     instead). Must raise a proper `NotFound` (404-mapped) error instead."""
-    project = await _create_project(client)
-    run = await _create_run(client, project["id"])
+    project = await _create_project(authed_client)
+    run = await _create_run(authed_client, project["id"])
     run_id = uuid.UUID(run["id"])
 
     async with session_factory() as session:

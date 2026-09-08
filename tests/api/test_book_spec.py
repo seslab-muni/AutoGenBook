@@ -233,28 +233,28 @@ MINIMAL_PROJECT = {
 }
 
 
-async def _create_project(client: AsyncClient, **overrides) -> dict:
+async def _create_project(authed_client: AsyncClient, **overrides) -> dict:
     payload = {**MINIMAL_PROJECT, **overrides}
-    response = await client.post("/api/v1/projects", json=payload)
+    response = await authed_client.post("/api/v1/projects", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
 
-async def _create_node(client: AsyncClient, project_id: str, **overrides) -> dict:
+async def _create_node(authed_client: AsyncClient, project_id: str, **overrides) -> dict:
     payload = {"title": "Chapter One", "parentId": None, **overrides}
-    response = await client.post(f"/api/v1/projects/{project_id}/outline", json=payload)
+    response = await authed_client.post(f"/api/v1/projects/{project_id}/outline", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
 
 async def test_get_spec_json_returns_structure_matching_golden_shape(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
     golden = json.loads(GOLDEN_STRUCTURE.read_text(encoding="utf-8"))
-    project = await _create_project(client)
-    await _create_node(client, project["id"], title="Chapter One", targetPages=3)
+    project = await _create_project(authed_client)
+    await _create_node(authed_client, project["id"], title="Chapter One", targetPages=3)
 
-    response = await client.get(f"/api/v1/projects/{project['id']}/spec?format=json")
+    response = await authed_client.get(f"/api/v1/projects/{project['id']}/spec?format=json")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
@@ -265,12 +265,12 @@ async def test_get_spec_json_returns_structure_matching_golden_shape(
 
 
 async def test_get_spec_txt_default_returns_plain_text_with_outline(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
-    project = await _create_project(client)
-    await _create_node(client, project["id"], title="Chapter One")
+    project = await _create_project(authed_client)
+    await _create_node(authed_client, project["id"], title="Chapter One")
 
-    response = await client.get(f"/api/v1/projects/{project['id']}/spec")
+    response = await authed_client.get(f"/api/v1/projects/{project['id']}/spec")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
@@ -279,12 +279,12 @@ async def test_get_spec_txt_default_returns_plain_text_with_outline(
 
 
 async def test_get_spec_txt_include_outline_false_omits_headings(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
-    project = await _create_project(client)
-    await _create_node(client, project["id"], title="Chapter One")
+    project = await _create_project(authed_client)
+    await _create_node(authed_client, project["id"], title="Chapter One")
 
-    response = await client.get(
+    response = await authed_client.get(
         f"/api/v1/projects/{project['id']}/spec?includeOutline=false"
     )
 
@@ -292,7 +292,7 @@ async def test_get_spec_txt_include_outline_false_omits_headings(
     assert "Chapter One" not in response.text
 
 
-async def test_get_spec_404_for_unknown_project(client: AsyncClient) -> None:
-    response = await client.get(f"/api/v1/projects/{uuid.uuid4()}/spec")
+async def test_get_spec_404_for_unknown_project(authed_client: AsyncClient) -> None:
+    response = await authed_client.get(f"/api/v1/projects/{uuid.uuid4()}/spec")
 
     assert response.status_code == 404

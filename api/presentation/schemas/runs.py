@@ -95,6 +95,8 @@ class Run(BaseSchema):
     # after the run finished) - a `regenerate`/`export` run (issue #11) can
     # no longer reuse this run as its base.
     resumable: bool
+    started_by_id: uuid.UUID | None = None
+    started_by_name: str | None = None
 
 
 class RunEvent(BaseSchema):
@@ -141,6 +143,8 @@ async def run_to_schema(run: RunDomain) -> Run:
         started_at=run.started_at,
         finished_at=run.finished_at,
         resumable=resumable,
+        started_by_id=run.started_by,
+        started_by_name=run.started_by_name,
     )
 
 

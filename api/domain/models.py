@@ -44,6 +44,12 @@ class Project:
     last_run_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    # Derived, never persisted on this row: `owner_id`'s matching
+    # `users.display_name` at read time, joined in by the repository
+    # (`SqlAlchemyProjectRepository`) rather than looked up per-row by a
+    # service - `None` for a legacy project (`owner_id IS NULL`) or one
+    # whose owner account no longer exists.
+    owner_name: str | None = None
 
 
 @dataclass
@@ -58,6 +64,20 @@ class ProjectSummary:
     sources_count: int
     outline_node_count: int
     last_run_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+    owner_id: uuid.UUID | None = None
+    owner_name: str | None = None
+
+
+@dataclass
+class User:
+    id: uuid.UUID
+    email: str
+    display_name: str
+    password_hash: str
+    is_active: bool
+    password_changed_at: datetime
     created_at: datetime
     updated_at: datetime
 
@@ -311,3 +331,7 @@ class Run:
     finished_at: datetime | None
     total_tokens: int | None
     total_cost_usd: float | None
+    started_by: uuid.UUID | None = None
+    # Derived, never persisted - see `Project.owner_name`'s docstring; joined
+    # in by `SqlAlchemyRunRepository`.
+    started_by_name: str | None = None

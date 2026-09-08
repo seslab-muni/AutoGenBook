@@ -45,7 +45,7 @@ def _settings(tmp_path: Path) -> Settings:
 
 async def test_sse_stream_shows_section_and_done_events(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -56,11 +56,11 @@ async def test_sse_stream_shows_section_and_done_events(
     # instead of the container-only default `/app/runs`.
     app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
 
-    project_response = await client.post("/api/v1/projects", json=MINIMAL_PROJECT)
+    project_response = await authed_client.post("/api/v1/projects", json=MINIMAL_PROJECT)
     assert project_response.status_code == 201
     project_id = project_response.json()["id"]
 
-    run_response = await client.post(
+    run_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/runs", json={"outline": "generate"}
     )
     assert run_response.status_code == 202
@@ -93,7 +93,7 @@ async def test_sse_stream_shows_section_and_done_events(
     generation_task = asyncio.create_task(drive_generation())
 
     seen_stages: list[str] = []
-    async with client.stream("GET", f"/api/v1/runs/{run_id}/events/stream") as response:
+    async with authed_client.stream("GET", f"/api/v1/runs/{run_id}/events/stream") as response:
         assert response.status_code == 200
         async for line in response.aiter_lines():
             if line.startswith("event:"):
@@ -109,7 +109,7 @@ async def test_sse_stream_shows_section_and_done_events(
 
 async def test_sse_stream_terminates_on_terminal_run_status_without_a_done_event(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
@@ -124,9 +124,9 @@ async def test_sse_stream_terminates_on_terminal_run_status_without_a_done_event
     pre-fix generator "polls forever" would itself hang the test suite."""
     app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
 
-    project_response = await client.post("/api/v1/projects", json=MINIMAL_PROJECT)
+    project_response = await authed_client.post("/api/v1/projects", json=MINIMAL_PROJECT)
     project_id = project_response.json()["id"]
-    run_response = await client.post(
+    run_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/runs", json={"outline": "generate"}
     )
     run_id = uuid.UUID(run_response.json()["id"])

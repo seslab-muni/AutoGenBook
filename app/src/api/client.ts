@@ -1,5 +1,8 @@
 import createClient, { type Middleware } from 'openapi-fetch';
 
+import { authKeys } from '@/api/queries/keys';
+import { queryClient } from '@/app/query-client';
+import { router } from '@/app/router';
 import { getAuthHeaders } from '@/auth/session';
 
 import type { paths } from './schema.gen';
@@ -70,6 +73,23 @@ const requestMiddleware: Middleware = {
   },
 };
 
+/**
+ * A 401 on any request other than `/auth/login` itself means the session died (expired, or
+ * signed out in another tab) — not a normal "wrong password" (that 401 is login's own, handled
+ * inline by the login form). Clears the cached `auth.me()` and sends the user back to `/login`
+ * with the page they were on so a fresh sign-in returns them there.
+ */
+const responseMiddleware: Middleware = {
+  onResponse({ response, schemaPath }) {
+    if (response.status === 401 && schemaPath !== '/api/v1/auth/login') {
+      queryClient.removeQueries({ queryKey: authKeys.all });
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      void router.navigate({ to: '/login', search: { redirect: current } });
+    }
+    return response;
+  },
+};
+
 export const apiClient = createClient<paths>({
   baseUrl: apiBaseUrl,
   // openapi-fetch resolves its default `fetch` once, at client-construction time — this wraps
@@ -78,6 +98,7 @@ export const apiClient = createClient<paths>({
   fetch: (input) => globalThis.fetch(input),
 });
 apiClient.use(requestMiddleware);
+apiClient.use(responseMiddleware);
 
 interface FetchResult<T> {
   data?: T;

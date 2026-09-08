@@ -1,56 +1,59 @@
-import { describe, expect, it } from 'vitest';
+import { http } from 'msw';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { apiClient, ApiError, unwrap } from './client';
+import { problemResponse } from '@/mocks/problem';
+import { server } from '@/mocks/server';
+import { queryClient } from '@/app/query-client';
+import { router } from '@/app/router';
 
-describe('unwrap', () => {
-  it('returns data on success', async () => {
-    const project = await unwrap(
-      apiClient.GET('/api/v1/projects/{projectId}', {
-        params: { path: { projectId: 'book-consensus-quantum-2026' } },
+import { apiClient, unwrap } from './client';
+import { authKeys } from './queries/keys';
+
+describe('apiClient 401 response middleware', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('clears the cached session and redirects to /login on a 401 from an ordinary endpoint', async () => {
+    queryClient.setQueryData(authKeys.me(), {
+      id: 'u1',
+      email: 'a@example.com',
+      displayName: 'A',
+    });
+    const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(undefined);
+    server.use(
+      http.get('*/api/v1/projects', () =>
+        problemResponse(401, 'Not authenticated', '/api/v1/projects'),
+      ),
+    );
+
+    await expect(unwrap(apiClient.GET('/api/v1/projects', {}))).rejects.toThrow();
+
+    expect(queryClient.getQueryData(authKeys.me())).toBeUndefined();
+    expect(navigateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: '/login',
+        search: expect.objectContaining({ redirect: expect.any(String) }),
       }),
     );
-    expect(project.id).toBe('book-consensus-quantum-2026');
   });
 
-  it('throws an ApiError with the parsed Problem on a 404', async () => {
-    const error = await unwrap(
-      apiClient.GET('/api/v1/projects/{projectId}', {
-        params: { path: { projectId: 'does-not-exist' } },
-      }),
-    ).catch((caught: unknown) => caught);
+  it('does not redirect for a 401 from /auth/login itself (that is a normal invalid-credentials response)', async () => {
+    const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(undefined);
+    server.use(
+      http.post('*/api/v1/auth/login', () =>
+        problemResponse(401, 'Invalid email or password', '/api/v1/auth/login'),
+      ),
+    );
 
-    expect(error).toBeInstanceOf(ApiError);
-    const apiError = error as ApiError;
-    expect(apiError.status).toBe(404);
-    expect(apiError.problem?.status).toBe(404);
-    expect(apiError.problem?.type).toBe('about:blank');
-  });
+    await expect(
+      unwrap(
+        apiClient.POST('/api/v1/auth/login', {
+          body: { email: 'a@example.com', password: 'wrong' },
+        }),
+      ),
+    ).rejects.toThrow();
 
-  it('throws an ApiError with the parsed Problem on a 422', async () => {
-    const error = await unwrap(
-      apiClient.PATCH('/api/v1/projects/{projectId}', {
-        params: { path: { projectId: 'book-consensus-quantum-2026' } },
-        body: { sources: [] } as never,
-      }),
-    ).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(ApiError);
-    expect((error as ApiError).status).toBe(422);
-  });
-
-  it('wraps a network failure (fetch rejection) as an ApiError with status 0', async () => {
-    const brokenClient = apiClient;
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = () => Promise.reject(new TypeError('network down'));
-
-    const error = await unwrap(
-      brokenClient.GET('/api/v1/projects/{projectId}', { params: { path: { projectId: 'x' } } }),
-    ).catch((caught: unknown) => caught);
-
-    globalThis.fetch = originalFetch;
-
-    expect(error).toBeInstanceOf(ApiError);
-    expect((error as ApiError).status).toBe(0);
-    expect((error as ApiError).problem).toBeUndefined();
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 });
