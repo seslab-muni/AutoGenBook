@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     s3_secret_key: str = Field(default="change-this-secret", alias="S3_SECRET_KEY")
     s3_bucket: str = Field(default="autogenbook", alias="S3_BUCKET")
 
+    # Not read by the API for anything functional - `docker-compose.yml`'s
+    # `web` service alone binds this host (nginx is the only container
+    # exposed to the host network; see its `ports:` comment for issue #50),
+    # and forwards it here only so `default_credentials_warning` below can
+    # tell whether this deployment is reachable beyond localhost.
+    web_bind_host: str = Field(default="127.0.0.1", alias="WEB_BIND_HOST")
+
     runs_dir: str = Field(default="/app/runs", alias="RUNS_DIR")
     max_upload_mb: int = Field(default=200, alias="MAX_UPLOAD_MB")
 
@@ -64,3 +71,34 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+DEFAULT_S3_SECRET_KEY = "change-this-secret"
+# Loopback forms nginx's own `WEB_BIND_HOST` default/docs treat as "not
+# exposed to the network" (docker-compose.yml's `web.ports` comment, issue
+# #50) - kept in sync with that, not an exhaustive list of every way a host
+# can mean "local only" (e.g. it doesn't special-case IPv6-mapped IPv4).
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def default_credentials_warning(settings: Settings) -> str | None:
+    """Return a human-readable warning if `settings` still has the baked-in
+    default S3/MinIO secret *and* the stack is bound beyond loopback (i.e.
+    actually reachable from a network), or `None` if the deployment looks
+    safe. A separate, explicitly-called function (not a validator) so it can
+    be unit-tested directly and so the API can log rather than fail to boot -
+    the default is intentionally fine for local dev.
+    """
+    if settings.s3_secret_key != DEFAULT_S3_SECRET_KEY:
+        return None
+    bind_host = settings.web_bind_host.strip().lower()
+    if bind_host in _LOOPBACK_HOSTS:
+        return None
+    return (
+        "SECURITY WARNING: S3_SECRET_KEY is still the default "
+        f"({DEFAULT_S3_SECRET_KEY!r}) and WEB_BIND_HOST="
+        f"{settings.web_bind_host!r} exposes this stack beyond localhost. "
+        "Set a real S3_ACCESS_KEY/S3_SECRET_KEY (and MinIO's matching "
+        "MINIO_ROOT_USER/MINIO_ROOT_PASSWORD) before exposing this "
+        "deployment to a network."
+    )

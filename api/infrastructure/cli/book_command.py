@@ -56,6 +56,23 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "AUTOGENBOOK_KB_OCR",
     "AUTOGENBOOK_KB_OCR_LANG",
     "TAVILY_API_KEY",
+    # OpenRouter client tuning (openrouter_llm.py) - not overridden by
+    # `main.py`'s import-time env writes, so a parent-set value reaches the
+    # client unlike OPENROUTER_INPUT_COST_PER_M/OPENROUTER_OUTPUT_COST_PER_M.
+    "OPENROUTER_BASE_URL",
+    "OPENROUTER_HTTP_REFERER",
+    "OPENROUTER_X_TITLE",
+    "OPENROUTER_MAX_RETRIES",
+    "OPENROUTER_PRICING_DISABLE",
+    "OPENROUTER_PRICING_FUZZY",
+    "OPENROUTER_PRICING_TIMEOUT",
+    # Outbound proxy settings, needed for the CLI subprocess to reach the
+    # LLM/Tavily endpoints from inside the worker/api container when the
+    # deployment sits behind a corporate proxy.
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "SSL_CERT_FILE",
     "PATH",
     "HOME",
     "LANG",

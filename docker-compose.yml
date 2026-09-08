@@ -6,9 +6,25 @@ x-cli-env: &cli-env
   AUTOGENBOOK_LLM_MINI_MODEL: ${AUTOGENBOOK_LLM_MINI_MODEL:-}
   AUTOGENBOOK_FORCE_MINI_MODEL: ${AUTOGENBOOK_FORCE_MINI_MODEL:-}
   TAVILY_API_KEY: ${TAVILY_API_KEY:-}
-  MCP_GATEWAY_ENABLE: ${MCP_GATEWAY_ENABLE:-0}
   AUTOGENBOOK_KB_OCR: ${AUTOGENBOOK_KB_OCR:-1}
   AUTOGENBOOK_KB_OCR_LANG: ${AUTOGENBOOK_KB_OCR_LANG:-eng}
+  # OpenRouter client tuning (openrouter_llm.py) and outbound proxy settings -
+  # needed for the CLI subprocess (run inside the worker/api container) to
+  # reach the LLM/Tavily endpoints from behind a corporate proxy. Forwarded
+  # here and then on into the CLI subprocess by `book_command.py`'s
+  # `ENV_ALLOWLIST` (see the hotfix commits for AUTOGENBOOK_LLM_MODEL/
+  # AUTOGENBOOK_KB_OCR for the established pattern).
+  OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+  OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-}
+  OPENROUTER_X_TITLE: ${OPENROUTER_X_TITLE:-}
+  OPENROUTER_MAX_RETRIES: ${OPENROUTER_MAX_RETRIES:-}
+  OPENROUTER_PRICING_DISABLE: ${OPENROUTER_PRICING_DISABLE:-}
+  OPENROUTER_PRICING_FUZZY: ${OPENROUTER_PRICING_FUZZY:-}
+  OPENROUTER_PRICING_TIMEOUT: ${OPENROUTER_PRICING_TIMEOUT:-}
+  HTTPS_PROXY: ${HTTPS_PROXY:-}
+  HTTP_PROXY: ${HTTP_PROXY:-}
+  NO_PROXY: ${NO_PROXY:-}
+  SSL_CERT_FILE: ${SSL_CERT_FILE:-}
 
 x-app-env: &app-env
   <<: *cli-env
@@ -36,19 +52,41 @@ services:
       # default so the stack isn't reachable from the network out of the
       # box. Set WEB_BIND_HOST=0.0.0.0 (and put a real auth/proxy layer in
       # front) to expose it beyond the host.
-      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-8080}:80"
+      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     depends_on:
       api:
         condition: service_healthy
     networks:
       - frontend
 
+  # One-shot migration runner (same pattern as `minio-init` below): applies
+  # `alembic upgrade head` and exits, so `api`/`worker` can depend on it
+  # completing successfully instead of racing each other to migrate (or, in
+  # the worker's case, polling a DB whose tables don't exist yet and logging
+  # a traceback every `WORKER_POLL_INTERVAL_S` until `api` finishes them).
+  migrate:
+    build:
+      context: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-autogenbook}:${POSTGRES_PASSWORD:-autogenbook}@db:5432/${POSTGRES_DB:-autogenbook}
+    command: alembic -c api/alembic.ini upgrade head
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+
   api:
     build:
       context: .
     environment:
       <<: *app-env
-    command: sh -c "alembic -c api/alembic.ini upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"
+      # Not used to bind anything here - forwarded only so the startup
+      # default-credentials check (api/core/settings.py) can tell whether
+      # `web` (the only container actually exposed to the host, see its
+      # `ports:` comment below) is reachable beyond localhost.
+      WEB_BIND_HOST: ${WEB_BIND_HOST:-127.0.0.1}
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     expose:
       - "8000"
     volumes:
@@ -58,6 +96,9 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready')"]
       interval: 10s
@@ -99,6 +140,8 @@ services:
       db:
         condition: service_healthy
       minio-init:
+        condition: service_completed_successfully
+      migrate:
         condition: service_completed_successfully
     restart: unless-stopped
     networks:

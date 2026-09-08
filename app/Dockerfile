@@ -14,4 +14,14 @@ FROM nginx:1.27-alpine
 # with `MAX_UPLOAD_MB` (issue #47) without a custom entrypoint script.
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
+
+# Run as the image's built-in non-root `nginx` user instead of root. Binding
+# a port < 1024 as non-root needs CAP_NET_BIND_SERVICE, so the vhost listens
+# on 8080 instead of 80 (see nginx.conf.template and docker-compose.yml's
+# `web` port mapping, which maps the host-facing port to this container port).
+RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx /etc/nginx/conf.d \
+    && touch /var/run/nginx.pid \
+    && chown nginx:nginx /var/run/nginx.pid
+USER nginx
+
+EXPOSE 8080
