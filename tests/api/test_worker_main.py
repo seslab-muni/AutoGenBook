@@ -101,9 +101,11 @@ class _FakeGenerationService:
         self.execute_result = execute_result
         self.execute_exception = execute_exception
         self.executed_runs: list[Run] = []
+        self.shutdown_events: list = []
 
-    async def execute(self, run: Run) -> Run:
+    async def execute(self, run: Run, *, shutdown_event=None) -> Run:
         self.executed_runs.append(run)
+        self.shutdown_events.append(shutdown_event)
         if self.execute_exception is not None:
             raise self.execute_exception
         return self.execute_result if self.execute_result is not None else run
@@ -154,6 +156,30 @@ async def test_claim_and_execute_runs_service_and_returns_true(
 
     assert claimed is True
     assert fake_service.executed_runs == [run]
+
+
+async def test_claim_and_execute_passes_stop_event_through_as_shutdown_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for issue #52: `execute` needs the slot's `stop_event` to
+    tear an in-flight CLI subprocess down promptly on SIGTERM instead of
+    blocking the whole slot until the run finishes on its own - which
+    means `_claim_and_execute` must actually forward it."""
+    run = _make_run()
+    fake_queue = _FakeRunQueue(claim_return=run)
+    fake_service = _FakeGenerationService(execute_result=_make_run(status=RunStatus.succeeded))
+    _patch_queue(monkeypatch, fake_queue)
+    _patch_service(monkeypatch, fake_service)
+
+    stop_event = asyncio.Event()
+
+    claimed = await worker_main._claim_and_execute(
+        _fake_session_factory, storage=None, settings=_settings(), worker_id="w:0",
+        stop_event=stop_event,
+    )
+
+    assert claimed is True
+    assert fake_service.shutdown_events == [stop_event]
 
 
 async def test_claim_and_execute_swallows_service_exception_but_still_returns_true(
@@ -229,6 +255,38 @@ async def test_worker_slot_zero_sweeps_stale_runs_and_work_dirs_when_idle(
     assert sweep_calls == [30]
 
 
+async def test_worker_slot_zero_sweeps_orphaned_work_dirs_when_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue #57: the orphan-work-dir sweep (finds directories under
+    `RUNS_DIR` no `runs` row references at all, regardless of status) runs
+    on the same idle cycle as `sweep_stale_work_dirs`, on slot 0 only."""
+    fake_queue = _FakeRunQueue(claim_return=None)
+    _patch_queue(monkeypatch, fake_queue)
+
+    orphan_calls: list[str] = []
+
+    async def _fake_orphan_sweep(run_repository, runs_dir):
+        orphan_calls.append(runs_dir)
+        return 1
+
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fake_orphan_sweep)
+
+    stop_event = asyncio.Event()
+
+    async def _fake_claim_and_execute(*args, **kwargs):
+        stop_event.set()
+        return False
+
+    monkeypatch.setattr(worker_main, "_claim_and_execute", _fake_claim_and_execute)
+
+    await worker_main._worker_slot(
+        0, _fake_session_factory, None, _settings(runs_dir="/app/runs"), stop_event
+    )
+
+    assert orphan_calls == ["/app/runs"]
+
+
 async def test_worker_slot_nonzero_never_sweeps(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_queue = _FakeRunQueue(claim_return=None)
     _patch_queue(monkeypatch, fake_queue)
@@ -237,6 +295,11 @@ async def test_worker_slot_nonzero_never_sweeps(monkeypatch: pytest.MonkeyPatch)
         raise AssertionError("sweep_stale_work_dirs must only run on slot 0")
 
     monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fail_if_called)
+
+    async def _fail_if_orphan_sweep_called(*args, **kwargs):
+        raise AssertionError("sweep_orphaned_work_dirs must only run on slot 0")
+
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fail_if_orphan_sweep_called)
 
     stop_event = asyncio.Event()
 

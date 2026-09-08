@@ -55,6 +55,12 @@ async def get_file_content(
         "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
         "Content-Length": str(file.size_bytes),
         "ETag": f'"{file.sha256}"',
+        # `content_type` is whatever the uploader claimed at upload time
+        # (`FileService.upload`), echoed straight back here - without this,
+        # a browser sniffing the body's actual bytes instead of trusting a
+        # mismatched Content-Type is exactly the MIME-sniffing vector this
+        # header exists to shut off (issue #59).
+        "X-Content-Type-Options": "nosniff",
     }
     return StreamingResponse(chunks, media_type=file.content_type, headers=headers)
 

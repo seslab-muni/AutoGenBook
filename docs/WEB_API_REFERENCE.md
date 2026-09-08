@@ -6,7 +6,7 @@ This is a different document from [`API_REFERENCE.md`](API_REFERENCE.md), which 
 
 ## Status
 
-Every endpoint below is implemented in `api/` today and covered by `tests/api/`. `docs/openapi.yaml` is a **generated artifact** (`scripts/export_openapi.py`, dumping `api.main:create_app().openapi()`) — regenerate it after any router/schema change instead of hand-editing it; this file carries the request/response prose and design notes the raw schema doesn't.
+Every endpoint below is implemented in `api/` today and has request/response coverage in `tests/api/` (some cross-cutting concerns — `Last-Event-ID` resume semantics on the SSE stream, the `worker` process itself, and the real MinIO/S3 adapter behind the storage interface — are exercised only indirectly or with fakes, not end-to-end). `docs/openapi.yaml` is a **generated artifact** (`scripts/export_openapi.py`, dumping `api.main:create_app().openapi()`) — regenerate it after any router/schema change instead of hand-editing it; this file carries the request/response prose and design notes the raw schema doesn't.
 
 ## Transport & deployment notes
 

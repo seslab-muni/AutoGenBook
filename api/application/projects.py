@@ -4,14 +4,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from api.core.errors import NotFound
+from api.core.errors import Conflict, NotFound
 from api.domain.models import OutputFormat, Project, ProjectSummary, TargetAudience
-from api.domain.ports import ProjectRepository
+from api.domain.ports import ProjectRepository, RunRepository
 
 
 class ProjectService:
-    def __init__(self, repository: ProjectRepository) -> None:
+    def __init__(self, repository: ProjectRepository, run_repository: RunRepository) -> None:
         self._repository = repository
+        self._run_repository = run_repository
 
     async def create(
         self,
@@ -84,10 +85,28 @@ class ProjectService:
         for field_name, value in changes.items():
             setattr(project, field_name, value)
         project.updated_at = datetime.now(timezone.utc)
-        return await self._repository.update(project)
+        # Only the columns this request actually changed - `RunService.
+        # create`/`GenerationService._import_graph` bumping just
+        # `last_run_id` on their own (possibly concurrent) read of this
+        # project must not have that reverted by this write's stale copy
+        # of it (issue #56).
+        return await self._repository.update(project, fields=tuple(changes.keys()))
 
     async def delete(self, project_id: uuid.UUID) -> None:
         await self.get(project_id)
+        # Refuse while a run is still active for this project (issue #57):
+        # deleting out from under it used to let `DELETE` return 204 while
+        # the run row (and the work directory nothing else references
+        # anymore) vanished from under the worker's still-running CLI
+        # subprocess - `append_batch`/`_finalize` then hit an FK violation
+        # or an `assert record is not None` against a row that no longer
+        # existed, leaving that subprocess running unattended.
+        active = await self._run_repository.get_active_for_project(project_id)
+        if active is not None:
+            raise Conflict(
+                f"project {project_id} has an active run ({active.id}, "
+                f"status={active.status.value}); cancel it before deleting the project"
+            )
         await self._repository.delete(project_id)
 
     async def duplicate(self, project_id: uuid.UUID) -> Project:

@@ -6,7 +6,7 @@ import os
 import signal
 import socket
 
-from api.application.runs import GenerationService, sweep_stale_work_dirs
+from api.application.runs import GenerationService, sweep_orphaned_work_dirs, sweep_stale_work_dirs
 from api.core.db import get_sessionmaker
 from api.core.settings import get_settings
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
@@ -27,11 +27,21 @@ logger = logging.getLogger("api.worker")
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 
 
-async def _claim_and_execute(session_factory, storage, settings, worker_id: str) -> bool:
+async def _claim_and_execute(
+    session_factory, storage, settings, worker_id: str, stop_event: asyncio.Event | None = None
+) -> bool:
     """Claim one queued run (if any) and drive it to completion. Each call
     opens its own session/repositories, scoped to just this run - a run's
     DB work happens on one connection, held for as long as `execute` takes
-    (potentially the whole CLI run), never shared across concurrent slots."""
+    (potentially the whole CLI run), never shared across concurrent slots.
+
+    `stop_event`, when given, is passed through to `GenerationService.
+    execute` as its `shutdown_event` - on SIGTERM, this lets a run already
+    in flight have its CLI subprocess torn down and handed back to the
+    queue right away instead of blocking `execute()` (and this whole slot)
+    until it would otherwise finish, which used to leave the container
+    running well past compose's `stop_grace_period` and get SIGKILLed with
+    the run stuck `running` (issue #52)."""
     async with session_factory() as session:
         run = await SqlAlchemyRunQueue(session).claim(worker_id)
     if run is None:
@@ -50,9 +60,10 @@ async def _claim_and_execute(session_factory, storage, settings, worker_id: str)
             file_storage=storage,
             run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
             settings=settings,
+            worker_id=worker_id,
         )
         try:
-            finished = await service.execute(run)
+            finished = await service.execute(run, shutdown_event=stop_event)
             logger.info("run %s finished: status=%s exit_code=%s", finished.id, finished.status.value, finished.exit_code)
         except Exception:  # noqa: BLE001 - keep the slot alive for the next run
             logger.exception("run %s raised an unhandled error", run.id)
@@ -63,7 +74,7 @@ async def _worker_slot(slot: int, session_factory, storage, settings, stop_event
     worker_id = f"{WORKER_ID}:{slot}"
     while not stop_event.is_set():
         try:
-            claimed = await _claim_and_execute(session_factory, storage, settings, worker_id)
+            claimed = await _claim_and_execute(session_factory, storage, settings, worker_id, stop_event)
         except Exception:  # noqa: BLE001 - a claim/DB hiccup shouldn't kill the slot
             logger.exception("worker slot %s: error while polling/claiming", slot)
             claimed = False
@@ -87,6 +98,16 @@ async def _worker_slot(slot: int, session_factory, storage, settings, stop_event
                     logger.info("removed %s stale work dir(s)", removed)
             except Exception:  # noqa: BLE001
                 logger.exception("worker slot %s: error while sweeping stale work dirs", slot)
+
+            try:
+                async with session_factory() as session:
+                    orphaned = await sweep_orphaned_work_dirs(
+                        SqlAlchemyRunRepository(session), settings.runs_dir
+                    )
+                if orphaned:
+                    logger.info("removed %s orphaned work dir(s)", orphaned)
+            except Exception:  # noqa: BLE001
+                logger.exception("worker slot %s: error while sweeping orphaned work dirs", slot)
 
         if not claimed and not stop_event.is_set():
             try:

@@ -5,9 +5,10 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.errors import NotFound
+from api.core.errors import Conflict, NotFound
 from api.domain.models import OutlineNode
 from api.infrastructure.db.models import OutlineNodeRecord
 
@@ -49,26 +50,41 @@ def _to_domain(record: OutlineNodeRecord) -> OutlineNode:
     )
 
 
-def _apply_domain_to_record(node: OutlineNode, record: OutlineNodeRecord) -> None:
-    record.project_id = node.project_id
-    record.parent_id = node.parent_id
-    record.order_index = node.order_index
-    record.cli_key = node.cli_key
-    record.title = node.title
-    record.summary = node.summary
-    record.status = node.status
-    record.target_pages = node.target_pages
-    record.word_budget = node.word_budget
-    record.actual_words = node.actual_words
-    record.equation_density_level = node.equation_density_level
-    record.math_level = node.math_level
-    record.sub_prompt = node.sub_prompt
-    record.content_markdown = node.content_markdown
-    record.content_latex = node.content_latex
-    record.rag_citations = node.rag_citations
-    record.reviewer_score = node.reviewer_score
-    record.reviewer_notes = node.reviewer_notes
-    record.structure_locked = node.structure_locked
+_ALL_MUTABLE_FIELDS = (
+    "project_id",
+    "parent_id",
+    "order_index",
+    "cli_key",
+    "title",
+    "summary",
+    "status",
+    "target_pages",
+    "word_budget",
+    "actual_words",
+    "equation_density_level",
+    "math_level",
+    "sub_prompt",
+    "content_markdown",
+    "content_latex",
+    "rag_citations",
+    "reviewer_score",
+    "reviewer_notes",
+    "structure_locked",
+)
+
+
+def _apply_domain_to_record(
+    node: OutlineNode, record: OutlineNodeRecord, *, fields: Sequence[str] | None = None
+) -> None:
+    """Copy `node`'s columns onto `record`. `fields`, when given, limits
+    this to just those attributes (plus `updated_at`, always) instead of
+    every column - so two concurrent updates to different fields of the
+    same node (e.g. a debounced content autosave racing a `structureLocked`
+    toggle, issue #56) don't each overwrite the other's change with their
+    own stale copy of it."""
+    names = _ALL_MUTABLE_FIELDS if fields is None else fields
+    for name in names:
+        setattr(record, name, getattr(node, name))
     record.updated_at = node.updated_at
 
 
@@ -115,15 +131,30 @@ class SqlAlchemyOutlineRepository:
         _apply_domain_to_record(node, record)
         record.created_at = node.created_at
         self._session.add(record)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            # Backstop for a concurrent insert/reorder racing this one past
+            # `OutlineService.create`'s own check-then-shift logic - the
+            # partial unique index (`uq_outline_nodes_project_parent_order`)
+            # is the actual source of truth. Surface it as a normal
+            # conflict instead of the generic 500 an unhandled
+            # `IntegrityError` used to produce (issue #67), mirroring
+            # `SqlAlchemyRunRepository.add`'s handling of `uq_runs_project_active`.
+            await self._session.rollback()
+            raise Conflict(
+                f"node {node.id} collides with an existing sibling position"
+            ) from exc
         await self._session.refresh(record)
         return _to_domain(record)
 
-    async def update(self, node: OutlineNode) -> OutlineNode:
+    async def update(
+        self, node: OutlineNode, *, fields: Sequence[str] | None = None
+    ) -> OutlineNode:
         await self._assert_live_parent(node.parent_id)
         record = await self._session.get(OutlineNodeRecord, node.id)
         assert record is not None
-        _apply_domain_to_record(node, record)
+        _apply_domain_to_record(node, record, fields=fields)
         await self._session.commit()
         await self._session.refresh(record)
         return _to_domain(record)

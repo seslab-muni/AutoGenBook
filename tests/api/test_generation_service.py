@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -203,6 +204,49 @@ async def test_execute_downloads_sources_into_kb_dir(
     assert downloaded.read_bytes() == content
 
 
+async def test_write_source_sync_streams_chunks_incrementally(tmp_path: Path) -> None:
+    """Regression for issue #55: `_download_sources` used to buffer a whole
+    source fully (`[chunk async for chunk in ...]`) in memory before ever
+    writing a byte. `_write_source_sync` should instead write each chunk to
+    disk as it arrives - observable here as the destination file's size
+    growing in steps rather than jumping straight from 0 to its final size
+    once the whole thing has already been assembled in memory."""
+    from types import SimpleNamespace
+
+    chunks = [b"a" * 1000, b"b" * 1000, b"c" * 1000]
+    full_content = b"".join(chunks)
+
+    class _SlowChunkStorage:
+        async def open(self, key: str):
+            async def gen():
+                for chunk in chunks:
+                    await asyncio.sleep(0.05)
+                    yield chunk
+
+            return gen()
+
+    dest_dir = tmp_path / "kb" / "source-1"
+    dest = dest_dir / "file.bin"
+    fake_service = SimpleNamespace(_storage=_SlowChunkStorage())
+
+    write_task = asyncio.create_task(
+        GenerationService._write_source_sync(fake_service, dest_dir, dest, "irrelevant-key")
+    )
+
+    observed_sizes: set[int] = set()
+    while not write_task.done():
+        if dest.exists():
+            observed_sizes.add(dest.stat().st_size)
+        await asyncio.sleep(0.01)
+    await write_task
+
+    assert dest.read_bytes() == full_content
+    # A partial size (neither 0 nor the final length) proves the file grew
+    # incrementally as chunks arrived, rather than only becoming visible
+    # once everything had already been buffered and written in one shot.
+    assert any(0 < size < len(full_content) for size in observed_sizes), observed_sizes
+
+
 async def test_execute_marks_failed_when_a_source_file_is_missing_from_storage(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
@@ -272,6 +316,55 @@ async def test_execute_marks_failed_on_nonzero_cli_exit(
     assert finished.status == RunStatus.failed
     assert finished.exit_code != 0
     assert finished.error is not None
+
+
+async def test_finalize_ignores_stale_run_meta_left_by_a_shared_work_dir(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #81: a `regenerate_section`/`export` run reuses its base run's
+    `work_dir` verbatim. If *this* run's own CLI subprocess never gets to
+    (re)write `run_meta.json` - killed by cancellation or a timeout before
+    reaching the `finally` that writes it - `_finalize` used to read
+    whatever `run_meta.json` was already sitting in that shared directory
+    (the base run's own, from a run that finished over an hour before this
+    attempt even started), double-counting its cost/tokens onto this run and
+    misattributing its error string on a failed exit."""
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        work_dir = tmp_path / "shared-run"
+        out_dir = work_dir / "out"
+        out_dir.mkdir(parents=True)
+        stale_finished_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        (out_dir / "run_meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "20260101T000000Z",
+                    "finished_at": stale_finished_at.isoformat(),
+                    "token_totals": {"writer": 12345},
+                    "cost_totals_usd": {"writer": 6.78},
+                    "error": "the base run's own failure message",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(
+                project.id,
+                work_dir,
+                kind=RunKind.regenerate_section,
+                started_at=datetime.now(timezone.utc),
+                cancel_requested=False,
+            )
+        )
+        service = _make_service(session, InMemoryFileStorage(), _settings())
+
+        finished = await service._finalize(run, exit_code=1, project=project)
+
+    assert finished.status == RunStatus.failed
+    assert finished.total_tokens is None
+    assert finished.total_cost_usd is None
+    assert finished.error == "CLI exited with code 1"
 
 
 async def test_execute_on_a_reclaimed_run_does_not_collide_on_seq_or_hang(
@@ -367,6 +460,57 @@ async def test_execute_marks_cancelled_when_cancel_requested_mid_run(
 
     assert finished.status == RunStatus.cancelled
     assert finished.exit_code != 0
+
+
+async def test_execute_releases_run_for_resume_on_worker_shutdown(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
+) -> None:
+    """Regression for issue #52: on SIGTERM, the worker used to await
+    `execute()` to completion (potentially the CLI's full multi-hour
+    timeout) before ever noticing shutdown was requested - compose's
+    `stop_grace_period` then SIGKILLs the container, leaving the run stuck
+    `running` until `WORKER_STALE_S` elapses and `requeue_stale` reclaims
+    it, re-executing a `full` run from scratch. A `shutdown_event` passed
+    to `execute` should instead have it tear the CLI subprocess down
+    promptly and hand the run back to `queued` right away - with `resume`
+    flipped on, since the fake CLI has already written `structure_graph.
+    json` by the time its (artificially long) per-step sleep is hit."""
+    monkeypatch.setenv("FAKE_CLI_STEP_SLEEP_S", "5.0")
+    monkeypatch.setattr(
+        book_command, "ENV_ALLOWLIST", book_command.ENV_ALLOWLIST + ("FAKE_CLI_STEP_SLEEP_S",)
+    )
+
+    async with session_factory() as setup_session:
+        project = await SqlAlchemyProjectRepository(setup_session).add(_make_project())
+        run = await SqlAlchemyRunRepository(setup_session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+
+    shutdown_event = asyncio.Event()
+
+    async def run_service() -> Run:
+        async with session_factory() as service_session:
+            service = _make_service(
+                service_session, InMemoryFileStorage(), _settings(), worker_id="worker-1"
+            )
+            return await service.execute(run, shutdown_event=shutdown_event)
+
+    task = asyncio.create_task(run_service())
+
+    deadline = time.monotonic() + 10
+    graph_path = tmp_path / "run" / "out" / "structure_graph.json"
+    while time.monotonic() < deadline and not graph_path.is_file():
+        await asyncio.sleep(0.05)
+    assert graph_path.is_file(), "fake CLI never wrote structure_graph.json before deadline"
+
+    shutdown_event.set()
+
+    finished = await asyncio.wait_for(task, timeout=15)
+
+    assert finished.status == RunStatus.queued
+    assert finished.locked_by is None
+    assert finished.started_at is None
+    assert finished.options.resume is True
 
 
 async def test_execute_reports_clear_error_when_killed_by_cli_run_timeout(

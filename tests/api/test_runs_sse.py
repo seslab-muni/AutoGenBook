@@ -68,8 +68,12 @@ async def test_sse_stream_shows_section_and_done_events(
 
     async def drive_generation() -> None:
         async with session_factory() as session:
-            run = await SqlAlchemyRunRepository(session).get(uuid.UUID(run_id))
-            assert run is not None
+            # `claim` (not a plain `get`) so the row is actually `running`/
+            # locked, matching what `execute` sees in production - `queue.
+            # heartbeat`/`finalize`'s compare-and-set (issue #52/#56) is
+            # conditional on that.
+            run = await SqlAlchemyRunQueue(session).claim("test-worker")
+            assert run is not None and str(run.id) == run_id
             service = GenerationService(
                 run_repository=SqlAlchemyRunRepository(session),
                 run_event_repository=SqlAlchemyRunEventRepository(session),
@@ -82,6 +86,7 @@ async def test_sse_stream_shows_section_and_done_events(
                 run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
                 settings=_settings(tmp_path),
                 drain_poll_interval_s=0.05,
+                worker_id="test-worker",
             )
             await service.execute(run)
 

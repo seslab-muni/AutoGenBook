@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import ConfigDict
+from starlette.concurrency import run_in_threadpool
 
 from api.domain.models import ArtifactKind
 from api.domain.models import File as FileDomain
@@ -98,7 +99,13 @@ class RunEvent(BaseSchema):
     payload: dict | None = None
 
 
-def run_to_schema(run: RunDomain) -> Run:
+async def run_to_schema(run: RunDomain) -> Run:
+    # Off the event loop (issue #55): `Path.is_dir()` is a `stat(2)` against
+    # the shared `runs_data` volume, done once per run in a list response -
+    # cheap on a healthy local disk, but still a blocking syscall issued
+    # directly on the loop for every row instead of handed to the
+    # threadpool the way every other filesystem touch in this codebase is.
+    resumable = await run_in_threadpool(Path(run.work_dir).is_dir)
     return Run(
         id=run.id,
         project_id=run.project_id,
@@ -114,7 +121,7 @@ def run_to_schema(run: RunDomain) -> Run:
         queued_at=run.queued_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
-        resumable=Path(run.work_dir).is_dir(),
+        resumable=resumable,
     )
 
 

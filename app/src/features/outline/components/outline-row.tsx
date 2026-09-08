@@ -46,8 +46,22 @@ interface OutlineRowProps {
   isCollapsed: (nodeId: string) => boolean;
   /** Whether the active run (if any) is still drafting this node — shows a spinner (issue #21). */
   isGenerating?: (node: OutlineNode) => boolean;
+  /**
+   * True while the project has a queued/running run — the backend rejects every structural
+   * write (create/delete/move) with 409 for as long as that's true (`OutlineService.
+   * _reject_if_run_active`, issue #74), so add/delete/move/indent/outdent are disabled here to
+   * match. Rename, lock toggle, and Properties stay enabled since the backend still allows them.
+   */
+  structuralEditsDisabled: boolean;
   actions: OutlineRowActions;
 }
+
+/**
+ * Shared with `OutlinePane` (toolbar/empty-state controls, banner) so the wording is consistent
+ * everywhere the outline's structural edits are disabled for the same reason.
+ */
+export const STRUCTURE_LOCKED_MESSAGE =
+  "A run is active — the outline's structure can't be changed until it finishes or is cancelled.";
 
 function reportError(error: unknown, fallback: string) {
   const problem = error instanceof ApiError ? error.problem : undefined;
@@ -63,6 +77,7 @@ function OutlineRowComponent({
   selectedNodeId,
   isCollapsed,
   isGenerating,
+  structuralEditsDisabled,
   actions,
 }: OutlineRowProps) {
   const { node, children } = entry;
@@ -193,8 +208,9 @@ function OutlineRowComponent({
               {canAddChild ? (
                 <button
                   type="button"
-                  title="Add sub-section"
-                  className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : 'Add sub-section'}
+                  disabled={structuralEditsDisabled}
+                  className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                   onClick={(event) => {
                     event.stopPropagation();
                     actions.onAddChild(node.id);
@@ -216,8 +232,9 @@ function OutlineRowComponent({
               </button>
               <button
                 type="button"
-                title="Delete"
-                className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : 'Delete'}
+                disabled={structuralEditsDisabled}
+                className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40"
                 onClick={(event) => {
                   event.stopPropagation();
                   actions.onDelete(node);
@@ -238,7 +255,11 @@ function OutlineRowComponent({
         </ContextMenuTrigger>
         <ContextMenuContent>
           {canAddChild ? (
-            <ContextMenuItem onSelect={() => actions.onAddChild(node.id)}>
+            <ContextMenuItem
+              disabled={structuralEditsDisabled}
+              title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+              onSelect={() => actions.onAddChild(node.id)}
+            >
               Add sub-section
             </ContextMenuItem>
           ) : null}
@@ -249,23 +270,41 @@ function OutlineRowComponent({
             {node.structureLocked ? 'Unlock structure' : 'Lock structure'}
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem disabled={siblingIndex <= 0} onSelect={() => move('up')}>
+          <ContextMenuItem
+            disabled={siblingIndex <= 0 || structuralEditsDisabled}
+            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            onSelect={() => move('up')}
+          >
             Move up
           </ContextMenuItem>
           <ContextMenuItem
-            disabled={siblingIndex >= siblings.length - 1}
+            disabled={siblingIndex >= siblings.length - 1 || structuralEditsDisabled}
+            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
             onSelect={() => move('down')}
           >
             Move down
           </ContextMenuItem>
-          <ContextMenuItem disabled={!canOutdent} onSelect={() => move('outdent')}>
+          <ContextMenuItem
+            disabled={!canOutdent || structuralEditsDisabled}
+            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            onSelect={() => move('outdent')}
+          >
             Outdent
           </ContextMenuItem>
-          <ContextMenuItem disabled={!canIndent} onSelect={() => move('indent')}>
+          <ContextMenuItem
+            disabled={!canIndent || structuralEditsDisabled}
+            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            onSelect={() => move('indent')}
+          >
             Indent
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onSelect={() => actions.onDelete(node)}>
+          <ContextMenuItem
+            variant="destructive"
+            disabled={structuralEditsDisabled}
+            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            onSelect={() => actions.onDelete(node)}
+          >
             Delete
           </ContextMenuItem>
         </ContextMenuContent>
@@ -284,6 +323,7 @@ function OutlineRowComponent({
               selectedNodeId={selectedNodeId}
               isCollapsed={isCollapsed}
               {...(isGenerating ? { isGenerating } : {})}
+              structuralEditsDisabled={structuralEditsDisabled}
               actions={actions}
             />
           ))}

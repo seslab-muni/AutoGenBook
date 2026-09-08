@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import dataclasses
 import uuid
+from datetime import datetime, timezone
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from api.domain.models import RunStatus
+from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 
 MINIMAL_PROJECT = {
     "title": "Intro to Widgets",
@@ -65,13 +72,20 @@ async def test_create_run_accepts_explicit_options(client: AsyncClient) -> None:
     assert body["options"]["auditBookMode"] == "strict"
 
 
-async def test_create_run_sets_project_last_run_id(client: AsyncClient) -> None:
+async def test_create_run_does_not_set_project_last_run_id_before_it_succeeds(
+    client: AsyncClient,
+) -> None:
+    """issue #66: `lastRunId` is only ever advanced by the worker once a run
+    actually succeeds (`GenerationService._import_graph`/
+    `_import_target_node`) - queueing one must not overwrite it eagerly, or
+    a later failed/cancelled/still-queued run would permanently point
+    `lastRunId` at something regenerate/export can't resume from."""
     project = await _create_project(client)
-    run = await _create_run(client, project["id"])
+    await _create_run(client, project["id"])
 
     response = await client.get(f"/api/v1/projects/{project['id']}")
     assert response.status_code == 200
-    assert response.json()["lastRunId"] == run["id"]
+    assert response.json()["lastRunId"] is None
 
 
 async def test_create_run_404_for_missing_project(client: AsyncClient) -> None:
@@ -181,6 +195,116 @@ async def test_cancel_already_terminal_run_is_409(client: AsyncClient) -> None:
 
     response = await client.post(f"/api/v1/runs/{created['id']}/cancel")
     assert response.status_code == 409
+
+
+async def test_run_to_schema_stats_the_work_dir_off_the_event_loop(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession], monkeypatch
+) -> None:
+    """Regression for issue #55: `run_to_schema`'s `resumable` field did a
+    plain `Path(run.work_dir).is_dir()` - a blocking `stat(2)` against the
+    shared `runs_data` volume, issued directly on the request coroutine for
+    every run in a list response. It should now go through
+    `run_in_threadpool`."""
+    import threading
+
+    from api.presentation.schemas import runs as runs_schema_module
+
+    project = await _create_project(client)
+    await _create_run(client, project["id"])
+
+    main_thread = threading.current_thread()
+    stat_threads: list[threading.Thread] = []
+    original_is_dir = runs_schema_module.Path.is_dir
+
+    def spy_is_dir(self):
+        stat_threads.append(threading.current_thread())
+        return original_is_dir(self)
+
+    monkeypatch.setattr(runs_schema_module.Path, "is_dir", spy_is_dir)
+
+    response = await client.get(f"/api/v1/projects/{project['id']}/runs")
+
+    assert response.status_code == 200
+    assert stat_threads, "expected run_to_schema to check work_dir.is_dir()"
+    assert all(t is not main_thread for t in stat_threads)
+
+
+async def test_cancel_does_not_revert_a_run_the_worker_just_finished(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for issue #56: `POST /runs/{id}/cancel` on a `running` run
+    used to read the row, then blindly write back its own stale copy of
+    *every* column (`status=running, exitCode=None, finishedAt=None, ...`
+    plus `cancelRequested=True`). If the worker's own `_finalize` committed
+    `succeeded` in the narrow window between that read and this write,
+    cancel's overwrite reverted the run back to `running` with no worker
+    attached - it would then sit until `requeue_stale` handed it to a new
+    worker, which re-executed it (a `full` run from scratch) even though it
+    had already finished successfully.
+
+    Simulates that exact interleaving via `SqlAlchemyRunRepository.
+    request_cancel` (the method `RunService.cancel`'s write now goes
+    through): before its real conditional `UPDATE` runs, a concurrent
+    session commits the run as `succeeded` - exactly as if the worker's own
+    `_finalize` landed in that window.
+    """
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+    run_id = uuid.UUID(created["id"])
+
+    async with session_factory() as session:
+        repo = SqlAlchemyRunRepository(session)
+        current = await repo.get(run_id)
+        assert current is not None
+        await repo.update(
+            dataclasses.replace(
+                current,
+                status=RunStatus.running,
+                locked_by="worker-1",
+                started_at=datetime.now(timezone.utc),
+                heartbeat_at=datetime.now(timezone.utc),
+            )
+        )
+
+    original_request_cancel = SqlAlchemyRunRepository.request_cancel
+
+    async def _request_cancel_after_worker_finishes(self, requested_run_id):
+        async with session_factory() as finisher_session:
+            finisher_repo = SqlAlchemyRunRepository(finisher_session)
+            finishing = await finisher_repo.get(requested_run_id)
+            assert finishing is not None
+            finalized = await finisher_repo.finalize(
+                dataclasses.replace(
+                    finishing,
+                    status=RunStatus.succeeded,
+                    exit_code=0,
+                    error=None,
+                    finished_at=datetime.now(timezone.utc),
+                    total_tokens=42,
+                )
+            )
+            assert finalized is not None
+        return await original_request_cancel(self, requested_run_id)
+
+    monkeypatch.setattr(
+        SqlAlchemyRunRepository, "request_cancel", _request_cancel_after_worker_finishes
+    )
+
+    response = await client.post(f"/api/v1/runs/{run_id}/cancel")
+
+    async with session_factory() as session:
+        final = await SqlAlchemyRunRepository(session).get(run_id)
+
+    assert response.status_code == 202
+    assert final is not None
+    # The worker's own "succeeded" must win - cancel must not have reverted
+    # it back to `running`/`cancelled` or clobbered `exitCode`/`finishedAt`.
+    assert final.status == RunStatus.succeeded
+    assert final.exit_code == 0
+    assert final.finished_at is not None
+    assert final.total_tokens == 42
 
 
 async def test_cancel_run_404(client: AsyncClient) -> None:

@@ -18,6 +18,40 @@ Source: `requirements.txt`
 - Schema smoke tests: `python -m autogenbook.schemas.smoke`. (`autogenbook/schemas/smoke.py`)
 - End-to-end smoke (requires API key unless fast mode): `python -m autogenbook.smoke_test`. (`autogenbook/smoke_test.py`)
 
+## API service (`api/`)
+
+The FastAPI service, worker, and their tests are a separate Python environment from the CLI's:
+
+```bash
+pip install -r api/requirements-dev.txt   # includes api/requirements.txt plus test/dev extras
+pytest tests/api                          # api/'s own suite; defaults to an in-memory SQLite DB
+```
+
+- `tests/api/conftest.py` reads `TEST_DATABASE_URL` (defaults to `sqlite+aiosqlite://`, in-memory) to point the test suite at a real Postgres instance instead, e.g.:
+
+  ```bash
+  TEST_DATABASE_URL="postgresql+asyncpg://autogenbook:autogenbook@localhost:5432/autogenbook_test" pytest tests/api
+  ```
+
+- Schema changes go through Alembic migrations under `api/infrastructure/db/alembic/`, driven by `api/alembic.ini` (which leaves `sqlalchemy.url` unset — `api/infrastructure/db/alembic/env.py` fills it in from `Settings.database_url`, i.e. `DATABASE_URL`, at run time):
+
+  ```bash
+  DATABASE_URL="postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook" \
+    alembic -c api/alembic.ini upgrade head
+  # after editing api/domain/models.py:
+  DATABASE_URL="postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook" \
+    alembic -c api/alembic.ini revision --autogenerate -m "describe the change"
+  ```
+
+- `docs/openapi.yaml` is a generated artifact, not hand-edited. Regenerate it after any router/schema change and commit the result, then regenerate the frontend's typed client from it:
+
+  ```bash
+  python scripts/export_openapi.py     # writes docs/openapi.yaml from api.main:create_app().openapi()
+  cd app && pnpm gen:api               # regenerates src/api/schema.gen.ts from ../docs/openapi.yaml
+  ```
+
+See `docs/WEB_API_REFERENCE.md` for the implemented endpoint surface and design notes, and `docs/OPERATIONS.md` for the Docker Compose stack and environment variables.
+
 ## Repo conventions
 
 - Pipelines live under `autogenbook/pipelines/`. (`autogenbook/pipelines/*`)

@@ -6,7 +6,7 @@ from typing import BinaryIO
 
 import boto3
 from botocore.client import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from starlette.concurrency import run_in_threadpool
 
 from api.core.errors import NotFound, StorageError
@@ -36,13 +36,21 @@ class S3FileStorage:
         size_hint: int | None = None,
     ) -> None:
         extra_args = {"ContentType": content_type} if content_type else None
-        await run_in_threadpool(
-            self._client.upload_fileobj,
-            stream,
-            self._bucket,
-            key,
-            ExtraArgs=extra_args,
-        )
+        try:
+            await run_in_threadpool(
+                self._client.upload_fileobj,
+                stream,
+                self._bucket,
+                key,
+                ExtraArgs=extra_args,
+            )
+        except (ClientError, BotoCoreError) as exc:
+            # A MinIO outage (or misconfiguration) used to surface here as
+            # a bare botocore exception - an unhandled 500 - instead of the
+            # 503 StorageError the rest of the API uses for "a dependency
+            # is unreachable" (matching what /ready reports for the same
+            # failure, issue #59).
+            raise StorageError(str(exc)) from exc
 
     async def open(self, key: str) -> AsyncIterator[bytes]:
         try:
@@ -65,7 +73,10 @@ class S3FileStorage:
             body.close()
 
     async def delete(self, key: str) -> None:
-        await run_in_threadpool(self._client.delete_object, Bucket=self._bucket, Key=key)
+        try:
+            await run_in_threadpool(self._client.delete_object, Bucket=self._bucket, Key=key)
+        except (ClientError, BotoCoreError) as exc:
+            raise StorageError(str(exc)) from exc
 
     async def exists(self, key: str) -> bool:
         try:

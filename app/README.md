@@ -5,13 +5,17 @@ TanStack Query, Zustand, and shadcn/ui on Tailwind 4. It talks to the FastAPI
 service in `../api/` and is served by nginx in the Docker Compose stack (see the
 root `CLAUDE.md`).
 
-This is currently a scaffold: routing, a typed API/data layer (#15), and the
-app shell (#16 — auth guard stub, Zustand UI store, three-pane Structured
-Architect layout, theme toggle) are wired up, but there are no real screens
-yet (those land in #17 onward). `app/_reference/` holds the previous
-AI-Studio-exported mock UI, kept for one release purely as a layout/styling
-reference for later issues; it is excluded from `tsc`, ESLint, Vitest and the
-Docker image, and will be deleted in #23 — don't add new code there.
+Routing, a typed API/data layer, and the app shell (auth guard stub, Zustand
+UI store, three-pane Structured Architect layout, theme toggle) are wired up,
+and real screens are built on top of them against the live API: a projects
+hub (`src/routes/index.tsx` → `src/features/projects`), per-project
+source/outline/editor/run views (`src/routes/p.$projectId*.tsx` →
+`src/features/{sources,outline,editor,runs}`), and export handling
+(`src/features/exports`). See `src/features/<projects|sources|outline|editor|runs|exports>`
+for the current feature set and their component tests for coverage.
+`app/_reference/` holds the previous AI-Studio-exported mock UI, kept purely
+as a layout/styling reference; it is excluded from `tsc`, ESLint, Vitest and
+the Docker image, and will be deleted in #23 — don't add new code there.
 
 ## Prerequisites
 
