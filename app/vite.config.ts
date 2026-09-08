@@ -39,7 +39,7 @@ export default defineConfig({
     exclude: ['node_modules', 'dist', '_reference'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'html'],
+      reporter: ['text', 'html', 'lcov'],
       exclude: ['_reference/**', 'src/routeTree.gen.ts', 'src/components/ui/**'],
     },
   },
