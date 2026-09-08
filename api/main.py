@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
@@ -7,11 +8,19 @@ from fastapi.routing import APIRoute
 
 from api.core.db import get_engine
 from api.core.errors import install_error_handlers
+from api.core.request_logging import RequestIdMiddleware, configure_request_logging
+from api.core.settings import default_credentials_warning, get_settings
 from api.presentation.routers import files, outline, projects, runs, sources, system
+
+configure_request_logging()
+logger = logging.getLogger("api")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    warning = default_credentials_warning(get_settings())
+    if warning:
+        logger.warning(warning)
     yield
     await get_engine().dispose()
 
@@ -40,6 +49,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     install_error_handlers(app)
+    app.add_middleware(RequestIdMiddleware)
 
     api_router = APIRouter(prefix="/api/v1")
     api_router.include_router(system.router)
