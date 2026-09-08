@@ -10,6 +10,12 @@ Scope is deliberately limited to `api/` and `app/src`. The core CLI
 upstream `pkonas/AutoGenBook` (see `CLAUDE.md`), so it's excluded to avoid
 flagging code this repo doesn't intend to restyle.
 
+If you're using Claude Code against this repo, `.claude/skills/static-analysis/`
+is a project-wide skill that runs both tools end to end (including the
+one-time SonarQube credential/token bootstrap below) and summarizes the
+results — ask it to "run static analysis" / "run a Sonar scan" rather than
+following the manual steps below yourself.
+
 ## Why two tools
 
 - **SonarQube Community Edition**: coding-standards, maintainability, and
