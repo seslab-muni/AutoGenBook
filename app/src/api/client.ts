@@ -56,11 +56,11 @@ function isProblem(value: unknown): value is Problem {
 }
 
 function createRequestId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-  if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
-    return Array.from(crypto.getRandomValues(new Uint32Array(4)), (word) =>
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    return Array.from(crypto.getRandomValues(new Uint32Array(4)), (word: number) =>
       word.toString(36),
     ).join('');
   }
