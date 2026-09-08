@@ -109,7 +109,20 @@ class FileService:
             kb_eligible=_is_kb_eligible(filename),
             created_at=datetime.now(timezone.utc),
         )
-        await self._repository.add(file)
+        try:
+            await self._repository.add(file)
+        except Exception:
+            # `size_bytes`/`sha256` are only known once the upload has
+            # already streamed through `storage.put` above, so the DB row
+            # can't be written first the way `delete` below reads (issue
+            # #59) - the blob necessarily lands in storage before the row
+            # does. Compensate on a failed insert by deleting it, so a
+            # failed `add` never leaves an orphaned, untracked blob with
+            # nothing in the database ever pointing at it (the same
+            # "durable record wins" outcome, reached by cleanup on the
+            # losing side instead of by reordering the writes).
+            await self._storage.delete(key)
+            raise
         return file
 
     async def get(self, file_id: uuid.UUID) -> File:
