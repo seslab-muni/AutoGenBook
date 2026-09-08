@@ -3,6 +3,8 @@ import { screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
+import { MOCK_USER } from '@/mocks/fixtures';
+import * as session from '@/auth/session';
 import { useUiStore } from '@/stores/ui-store';
 import { renderRouterApp } from '@/test/router-test-utils';
 
@@ -92,5 +94,40 @@ describe('AppHeader run state machine', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel run' }));
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument());
+  });
+});
+
+describe('AppHeader project owner', () => {
+  it('shows "Created by <name>" for a project with an owner', async () => {
+    renderRouterApp('/p/book-consensus-quantum-2026');
+
+    expect(
+      await screen.findByText(new RegExp(`Created by ${MOCK_USER.displayName}`)),
+    ).toBeInTheDocument();
+  });
+
+  it('shows "Created by —" for a legacy project with no owner', async () => {
+    // Seeded as `owned: false` in `mocks/fixtures.ts`.
+    renderRouterApp('/p/book-reinforcement-learning');
+
+    expect(await screen.findByText(/Created by —/)).toBeInTheDocument();
+  });
+});
+
+describe('AppHeader user menu', () => {
+  it('shows the signed-in user and calls signOut when "Sign out" is selected', async () => {
+    const signOutSpy = vi.spyOn(session, 'signOut').mockImplementation(() => {});
+    const user = userEvent.setup();
+    renderRouterApp('/p/book-consensus-quantum-2026');
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    await user.click(await screen.findByRole('button', { name: /account menu/i }));
+    expect(await screen.findByText(MOCK_USER.displayName)).toBeInTheDocument();
+    expect(screen.getByText(MOCK_USER.email)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: /sign out/i }));
+    expect(signOutSpy).toHaveBeenCalledTimes(1);
+
+    signOutSpy.mockRestore();
   });
 });

@@ -1,7 +1,16 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Copy, Database, DollarSign, FileText, ListTree, MoreVertical, Trash2 } from 'lucide-react';
+import {
+  Copy,
+  Database,
+  DollarSign,
+  FileText,
+  ListTree,
+  MoreVertical,
+  Trash2,
+  UserRound,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useDeleteProjectMutation, useDuplicateProjectMutation } from '@/api/queries/projects';
@@ -112,6 +121,10 @@ export function ProjectCard({ project }: ProjectCardProps) {
           {project.authors.length ? (
             <span className="min-w-0 flex-1 truncate">By {project.authors.join(', ')}</span>
           ) : null}
+          <span className="flex shrink-0 items-center gap-1" title="Created by">
+            <UserRound className="size-3.5" />
+            {project.ownerName ?? '—'}
+          </span>
           <span className="flex shrink-0 items-center gap-1">
             <FileText className="size-3.5" />
             {project.totalPagesBudget}p

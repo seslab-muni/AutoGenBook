@@ -4,3 +4,5 @@ pydantic-settings>=2.4
 python-multipart>=0.0.9
 sse-starlette>=2.1
 boto3>=1.34
+pyjwt>=2.8
+argon2-cffi>=23

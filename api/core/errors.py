@@ -41,6 +41,9 @@ class ApiError(Exception):
 
     status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
     title: str = "Internal Server Error"
+    # Extra response headers `_problem_response` sets alongside the problem
+    # body - only `Unauthorized` uses this (`WWW-Authenticate: Cookie`).
+    headers: dict[str, str] | None = None
 
     def __init__(self, detail: str | None = None) -> None:
         self.detail = detail
@@ -50,6 +53,17 @@ class ApiError(Exception):
 class NotFound(ApiError):
     status_code = status.HTTP_404_NOT_FOUND
     title = "Not Found"
+
+
+class Unauthorized(ApiError):
+    status_code = status.HTTP_401_UNAUTHORIZED
+    title = "Unauthorized"
+    headers = {"WWW-Authenticate": "Cookie"}
+
+
+class Forbidden(ApiError):
+    status_code = status.HTTP_403_FORBIDDEN
+    title = "Forbidden"
 
 
 class Conflict(ApiError):
@@ -75,7 +89,7 @@ class PayloadTooLarge(ApiError):
 
 
 def _problem_response(
-    status_code: int, title: str, detail: Any, instance: str
+    status_code: int, title: str, detail: Any, instance: str, headers: dict[str, str] | None = None
 ) -> JSONResponse:
     body: dict[str, Any] = {
         "type": "about:blank",
@@ -85,13 +99,17 @@ def _problem_response(
     }
     if detail is not None:
         body["detail"] = detail
-    return JSONResponse(status_code=status_code, content=body, media_type=PROBLEM_JSON)
+    return JSONResponse(
+        status_code=status_code, content=body, media_type=PROBLEM_JSON, headers=headers
+    )
 
 
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
-        return _problem_response(exc.status_code, exc.title, exc.detail, request.url.path)
+        return _problem_response(
+            exc.status_code, exc.title, exc.detail, request.url.path, exc.headers
+        )
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(

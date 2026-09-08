@@ -2,11 +2,13 @@ import { http, HttpResponse, sse } from 'msw';
 
 import { driveFakeRun } from './fakeRun';
 import { db, stripProjectId, type ProjectRow } from './db';
+import { MOCK_USER, MOCK_USER_PASSWORD } from './fixtures';
 import { notFound, problemResponse } from './problem';
 import type {
   ExportRequest,
   FileDto,
   HealthStatus,
+  LoginRequest,
   OutlineNode,
   OutlineNodeCreate,
   OutlineNodeTree,
@@ -60,6 +62,30 @@ function extensionOf(filename: string): string {
 const systemHandlers = [
   http.get('*/api/v1/health', () => HttpResponse.json({ status: 'ok' } satisfies HealthStatus)),
   http.get('*/api/v1/ready', () => HttpResponse.json({ status: 'ready' } satisfies ReadyStatus)),
+];
+
+// ---------------------------------------------------------------------------
+// auth
+// ---------------------------------------------------------------------------
+
+/**
+ * MSW doesn't enforce the real httpOnly-cookie mechanism, so — like every other mock handler —
+ * these default to "signed in as `MOCK_USER`" rather than actually tracking a session; a test
+ * exercising logged-out behavior (`require-auth`, the 401 response middleware) overrides
+ * `GET /auth/me` with `server.use(...)` to return a 401 instead.
+ */
+const authHandlers = [
+  http.post('*/api/v1/auth/login', async ({ request }) => {
+    const body = (await request.json()) as LoginRequest;
+    if (body.email === MOCK_USER.email && body.password === MOCK_USER_PASSWORD) {
+      return HttpResponse.json(MOCK_USER);
+    }
+    return problemResponse(401, 'Invalid email or password', new URL(request.url).pathname);
+  }),
+
+  http.get('*/api/v1/auth/me', () => HttpResponse.json(MOCK_USER)),
+
+  http.post('*/api/v1/auth/logout', () => new HttpResponse(null, { status: 204 })),
 ];
 
 // ---------------------------------------------------------------------------
@@ -140,6 +166,11 @@ function createProjectRow(body: ProjectCreate): ProjectRow {
   const now = db.now();
   return {
     id,
+    // MSW doesn't enforce the real auth mechanism, so every project created through the mock
+    // API is attributed to `MOCK_USER` — the same "always signed in" assumption every other
+    // handler makes.
+    ownerId: MOCK_USER.id,
+    ownerName: MOCK_USER.displayName,
     title: body.title,
     subtitle: body.subtitle,
     authors: body.authors,
@@ -588,6 +619,8 @@ const outlineHandlers = [
         queuedAt: db.now(),
         startedAt: null,
         finishedAt: null,
+        startedById: MOCK_USER.id,
+        startedByName: MOCK_USER.displayName,
       };
       db.runs.set(runId, run);
       db.outlineNodes.set(node.id, { ...node, status: 'drafting' });
@@ -644,6 +677,8 @@ const runHandlers = [
       queuedAt: db.now(),
       startedAt: null,
       finishedAt: null,
+      startedById: MOCK_USER.id,
+      startedByName: MOCK_USER.displayName,
     };
     db.runs.set(runId, run);
     driveFakeRun(runId);
@@ -727,6 +762,8 @@ const runHandlers = [
       queuedAt: db.now(),
       startedAt: null,
       finishedAt: null,
+      startedById: MOCK_USER.id,
+      startedByName: MOCK_USER.displayName,
     };
     db.runs.set(runId, run);
     driveFakeRun(runId);
@@ -763,6 +800,7 @@ const streamHandler = sse<Record<'log' | 'stage' | 'section' | 'done', RunEvent>
 
 export const handlers = [
   ...systemHandlers,
+  ...authHandlers,
   ...fileHandlers,
   ...projectHandlers,
   ...sourceHandlers,

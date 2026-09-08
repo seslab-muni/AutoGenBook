@@ -133,6 +133,7 @@ class RunService:
         audit_book_mode: Literal["off", "warn", "strict"] = "warn",
         legacy_tex: bool = False,
         fail_fast_schema: bool = False,
+        started_by: uuid.UUID | None = None,
     ) -> Run:
         project = await self._projects.get(project_id)
         if project is None:
@@ -198,6 +199,7 @@ class RunService:
             finished_at=None,
             total_tokens=None,
             total_cost_usd=None,
+            started_by=started_by,
         )
         created = await self._runs.add(run)
 
@@ -326,6 +328,7 @@ class RunService:
         node_id: uuid.UUID,
         *,
         prompt_modifier: str | None = None,
+        started_by: uuid.UUID | None = None,
     ) -> Run:
         project = await self._projects.get(project_id)
         if project is None:
@@ -428,6 +431,7 @@ class RunService:
             finished_at=None,
             total_tokens=None,
             total_cost_usd=None,
+            started_by=started_by,
         )
         created = await self._runs.add(run)
         await self._outline.update(
@@ -441,6 +445,7 @@ class RunService:
         run_id: uuid.UUID,
         *,
         output_format: Literal["latex", "pdf"],
+        started_by: uuid.UUID | None = None,
     ) -> Run:
         base_run = await self._get(run_id)
         if base_run.status != RunStatus.succeeded:
@@ -485,6 +490,7 @@ class RunService:
             finished_at=None,
             total_tokens=None,
             total_cost_usd=None,
+            started_by=started_by,
         )
         return await self._runs.add(run)
 

@@ -2,6 +2,7 @@ import userEvent from '@testing-library/user-event';
 import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { MOCK_USER } from '@/mocks/fixtures';
 import { renderRouterApp } from '@/test/router-test-utils';
 
 describe('ProjectCard actions', () => {
@@ -13,6 +14,25 @@ describe('ProjectCard actions', () => {
     ).closest('[role="button"]') as HTMLElement;
     // Seeded in `mocks/fixtures.ts`'s `seedProject` for a project with `hasCompletedRun: true`.
     expect(await within(card).findByText('$6.42')).toBeInTheDocument();
+  });
+
+  it('shows the owner name for a project owned by the current user', async () => {
+    renderRouterApp('/');
+
+    const card = (
+      await screen.findByRole('heading', { name: /Distributed Consensus & Quantum Fault/i })
+    ).closest('[role="button"]') as HTMLElement;
+    expect(within(card).getByText(MOCK_USER.displayName)).toBeInTheDocument();
+  });
+
+  it('shows "—" for a legacy project with no owner', async () => {
+    renderRouterApp('/');
+
+    const card = (
+      await screen.findByRole('heading', { name: /Deep Reinforcement Learning & Multi-Agent/i })
+    ).closest('[role="button"]') as HTMLElement;
+    // Seeded as `owned: false` in `mocks/fixtures.ts`.
+    expect(within(card).getByText('—')).toBeInTheDocument();
   });
 
   it('shows no cost for a project with no completed run', async () => {

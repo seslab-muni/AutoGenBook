@@ -2,7 +2,7 @@
 - `RunOptions` deserialization tolerates stored `options` JSON that doesn't
   exactly match the current dataclass shape (missing new fields, extra/
   removed old ones) instead of raising `TypeError`.
-- `RunOptionsIn` no longer lets a client set `resume`/`exportTexOnly`/
+- `RunOptionsIn` no longer lets a authed_client set `resume`/`exportTexOnly`/
   `rebuildKb` on a fresh `full` run.
 - `allowSubdivision`'s default is the same on both `RunOptionsIn` and the
   `RunOptions` domain dataclass it feeds.
@@ -31,9 +31,9 @@ MINIMAL_PROJECT = {
 }
 
 
-async def _create_project(client: AsyncClient, **overrides) -> dict:
+async def _create_project(authed_client: AsyncClient, **overrides) -> dict:
     payload = {**MINIMAL_PROJECT, **overrides}
-    response = await client.post("/api/v1/projects", json=payload)
+    response = await authed_client.post("/api/v1/projects", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -123,26 +123,26 @@ async def test_deserializing_options_with_unknown_key_is_ignored(
     assert not hasattr(run.options, "some_removed_field")
 
 
-async def test_create_run_rejects_internal_only_options(client: AsyncClient) -> None:
-    project = await _create_project(client)
+async def test_create_run_rejects_internal_only_options(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
 
-    response = await client.post(
+    response = await authed_client.post(
         f"/api/v1/projects/{project['id']}/runs",
         json={"resume": True, "exportTexOnly": True, "rebuildKb": True},
     )
 
     # `RunOptionsIn` has `extra="forbid"` - these fields no longer exist on
-    # the public schema at all, so a client that sends them gets a
+    # the public schema at all, so a authed_client that sends them gets a
     # validation error rather than having them silently stored.
     assert response.status_code == 422, response.text
 
 
 async def test_create_run_default_allow_subdivision_matches_domain_default(
-    client: AsyncClient,
+    authed_client: AsyncClient,
 ) -> None:
-    project = await _create_project(client)
+    project = await _create_project(authed_client)
 
-    response = await client.post(f"/api/v1/projects/{project['id']}/runs", json={})
+    response = await authed_client.post(f"/api/v1/projects/{project['id']}/runs", json={})
     assert response.status_code == 202, response.text
 
     body = response.json()

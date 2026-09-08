@@ -71,6 +71,8 @@ class ProjectService:
         summaries = [
             ProjectSummary(
                 id=project.id,
+                owner_id=project.owner_id,
+                owner_name=project.owner_name,
                 title=project.title,
                 subtitle=project.subtitle,
                 authors=project.authors,
@@ -130,7 +132,7 @@ class ProjectService:
             )
         await self._repository.delete(project_id)
 
-    async def duplicate(self, project_id: uuid.UUID) -> Project:
+    async def duplicate(self, project_id: uuid.UUID, *, owner_id: uuid.UUID | None) -> Project:
         source = await self.get(project_id)
         now = datetime.now(timezone.utc)
         # Sources are copied by the router right after this returns
@@ -140,7 +142,10 @@ class ProjectService:
         # metadata.
         duplicate = Project(
             id=uuid.uuid4(),
-            owner_id=source.owner_id,
+            # The user who duplicated it, not the original's owner (issue
+            # #96) - "Created by" on a copy should read as the copy's own
+            # author, not whoever made the source project.
+            owner_id=owner_id,
             title=f"{source.title} (Copy)",
             subtitle=source.subtitle,
             authors=list(source.authors),

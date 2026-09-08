@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
 import { db } from '@/mocks/db';
+import { MOCK_USER } from '@/mocks/fixtures';
 import { renderRouterApp } from '@/test/router-test-utils';
 
 // See `use-run-stream.test.ts` for why SSE is mocked wherever `useRunStream` mounts (this route
@@ -35,6 +36,33 @@ describe('run detail page', () => {
     expect(screen.getAllByRole('link', { name: /download/i }).length).toBeGreaterThan(0);
     // A finished run has no Cancel action.
     expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`Started by ${MOCK_USER.displayName}`))).toBeInTheDocument();
+  });
+
+  it('shows "—" for Started by when the run has no attributed user', async () => {
+    const runId = 'run-no-owner';
+    db.runs.set(runId, {
+      id: runId,
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'succeeded',
+      options: {},
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: 0,
+      error: null,
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      queuedAt: '2026-09-07T00:00:00Z',
+      startedAt: '2026-09-07T00:00:01Z',
+      finishedAt: '2026-09-07T00:00:02Z',
+      startedById: null,
+      startedByName: null,
+    });
+
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
+    expect(await screen.findByText(/Started by —/)).toBeInTheDocument();
   });
 
   it('cancelling an active run flips its status and disables further cancellation', async () => {

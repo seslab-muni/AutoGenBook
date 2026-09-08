@@ -15,6 +15,7 @@ from api.domain.models import (
     RunArtifact,
     RunEvent,
     Source,
+    User,
 )
 
 
@@ -32,6 +33,20 @@ class ProjectRepository(Protocol):
     ) -> Project: ...
 
     async def delete(self, project_id: uuid.UUID) -> None: ...
+
+
+class UserRepository(Protocol):
+    async def get_by_email(self, email: str) -> User | None: ...
+
+    async def get_by_id(self, user_id: uuid.UUID) -> User | None: ...
+
+    async def add(self, user: User) -> User: ...
+
+    async def update_password(self, user_id: uuid.UUID, password_hash: str) -> User: ...
+
+    async def set_active(self, user_id: uuid.UUID, is_active: bool) -> User: ...
+
+    async def list(self) -> list[User]: ...
 
 
 class FileStorage(Protocol):

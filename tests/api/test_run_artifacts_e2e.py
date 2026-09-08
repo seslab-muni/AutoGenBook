@@ -91,14 +91,14 @@ async def _drive_generation(
 
 async def test_execute_with_outline_project_syncs_content_artifacts_and_sources(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
 ) -> None:
     app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
 
-    project_response = await client.post("/api/v1/projects", json=MINIMAL_PROJECT)
+    project_response = await authed_client.post("/api/v1/projects", json=MINIMAL_PROJECT)
     assert project_response.status_code == 201
     project_id = project_response.json()["id"]
 
@@ -106,28 +106,28 @@ async def test_execute_with_outline_project_syncs_content_artifacts_and_sources(
     # mirrors this back as cli_keys "1"/"2" (`StructureBuilder.build` ->
     # `book_builder.py`'s key scheme), so this exercises the real
     # `outline="project"` path end to end, not the fake CLI's own mock.
-    node_a = await client.post(
+    node_a = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline", json={"title": "Ch A", "targetPages": 2}
     )
     assert node_a.status_code == 201
-    node_b = await client.post(
+    node_b = await authed_client.post(
         f"/api/v1/projects/{project_id}/outline", json={"title": "Ch B", "targetPages": 3}
     )
     assert node_b.status_code == 201
 
-    upload = await client.post(
+    upload = await authed_client.post(
         "/api/v1/files",
         files={"file": ("notes.md", io.BytesIO(b"# Notes\n\nBackground material.\n"), "text/markdown")},
     )
     assert upload.status_code == 201
     file_id = upload.json()["id"]
-    source_response = await client.post(
+    source_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/sources", json={"fileId": file_id}
     )
     assert source_response.status_code == 201
     source_id = source_response.json()["id"]
 
-    run_response = await client.post(
+    run_response = await authed_client.post(
         f"/api/v1/projects/{project_id}/runs", json={"outline": "project"}
     )
     assert run_response.status_code == 202
@@ -137,17 +137,17 @@ async def test_execute_with_outline_project_syncs_content_artifacts_and_sources(
     assert finished.status == RunStatus.succeeded
 
     # Artifacts.
-    artifacts_response = await client.get(f"/api/v1/runs/{run_id}/artifacts")
+    artifacts_response = await authed_client.get(f"/api/v1/runs/{run_id}/artifacts")
     assert artifacts_response.status_code == 200
     artifacts_body = artifacts_response.json()
     kinds = {item["kind"] for item in artifacts_body["items"]}
     assert {"markdown", "structure_graph", "book_structure", "run_meta", "llm_usage", "kb_sources", "section"} <= kinds
     for item in artifacts_body["items"]:
-        content = await client.get(f"/api/v1/files/{item['fileId']}/content")
+        content = await authed_client.get(f"/api/v1/files/{item['fileId']}/content")
         assert content.status_code == 200
 
     # Outline sync-back.
-    outline_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    outline_response = await authed_client.get(f"/api/v1/projects/{project_id}/outline")
     assert outline_response.status_code == 200
     nodes_by_id = {n["id"]: n for n in outline_response.json()["items"]}
     for node_id in (node_a.json()["id"], node_b.json()["id"]):
@@ -157,24 +157,24 @@ async def test_execute_with_outline_project_syncs_content_artifacts_and_sources(
         assert node["actualWords"] > 0
 
     # Source chunk counts.
-    source_after = await client.get(f"/api/v1/projects/{project_id}/sources/{source_id}")
+    source_after = await authed_client.get(f"/api/v1/projects/{project_id}/sources/{source_id}")
     assert source_after.status_code == 200
     assert source_after.json()["chunksCount"] == 1
     assert source_after.json()["status"] == "indexed"
 
     # project.lastRunId re-affirmed on success.
-    project_after = await client.get(f"/api/v1/projects/{project_id}")
+    project_after = await authed_client.get(f"/api/v1/projects/{project_id}")
     assert project_after.json()["lastRunId"] == run_id
 
     # resumable while the work dir is still on disk.
-    run_after = await client.get(f"/api/v1/runs/{run_id}")
+    run_after = await authed_client.get(f"/api/v1/runs/{run_id}")
     assert run_after.json()["resumable"] is True
 
 
-async def test_run_is_not_resumable_before_it_has_ever_executed(client: AsyncClient) -> None:
-    project_response = await client.post("/api/v1/projects", json=MINIMAL_PROJECT)
+async def test_run_is_not_resumable_before_it_has_ever_executed(authed_client: AsyncClient) -> None:
+    project_response = await authed_client.post("/api/v1/projects", json=MINIMAL_PROJECT)
     project_id = project_response.json()["id"]
-    run_response = await client.post(f"/api/v1/projects/{project_id}/runs", json={})
+    run_response = await authed_client.post(f"/api/v1/projects/{project_id}/runs", json={})
 
     assert run_response.json()["resumable"] is False
 
@@ -399,7 +399,7 @@ async def test_sweep_orphaned_work_dirs_keeps_a_dir_referenced_by_a_soft_deleted
 
 async def test_delete_project_with_a_finished_run_keeps_its_work_dir_on_disk(
     app,
-    client: AsyncClient,
+    authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
@@ -411,10 +411,10 @@ async def test_delete_project_with_a_finished_run_keeps_its_work_dir_on_disk(
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
-    project_response = await client.post("/api/v1/projects", json=MINIMAL_PROJECT)
+    project_response = await authed_client.post("/api/v1/projects", json=MINIMAL_PROJECT)
     project_id = project_response.json()["id"]
 
-    run_response = await client.post(f"/api/v1/projects/{project_id}/runs", json={})
+    run_response = await authed_client.post(f"/api/v1/projects/{project_id}/runs", json={})
     run_id = run_response.json()["id"]
     finished = await _drive_generation(run_id, session_factory, file_storage, settings)
     assert finished.status == RunStatus.succeeded
@@ -422,7 +422,7 @@ async def test_delete_project_with_a_finished_run_keeps_its_work_dir_on_disk(
     work_dir = Path(settings.runs_dir) / run_id
     assert work_dir.is_dir()
 
-    delete_response = await client.delete(f"/api/v1/projects/{project_id}")
+    delete_response = await authed_client.delete(f"/api/v1/projects/{project_id}")
     assert delete_response.status_code == 204
 
     async with session_factory() as session:

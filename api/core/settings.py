@@ -4,8 +4,12 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# HS256 with a secret shorter than this is trivially brute-forceable; PyJWT
+# itself doesn't enforce a minimum length, so the check is ours.
+_MIN_JWT_SECRET_BYTES = 32
 
 
 def _default_repo_root() -> str:
@@ -66,6 +70,31 @@ class Settings(BaseSettings):
     # gives that generous headroom while still bounding a truly stuck run
     # (issue #80). Still overridable via `CLI_RUN_TIMEOUT_S`.
     cli_run_timeout_s: float = Field(default=21600.0, alias="CLI_RUN_TIMEOUT_S")
+
+    # No default: a stack that boots without a real secret would silently
+    # accept every JWT signed with an empty/well-known key. Fails fast at
+    # `Settings()` construction (a required field) rather than at the first
+    # login attempt.
+    auth_jwt_secret: str = Field(alias="AUTH_JWT_SECRET")
+    # 24h, not the usual short-lived-access-token default (issue #96): a live
+    # run view can hold `GET /runs/{id}/events/stream` open for up to
+    # `CLI_RUN_TIMEOUT_S` (6h default), and with 4 trusted users a
+    # refresh-token flow buys nothing over just living with a longer TTL.
+    auth_token_ttl_h: float = Field(default=24.0, alias="AUTH_TOKEN_TTL_H")
+    auth_cookie_name: str = Field(default="autogenbook_session", alias="AUTH_COOKIE_NAME")
+    # `0` only for plain-http LAN dev - `localhost` counts as a secure
+    # context in every browser, so compose on `127.0.0.1` keeps this `1`.
+    auth_cookie_secure: bool = Field(default=True, alias="AUTH_COOKIE_SECURE")
+
+    @field_validator("auth_jwt_secret")
+    @classmethod
+    def _validate_jwt_secret_length(cls, value: str) -> str:
+        if len(value.encode("utf-8")) < _MIN_JWT_SECRET_BYTES:
+            raise ValueError(
+                f"AUTH_JWT_SECRET must be at least {_MIN_JWT_SECRET_BYTES} bytes long "
+                f"(got {len(value.encode('utf-8'))}); generate one with `openssl rand -hex 32`"
+            )
+        return value
 
 
 @lru_cache

@@ -11,9 +11,9 @@ from starlette import status
 
 from api.application.runs import RunService, build_done_event
 from api.core.db import get_sessionmaker
-from api.domain.models import RunStatus
+from api.domain.models import RunStatus, User
 from api.infrastructure.db.run_repository import SqlAlchemyRunEventRepository, SqlAlchemyRunRepository
-from api.presentation.deps import get_run_service
+from api.presentation.deps import current_user, get_run_service
 from api.presentation.schemas.common import Page, PageParams
 from api.presentation.schemas.runs import (
     ExportRequestIn,
@@ -44,6 +44,7 @@ _TERMINAL_RUN_STATUSES = {RunStatus.succeeded, RunStatus.failed, RunStatus.cance
 async def create_run(
     project_id: uuid.UUID,
     body: RunOptionsIn,
+    user: User = Depends(current_user),
     service: RunService = Depends(get_run_service),
 ) -> Run:
     run = await service.create(
@@ -56,6 +57,7 @@ async def create_run(
         audit_book_mode=body.audit_book_mode,
         legacy_tex=body.legacy_tex,
         fail_fast_schema=body.fail_fast_schema,
+        started_by=user.id,
     )
     return await run_to_schema(run)
 
@@ -84,10 +86,11 @@ async def regenerate_node(
     project_id: uuid.UUID,
     node_id: uuid.UUID,
     body: RegenerateRequestIn,
+    user: User = Depends(current_user),
     service: RunService = Depends(get_run_service),
 ) -> Run:
     run = await service.regenerate_node(
-        project_id, node_id, prompt_modifier=body.prompt_modifier
+        project_id, node_id, prompt_modifier=body.prompt_modifier, started_by=user.id
     )
     return await run_to_schema(run)
 
@@ -116,9 +119,10 @@ async def cancel_run(
 async def export_run(
     run_id: uuid.UUID,
     body: ExportRequestIn,
+    user: User = Depends(current_user),
     service: RunService = Depends(get_run_service),
 ) -> Run:
-    run = await service.export(run_id, output_format=body.format)
+    run = await service.export(run_id, output_format=body.format, started_by=user.id)
     return await run_to_schema(run)
 
 

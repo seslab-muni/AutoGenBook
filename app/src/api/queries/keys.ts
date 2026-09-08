@@ -42,3 +42,8 @@ export const fileKeys = {
     [...fileKeys.all, 'list', params ?? {}] as const,
   detail: (fileId: string) => [...fileKeys.all, fileId] as const,
 };
+
+export const authKeys = {
+  all: ['auth'] as const,
+  me: () => [...authKeys.all, 'me'] as const,
+};

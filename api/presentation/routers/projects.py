@@ -12,10 +12,11 @@ from api.application.projects import ProjectService
 from api.application.sources import SourceService
 from api.core.db import get_session
 from api.domain.models import Project as ProjectDomain
+from api.domain.models import User
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
-from api.presentation.deps import get_outline_service
+from api.presentation.deps import current_user, get_outline_service
 from api.presentation.routers.outline import tree_to_schema
 from api.presentation.routers.sources import get_source_service
 from api.presentation.schemas.common import Page, PageParams
@@ -30,11 +31,6 @@ from api.presentation.schemas.sources import source_to_schema
 from api.presentation.schemas.spec import BookStructure
 
 router = APIRouter(prefix="/projects", tags=["projects"])
-
-
-def current_owner() -> uuid.UUID | None:
-    # No auth yet; ownership filtering switches on later without route changes.
-    return None
 
 
 def get_project_service(session: AsyncSession = Depends(get_session)) -> ProjectService:
@@ -60,6 +56,8 @@ async def _to_schema(
     rows = await source_service.list_for_embed(project.id)
     return Project(
         id=project.id,
+        owner_id=project.owner_id,
+        owner_name=project.owner_name,
         title=project.title,
         subtitle=project.subtitle,
         authors=project.authors,
@@ -113,13 +111,13 @@ async def list_projects(
 @router.post("", response_model=Project, status_code=status.HTTP_201_CREATED)
 async def create_project(
     body: ProjectCreate,
-    owner_id: uuid.UUID | None = Depends(current_owner),
+    user: User = Depends(current_user),
     service: ProjectService = Depends(get_project_service),
     source_service: SourceService = Depends(get_source_service),
     outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     payload = body.model_dump(exclude={"sources", "outline"})
-    project = await service.create(owner_id=owner_id, **payload)
+    project = await service.create(owner_id=user.id, **payload)
     outline: list[OutlineNodeTree] = []
     try:
         # Best-effort atomicity: if a source fails validation (unknown file,
@@ -181,12 +179,13 @@ async def delete_project(
 )
 async def duplicate_project(
     project_id: uuid.UUID,
+    user: User = Depends(current_user),
     service: ProjectService = Depends(get_project_service),
     source_service: SourceService = Depends(get_source_service),
     outline_service: OutlineService = Depends(get_outline_service),
 ) -> Project:
     original_sources = await source_service.list_for_embed(project_id)
-    project = await service.duplicate(project_id)
+    project = await service.duplicate(project_id, owner_id=user.id)
     for source, _file in original_sources:
         await source_service.add(
             project.id,

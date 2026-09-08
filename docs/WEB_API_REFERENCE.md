@@ -13,11 +13,55 @@ Every endpoint below is implemented in `api/` today and has request/response cov
 - nginx (`app/nginx.conf.template`) only reverse-proxies `location /api/` to `http://api:8000` (the FastAPI container). Everything else falls through to the SPA (`try_files ... /index.html`).
 - Every versioned route is mounted under `/api/v1` (`api/main.py:create_app`, `APIRouter(prefix="/api/v1")`). Unversioned `/api/health` and `/api/ready` aliases also exist (`include_in_schema=False`, kept only for the Compose healthcheck) but are not part of the documented contract.
 - FastAPI's auto-generated `/docs` (Swagger UI), `/redoc`, and `/openapi.json` are enabled in-process but served at unprefixed paths, so they are **not reachable** through the nginx-proxied public URL — only routes under `/api/...` are forwarded. To browse the spec, use `openapi.yaml` in this directory (e.g. load it into a local Swagger UI/Redoc instance), or hit the `api` container directly during local development.
-- No authentication and no CORS middleware exist anywhere in `api/`. `ProjectRecord.owner_id` (`api/domain/models.py:Project.owner_id`) is reserved for later auth work — it's always `None` today (`api/presentation/routers/projects.py:current_owner`) and plays no part in access control.
+- Every `/api/v1` route requires a valid session cookie except `POST /auth/login`, `GET /health`, and `GET /ready` (see **Authentication** below) — enforced as a router-level dependency (`api/main.py`'s `guarded_router`) and checked structurally by a route-walk test (`tests/api/test_auth.py`) so a newly added route is guarded by default. There is still no CORS middleware; the frontend and API are always same-origin (nginx/Vite proxy), so none is needed. `ProjectRecord.owner_id` / `RunRecord.started_by` are set from the authenticated user on create (`ownerId`/`ownerName`, `startedById`/`startedByName` in responses) — `null` on a project/run predating this or whose user account was later removed.
 - The `api` container is reachable only from other containers on the Compose `frontend`/`backend` networks (`docker-compose.yml`); it has no published host port. `web` (nginx) is the only container exposed to the host, on `${WEB_PORT:-8080}`.
 - Error responses use RFC 9457 problem details, `Content-Type: application/problem+json`, body `{type, title, status, detail?, instance}` (`api/core/errors.py`). `NotFound`→404, `Conflict`→409, `ValidationFailed`/request validation→422, `PayloadTooLarge`→413, `StorageError`→503, anything unexpected→500.
 - List endpoints return `{items, total, limit, offset}` (`api/presentation/schemas/common.py:Page`); `limit` defaults to 50 and is capped at 200 unless a route documents a different default/cap below.
 - All request/response bodies are camelCase on the wire, snake_case in Python (`api/presentation/schemas/common.py:BaseSchema`, `alias_generator=to_camel`).
+
+## Authentication
+
+Email + password login issuing a JWT in an httpOnly, `SameSite=Lax` session cookie (`AUTH_COOKIE_NAME`, default `autogenbook_session`; `AUTH_TOKEN_TTL_H`, default 24). No self-service signup or password reset — accounts are managed with `python -m api.scripts.users` (`create`/`set-password`/`activate`/`deactivate`/`list`). Every active user can see and do everything; there are no roles. `set-password` bumps `password_changed_at`, which invalidates every token issued before that moment on its next request (the only revocation story this needs, with 4 trusted users). Non-GET/HEAD/OPTIONS requests additionally require header `X-Requested-With: XMLHttpRequest` or get a `403`; a custom header can't be sent cross-origin without a CORS preflight, and this API has no CORS middleware, so a foreign `<form>` POST relying on the ambient cookie can never carry it.
+
+#### `POST /api/v1/auth/login`
+
+No auth required (this is the one route that must work with no session). Body `{email, password}`.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `uuid` | |
+| `email` | `string` | |
+| `displayName` | `string` | |
+
+Status codes:
+- `200` — sets the session cookie, body is the user above.
+- `401` — wrong password, unknown email, or a deactivated account; body is always the same generic `"Invalid email or password"` detail so a caller can't enumerate which of the 4 accounts exist.
+
+Source: `api/presentation/routers/auth.py:login`, `api/application/auth.py:AuthService`
+
+#### `POST /api/v1/auth/logout`
+
+No path/query/body. Clears the session cookie.
+
+Status codes: `204` always (idempotent even with no active session).
+
+Source: `api/presentation/routers/auth.py:logout`
+
+#### `GET /api/v1/auth/me`
+
+No path/query/body. Returns the caller's own account.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `uuid` | |
+| `email` | `string` | |
+| `displayName` | `string` | |
+
+Status codes:
+- `200` — body is the user above.
+- `401` — missing, expired, or invalidated (post `set-password`) session; header `WWW-Authenticate: Cookie`.
+
+Source: `api/presentation/routers/auth.py:me`
 
 ## System endpoints
 

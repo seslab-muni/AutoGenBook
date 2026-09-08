@@ -1,6 +1,7 @@
 import { db, type ProjectRow } from './db';
 import type {
   AudienceLevel,
+  AuthUser,
   FileDto,
   MathLevel,
   NodeStatus,
@@ -19,6 +20,21 @@ import type {
  * into the flat outline shape (`parentId`/`orderIndex`/`cliKey`) and the
  * File+Source split the real API uses.
  */
+
+/**
+ * The one seeded account MSW treats as "signed in" by default (issue #96) — every seed project
+ * is owned by this user and every seeded/started run is attributed to them, matching the rest of
+ * the mocks' assumption of authenticated access. `GET /auth/me` returns this unless a test
+ * overrides the handler to simulate a logged-out session (see `require-auth.test.ts`).
+ */
+export const MOCK_USER: AuthUser = {
+  id: 'user-mock-1',
+  email: 'researcher@autogenbook.dev',
+  displayName: 'Ada Researcher',
+};
+
+/** Not part of `AuthUser` (the API never returns a password) — only `POST /auth/login`'s mock handler checks against this. */
+export const MOCK_USER_PASSWORD = 'correcthorsebatterystaple';
 
 const CONTENT_TYPES: Record<SourceType, string> = {
   pdf: 'application/pdf',
@@ -77,6 +93,13 @@ interface SeedOutlineNode {
 
 interface SeedProject {
   id: string;
+  /**
+   * Whether `MOCK_USER` owns this project — `true` (default when omitted) attributes it to
+   * them, matching every other seeded assumption of authenticated access; `false` simulates a
+   * legacy project predating accounts (`ownerId`/`ownerName` both `null`), so the "—" fallback
+   * in `ProjectCard`/`AppHeader` has seeded coverage too.
+   */
+  owned?: boolean;
   title: string;
   subtitle: string;
   authors: string[];
@@ -150,8 +173,11 @@ function flattenOutline(
 }
 
 function seedProject(seed: SeedProject): void {
+  const owned = seed.owned ?? true;
   const projectRow: ProjectRow = {
     id: seed.id,
+    ownerId: owned ? MOCK_USER.id : null,
+    ownerName: owned ? MOCK_USER.displayName : null,
     title: seed.title,
     subtitle: seed.subtitle,
     authors: seed.authors,
@@ -231,6 +257,8 @@ function seedProject(seed: SeedProject): void {
       queuedAt: seed.createdAt,
       startedAt: seed.createdAt,
       finishedAt,
+      startedById: owned ? MOCK_USER.id : null,
+      startedByName: owned ? MOCK_USER.displayName : null,
     };
     db.runs.set(runId, run);
     projectRow.lastRunId = runId;
@@ -620,6 +648,8 @@ const CONSENSUS_QUANTUM: SeedProject = {
 
 const REINFORCEMENT_LEARNING: SeedProject = {
   id: 'book-reinforcement-learning',
+  // A legacy project predating accounts — exercises the "—" owner fallback.
+  owned: false,
   title: 'Deep Reinforcement Learning & Multi-Agent Planning',
   subtitle: 'From Policy Gradients to Game-Theoretic Multi-Agent Systems',
   authors: ['Dr. Arthur Hayes', 'Prof. Sarah Chen'],

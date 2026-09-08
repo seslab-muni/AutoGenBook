@@ -28,3 +28,12 @@ export function createQueryClient(): QueryClient {
     }),
   });
 }
+
+/**
+ * The app's single `QueryClient` instance, used both by `AppProviders` (so React renders off
+ * it) and by cross-cutting modules outside the React tree — `src/auth/session.ts`'s `signOut`
+ * and `src/api/client.ts`'s 401 response middleware — that need to clear cached auth state from
+ * outside any component. Tests never import this: `renderRouterApp`/`renderWithQueryClient`
+ * build their own isolated `QueryClient` per test via `createQueryClient()`.
+ */
+export const queryClient: QueryClient = createQueryClient();

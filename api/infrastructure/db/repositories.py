@@ -9,7 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.errors import NotFound
 from api.domain.models import Project
-from api.infrastructure.db.models import OutlineNodeRecord, ProjectRecord, SourceRecord
+from api.infrastructure.db.models import (
+    OutlineNodeRecord,
+    ProjectRecord,
+    SourceRecord,
+    UserRecord,
+)
 
 _ALL_MUTABLE_FIELDS = (
     "title",
@@ -34,7 +39,7 @@ def _as_aware_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-def _to_domain(record: ProjectRecord) -> Project:
+def _to_domain(record: ProjectRecord, owner_name: str | None = None) -> Project:
     return Project(
         id=record.id,
         owner_id=record.owner_id,
@@ -53,6 +58,7 @@ def _to_domain(record: ProjectRecord) -> Project:
         last_run_id=record.last_run_id,
         created_at=_as_aware_utc(record.created_at),
         updated_at=_as_aware_utc(record.updated_at),
+        owner_name=owner_name,
     )
 
 
@@ -61,10 +67,17 @@ class SqlAlchemyProjectRepository:
         self._session = session
 
     async def get(self, project_id: uuid.UUID) -> Project | None:
-        record = await self._session.get(ProjectRecord, project_id)
-        if record is None or record.deleted_at is not None:
+        row = (
+            await self._session.execute(
+                select(ProjectRecord, UserRecord.display_name)
+                .outerjoin(UserRecord, UserRecord.id == ProjectRecord.owner_id)
+                .where(ProjectRecord.id == project_id)
+            )
+        ).first()
+        if row is None or row[0].deleted_at is not None:
             return None
-        return _to_domain(record)
+        record, owner_name = row
+        return _to_domain(record, owner_name)
 
     async def list_with_counts(
         self, limit: int, offset: int
@@ -75,7 +88,8 @@ class SqlAlchemyProjectRepository:
         `ProjectService.list` issuing two `count(*)` queries per project
         (402 statements for one `GET /projects` at `limit=200`, issue #51).
         Total statement count here stays flat (3, regardless of page size)
-        as the number of projects grows."""
+        as the number of projects grows - the owner-name outer join adds a
+        column, not another query (issue #96)."""
         total = await self._session.scalar(
             select(func.count())
             .select_from(ProjectRecord)
@@ -104,17 +118,19 @@ class SqlAlchemyProjectRepository:
                 ProjectRecord,
                 func.coalesce(sources_counts.c.sources_count, 0),
                 func.coalesce(outline_counts.c.outline_node_count, 0),
+                UserRecord.display_name,
             )
             .outerjoin(sources_counts, sources_counts.c.project_id == ProjectRecord.id)
             .outerjoin(outline_counts, outline_counts.c.project_id == ProjectRecord.id)
+            .outerjoin(UserRecord, UserRecord.id == ProjectRecord.owner_id)
             .where(ProjectRecord.deleted_at.is_(None))
             .order_by(ProjectRecord.updated_at.desc())
             .limit(limit)
             .offset(offset)
         )
         rows = [
-            (_to_domain(record), sources_count, outline_node_count)
-            for record, sources_count, outline_node_count in result.all()
+            (_to_domain(record, owner_name), sources_count, outline_node_count)
+            for record, sources_count, outline_node_count, owner_name in result.all()
         ]
         return rows, total or 0
 
@@ -140,7 +156,15 @@ class SqlAlchemyProjectRepository:
         )
         self._session.add(record)
         await self._session.commit()
-        return _to_domain(record)
+        owner_name = await self._owner_name(project.owner_id)
+        return _to_domain(record, owner_name)
+
+    async def _owner_name(self, owner_id: uuid.UUID | None) -> str | None:
+        if owner_id is None:
+            return None
+        return await self._session.scalar(
+            select(UserRecord.display_name).where(UserRecord.id == owner_id)
+        )
 
     async def update(
         self, project: Project, *, fields: Sequence[str] | None = None
@@ -163,7 +187,8 @@ class SqlAlchemyProjectRepository:
             setattr(record, name, getattr(project, name))
         record.updated_at = project.updated_at
         await self._session.commit()
-        return _to_domain(record)
+        owner_name = await self._owner_name(record.owner_id)
+        return _to_domain(record, owner_name)
 
     async def delete(self, project_id: uuid.UUID) -> None:
         # Soft delete (issue #57): never a SQL `DELETE`, so the project's
