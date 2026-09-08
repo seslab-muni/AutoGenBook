@@ -52,7 +52,7 @@ type CitationSpanProps = React.ComponentProps<'span'> &
   ExtraProps & {
     citekey?: string;
     citationsById: Map<string, RagCitation>;
-    onCitationClick?: (citeKey: string) => void;
+    onCitationClick?: ((citeKey: string) => void) | undefined;
   };
 
 function CitationSpan({ citationsById, onCitationClick, ...spanProps }: CitationSpanProps) {
@@ -63,7 +63,7 @@ function CitationSpan({ citationsById, onCitationClick, ...spanProps }: Citation
   );
 }
 
-const Blockquote: Components['blockquote'] = (props) => {
+const Blockquote: NonNullable<Components['blockquote']> = (props) => {
   const { calloutkind, calloutlabel, children, ...rest } = withoutNode(props) as ReturnType<
     typeof withoutNode<typeof props>
   > & { calloutkind?: string; calloutlabel?: string };
@@ -80,51 +80,51 @@ const Blockquote: Components['blockquote'] = (props) => {
   return <Callout label={calloutlabel ?? calloutkind}>{children}</Callout>;
 };
 
-const H1: Components['h1'] = (props) => {
+const H1: NonNullable<Components['h1']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return (
     <h1 className={cn('mt-6 mb-3 font-serif text-2xl font-bold tracking-tight', c)} {...rest} />
   );
 };
 
-const H2: Components['h2'] = (props) => {
+const H2: NonNullable<Components['h2']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return (
     <h2 className={cn('mt-5 mb-2 font-serif text-xl font-semibold tracking-tight', c)} {...rest} />
   );
 };
 
-const H3: Components['h3'] = (props) => {
+const H3: NonNullable<Components['h3']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return <h3 className={cn('mt-4 mb-2 font-serif text-lg font-medium', c)} {...rest} />;
 };
 
-const P: Components['p'] = (props) => {
+const P: NonNullable<Components['p']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return <p className={cn('my-2.5 leading-relaxed', c)} {...rest} />;
 };
 
-const Ul: Components['ul'] = (props) => {
+const Ul: NonNullable<Components['ul']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return <ul className={cn('my-2 ml-5 list-disc space-y-1', c)} {...rest} />;
 };
 
-const Ol: Components['ol'] = (props) => {
+const Ol: NonNullable<Components['ol']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return <ol className={cn('my-2 ml-5 list-decimal space-y-1', c)} {...rest} />;
 };
 
-const A: Components['a'] = (props) => {
+const A: NonNullable<Components['a']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return <a className={cn('text-primary underline underline-offset-2', c)} {...rest} />;
 };
 
-const Hr: Components['hr'] = (props) => {
+const Hr: NonNullable<Components['hr']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return <hr className={cn('my-6 border-border', c)} {...rest} />;
 };
 
-const Table: Components['table'] = (props) => {
+const Table: NonNullable<Components['table']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return (
     <div className="my-3 overflow-x-auto rounded-md border">
@@ -133,19 +133,19 @@ const Table: Components['table'] = (props) => {
   );
 };
 
-const Th: Components['th'] = (props) => {
+const Th: NonNullable<Components['th']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return (
     <th className={cn('border-b bg-muted/50 px-3 py-1.5 text-left font-semibold', c)} {...rest} />
   );
 };
 
-const Td: Components['td'] = (props) => {
+const Td: NonNullable<Components['td']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return <td className={cn('border-b px-3 py-1.5 align-top', c)} {...rest} />;
 };
 
-const Pre: Components['pre'] = (props) => {
+const Pre: NonNullable<Components['pre']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return (
     <pre
@@ -158,7 +158,7 @@ const Pre: Components['pre'] = (props) => {
   );
 };
 
-const Code: Components['code'] = (props) => {
+const Code: NonNullable<Components['code']> = (props) => {
   const { className: c, children, ...rest } = withoutNode(props);
   const isBlock = typeof c === 'string' && c.startsWith('language-');
   if (isBlock) {
@@ -175,7 +175,7 @@ const Code: Components['code'] = (props) => {
   );
 };
 
-const Img: Components['img'] = (props) => {
+const Img: NonNullable<Components['img']> = (props) => {
   const { src, alt, className: c, ...rest } = withoutNode(props);
   return (
     <img

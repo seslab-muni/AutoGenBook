@@ -27,6 +27,8 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook
       DATABASE_URL: postgresql+psycopg://autogenbook:autogenbook@localhost:5432/autogenbook
+      # No default in api/core/settings.py (issue #96) - CI needs its own value, unrelated to any real deployment secret.
+      AUTH_JWT_SECRET: ci-test-secret-do-not-use-in-production-0123456789abcdef
 
     steps:
       - uses: actions/checkout@v4
