@@ -177,7 +177,17 @@ class RunService:
         )
         created = await self._runs.add(run)
 
-        project.last_run_id = created.id
+        # `last_run_id` is deliberately *not* set to this just-queued run
+        # here (issue #66): `_resolvable_base_run` (regenerate/export) treats
+        # it as "the base to resume from", so eagerly pointing it at a run
+        # that hasn't succeeded yet meant one failed/cancelled/still-queued
+        # full run permanently blocked regenerate/export until another full
+        # run succeeded - even though the *previous* succeeded run's work
+        # dir was still on disk and perfectly resumable. Only
+        # `GenerationService._import_graph`/`_import_target_node` (worker
+        # side, on an actually succeeded run) advance it now. The
+        # `updated_at` bump is left as-is - queueing a run is still activity
+        # worth reordering the project hub list by.
         project.updated_at = now
         await self._projects.update(project)
         return created

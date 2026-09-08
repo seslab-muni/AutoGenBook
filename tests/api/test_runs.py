@@ -65,13 +65,20 @@ async def test_create_run_accepts_explicit_options(client: AsyncClient) -> None:
     assert body["options"]["auditBookMode"] == "strict"
 
 
-async def test_create_run_sets_project_last_run_id(client: AsyncClient) -> None:
+async def test_create_run_does_not_set_project_last_run_id_before_it_succeeds(
+    client: AsyncClient,
+) -> None:
+    """issue #66: `lastRunId` is only ever advanced by the worker once a run
+    actually succeeds (`GenerationService._import_graph`/
+    `_import_target_node`) - queueing one must not overwrite it eagerly, or
+    a later failed/cancelled/still-queued run would permanently point
+    `lastRunId` at something regenerate/export can't resume from."""
     project = await _create_project(client)
-    run = await _create_run(client, project["id"])
+    await _create_run(client, project["id"])
 
     response = await client.get(f"/api/v1/projects/{project['id']}")
     assert response.status_code == 200
-    assert response.json()["lastRunId"] == run["id"]
+    assert response.json()["lastRunId"] is None
 
 
 async def test_create_run_404_for_missing_project(client: AsyncClient) -> None:
