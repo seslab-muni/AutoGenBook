@@ -143,6 +143,62 @@ async def test_import_graph_updates_matched_leaf_content_and_status(
     assert refreshed.status == NodeStatus.COMPILED
 
 
+async def test_import_graph_formats_reviewer_notes_from_real_review_schema(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #81: `_load_section_review` used to assume a review shape of
+    `{issues: list[str], score}`, but the CLI's actual reviewer output
+    (`autogenbook/schemas/book_review.py:BookSectionReviewerOutput`) is
+    `{ok_to_keep, issues: [{type, severity, description, required_fix}],
+    suggested_edits, retrieval_queries}` - no `score` field at all. Against
+    the real shape, `issues` is a list of dicts, so `str(issue)` produced a
+    raw Python dict `repr()` per line instead of readable text, and
+    `reviewerScore` was never populated (silently `None` forever, not
+    reformatted - this asserts it stays that way rather than being
+    populated from a guessed heuristic)."""
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        node = await SqlAlchemyOutlineRepository(session).add(_make_node(project.id, None, 0))
+
+        work_dir = tmp_path / "run"
+        out_dir = work_dir / "out"
+        (out_dir / "sections").mkdir(parents=True)
+        (out_dir / "sections" / "1.md").write_text("Body text.\n", encoding="utf-8")
+        _write_structure_graph(out_dir, nodes={"book": {}, "1": {"title": "Node 0"}}, edges=[["book", "1"]])
+        (out_dir / "section_reviews").mkdir(parents=True)
+        (out_dir / "section_reviews" / "1.json").write_text(
+            json.dumps(
+                {
+                    "ok_to_keep": False,
+                    "issues": [
+                        {
+                            "type": "grounding",
+                            "severity": "major",
+                            "description": "Claim lacks a citation",
+                            "required_fix": "Cite the KB chunk it came from",
+                        }
+                    ],
+                    "suggested_edits": [],
+                    "retrieval_queries": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        await import_graph(
+            project, work_dir, SqlAlchemyOutlineRepository(session), SqlAlchemySourceRepository(session)
+        )
+
+        refreshed = await SqlAlchemyOutlineRepository(session).get(node.id)
+
+    assert refreshed is not None
+    assert refreshed.reviewer_notes == (
+        "[major] grounding: Claim lacks a citation → Cite the KB chunk it came from"
+    )
+    assert "{" not in refreshed.reviewer_notes
+    assert refreshed.reviewer_score is None
+
+
 async def test_import_graph_inserts_node_the_cli_subdivided(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:

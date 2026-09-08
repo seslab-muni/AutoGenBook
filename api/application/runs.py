@@ -484,6 +484,37 @@ def _read_run_meta(work_dir: str) -> dict[str, Any] | None:
         return None
 
 
+def _run_meta_belongs_to_this_attempt(
+    run_meta: dict[str, Any] | None, started_at: datetime | None
+) -> bool:
+    """A `regenerate_section`/`export` run shares its base run's `work_dir`
+    verbatim. If *this* run is cancelled or times out, the CLI subprocess is
+    killed via SIGTERM/SIGKILL and never reaches the `finally` in
+    `llm_usage.write_run_meta` that (re)writes `run_meta.json` - so the file
+    still sitting there is whatever the base run (or an earlier attempt of
+    this same run, before a stale-requeue) left behind. Nothing about
+    `run_meta.json`'s own contents identifies which run wrote it (the CLI's
+    `run_id` is an internal timestamp, unrelated to the API's `Run.id`), so
+    the only way to tell it's stale is to compare when it was written
+    against when *this* attempt actually started (issue #81) - a
+    `run_meta.json` that finished before this attempt even claimed the run
+    can't possibly be this attempt's own output. Attributing a stale file's
+    totals/error to this run would double-count cost and misattribute a
+    failure that was really the base run's."""
+    if not run_meta or started_at is None:
+        return False
+    finished_at_raw = run_meta.get("finished_at")
+    if not isinstance(finished_at_raw, str):
+        return False
+    try:
+        finished_at = datetime.fromisoformat(finished_at_raw)
+    except ValueError:
+        return False
+    if finished_at.tzinfo is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
+    return finished_at >= started_at
+
+
 def _extract_totals(run_meta: dict[str, Any] | None) -> tuple[int | None, float | None]:
     if not run_meta:
         return None, None
@@ -839,6 +870,13 @@ class GenerationService:
         self, run: Run, exit_code: int, project: Project, *, timed_out: bool = False
     ) -> Run:
         run_meta = _read_run_meta(run.work_dir)
+        if not _run_meta_belongs_to_this_attempt(run_meta, run.started_at):
+            # A cancelled/timed-out regenerate_section/export run shares its
+            # base run's work_dir, and its own CLI subprocess never got to
+            # rewrite run_meta.json (issue #81) - what's on disk is the base
+            # run's (or an earlier attempt's) leftover output. Don't
+            # attribute its totals/error to this run.
+            run_meta = None
         total_tokens, total_cost = _extract_totals(run_meta)
 
         current = await self._runs.get(run.id)
