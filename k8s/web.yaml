@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: web}
+  template:
+    metadata:
+      labels: {app: web}
+    spec:
+      securityContext:
+        fsGroupChangePolicy: OnRootMismatch
+        fsGroup: 101
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: web
+        image: cerit.io/conerzyo/autogenbook-web:<TAG>
+        securityContext:
+          runAsUser: 101
+          runAsGroup: 101
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+        env:
+        - name: MAX_UPLOAD_MB
+          valueFrom: {configMapKeyRef: {name: autogenbook-config, key: MAX_UPLOAD_MB}}
+        ports: [{containerPort: 8080}]
+        resources:
+          requests: {cpu: 100m, memory: 128Mi}
+          limits: {cpu: 500m, memory: 256Mi}
+        readinessProbe:
+          httpGet: {path: /, port: 8080}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector: {app: web}
+  ports: [{port: 80, targetPort: 8080}]

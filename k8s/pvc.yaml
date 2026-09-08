@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: nfs-csi
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: nfs-csi
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: runs-data
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: nfs-csi
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kb-extract-cache
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: nfs-csi
+  resources:
+    requests:
+      storage: 10Gi

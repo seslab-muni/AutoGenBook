@@ -14,5 +14,13 @@ COPY api/requirements.txt ./api/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt -r api/requirements.txt
 COPY . .
 
+RUN groupadd -g 1000 app \
+    && useradd -u 1000 -g app -d /app -M app \
+    && mkdir -p /app/runs /app/kb_cache \
+    && chown -R app:app /app
+
+ENV HOME=/app
+USER 1000
+
 EXPOSE 8000
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
