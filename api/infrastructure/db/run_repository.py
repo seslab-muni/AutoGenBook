@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -140,6 +140,91 @@ class SqlAlchemyRunRepository:
         assert record is not None
         _apply_domain_to_record(run, record)
         await self._session.commit()
+        await self._session.refresh(record)
+        return run_to_domain(record)
+
+    async def finalize(self, run: Run, *, expected_locked_by: str | None = None) -> Run | None:
+        """Persist `run`'s terminal outcome (status/exit_code/error/
+        cancel_requested/finished_at/totals), but only if the row is still
+        `running` (and, when `expected_locked_by` is given, still locked by
+        that worker) - a conditional `UPDATE ... WHERE ...` rather than
+        `update()`'s blind full-row overwrite.
+
+        Guards against two distinct lost-update races (issue #52/#56): a
+        second worker that has since reclaimed this run after
+        `requeue_stale` decided the first worker's heartbeat had gone stale
+        (`expected_locked_by` no longer matches `locked_by`), and
+        `RunService.cancel` committing a `running` -> `cancelled` transition
+        in the narrow window between this worker reading `run` and writing
+        its own outcome (`status` no longer `running`). Returns `None` when
+        the condition didn't hold, so the caller knows its write was
+        skipped rather than silently believing it won."""
+        conditions = [RunRecord.id == run.id, RunRecord.status == RunStatus.running]
+        if expected_locked_by is not None:
+            conditions.append(RunRecord.locked_by == expected_locked_by)
+        result = await self._session.execute(
+            update(RunRecord)
+            .where(*conditions)
+            .values(
+                status=run.status,
+                exit_code=run.exit_code,
+                error=run.error,
+                cancel_requested=run.cancel_requested,
+                finished_at=run.finished_at,
+                total_tokens=run.total_tokens,
+                total_cost_usd=run.total_cost_usd,
+            )
+        )
+        await self._session.commit()
+        if result.rowcount == 0:
+            return None
+        return await self._get_fresh(run.id)
+
+    async def request_cancel(self, run_id: uuid.UUID) -> Run | None:
+        """Set `cancel_requested` (and, for a run still `queued`, resolve it
+        straight to `cancelled` since no worker has claimed it yet to do so
+        itself) via a targeted `UPDATE`, never the full-row overwrite
+        `RunService.cancel` used to do. That overwrite raced the worker's
+        own `_finalize`/`_fail` committing a terminal status in the same
+        narrow window and silently reverted it back to `running` with no
+        worker attached (issue #56) - this only ever touches the specific
+        column(s) each transition needs, guarded by the row's current
+        `status`, so a run that has already finished by the time this
+        commits is simply left alone."""
+        now = datetime.now(timezone.utc)
+        queued_result = await self._session.execute(
+            update(RunRecord)
+            .where(RunRecord.id == run_id, RunRecord.status == RunStatus.queued)
+            .values(
+                status=RunStatus.cancelled,
+                cancel_requested=True,
+                error="cancelled before it started",
+                finished_at=now,
+            )
+        )
+        if queued_result.rowcount == 0:
+            # Not `queued` (already `running`, or already terminal) - only
+            # ever flip the flag on a `running` row; a worker's own
+            # `finalize` decides the actual terminal status.
+            await self._session.execute(
+                update(RunRecord)
+                .where(RunRecord.id == run_id, RunRecord.status == RunStatus.running)
+                .values(cancel_requested=True)
+            )
+        await self._session.commit()
+        return await self._get_fresh(run_id)
+
+    async def _get_fresh(self, run_id: uuid.UUID) -> Run | None:
+        """Like `get`, but never trusts a copy already sitting in the
+        session's identity map from an earlier `get()`/`add()` in the same
+        request (e.g. `RunService.cancel`'s own initial read) - `finalize`/
+        `request_cancel` write via a raw `UPDATE` Core statement, which
+        (unlike the ORM-attribute writes `update()` does) never touches an
+        already-loaded instance's in-memory attributes, so a plain `get()`
+        right after committing one would silently hand back stale data."""
+        record = await self._session.get(RunRecord, run_id)
+        if record is None:
+            return None
         await self._session.refresh(record)
         return run_to_domain(record)
 

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import dataclasses
 import uuid
+from datetime import datetime, timezone
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 
 MINIMAL_PAYLOAD = {
     "title": "Intro to Widgets",
@@ -140,6 +145,39 @@ async def test_update_project_patches_metadata_and_bumps_updated_at(
     assert body["subtitle"] == created["subtitle"]
     assert body["updatedAt"] != created["updatedAt"]
     assert body["createdAt"] == created["createdAt"]
+
+
+async def test_concurrent_project_update_and_last_run_id_bump_do_not_clobber_each_other(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #56: `PATCH /projects/{id}` and `RunService.
+    create`/`GenerationService._import_graph` bumping `last_run_id` both
+    used to `get -> mutate -> write the whole row` - whichever committed
+    last silently reverted the other's change. Simulates the interleaving:
+    both writes are built from the same baseline row."""
+    created = await _create_project(client)
+    project_id = uuid.UUID(created["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemyProjectRepository(session).get(project_id)
+    assert baseline is not None
+
+    patch = dataclasses.replace(
+        baseline, title="Retitled", updated_at=datetime.now(timezone.utc)
+    )
+    run_created = dataclasses.replace(
+        baseline, last_run_id=uuid.uuid4(), updated_at=datetime.now(timezone.utc)
+    )
+
+    async with session_factory() as session:
+        repo = SqlAlchemyProjectRepository(session)
+        await repo.update(patch, fields=("title",))
+        await repo.update(run_created, fields=("last_run_id",))
+        final = await repo.get(project_id)
+
+    assert final is not None
+    assert final.title == "Retitled"
+    assert final.last_run_id == run_created.last_run_id
 
 
 async def test_update_project_404(client: AsyncClient) -> None:

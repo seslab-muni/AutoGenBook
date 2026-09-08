@@ -85,9 +85,20 @@ def _default_book_json(input_path: Path) -> dict:
         pass
     return {
         "title": title,
-        "chapters": [
-            {"key": "ch1", "title": "Chapter One"},
-            {"key": "ch2", "title": "Chapter Two"},
+        # Nested `childs` (not the flat, arbitrarily-keyed `chapters` shape
+        # below) so `add_children` assigns real positional dash-joined keys
+        # ("1", "2", ...) - matching `book_builder.py:
+        # build_graph_from_book_json`'s actual key scheme regardless of
+        # whether the book JSON came from `--use-json` or (as here) the
+        # CLI's own outline="generate" structuring, since both paths funnel
+        # through the same `build_graph_from_book_json`. Issue #58's
+        # generate-mode drift check relies on a node's persisted `cli_key`
+        # matching what `assign_positions` recomputes for it when nothing
+        # has changed - a flat, non-positional key here would make that
+        # check misfire on every generate-mode run, drift or not.
+        "childs": [
+            {"title": "Chapter One"},
+            {"title": "Chapter Two"},
         ],
     }
 

@@ -84,7 +84,12 @@ class ProjectService:
         for field_name, value in changes.items():
             setattr(project, field_name, value)
         project.updated_at = datetime.now(timezone.utc)
-        return await self._repository.update(project)
+        # Only the columns this request actually changed - `RunService.
+        # create`/`GenerationService._import_graph` bumping just
+        # `last_run_id` on their own (possibly concurrent) read of this
+        # project must not have that reverted by this write's stale copy
+        # of it (issue #56).
+        return await self._repository.update(project, fields=tuple(changes.keys()))
 
     async def delete(self, project_id: uuid.UUID) -> None:
         await self.get(project_id)

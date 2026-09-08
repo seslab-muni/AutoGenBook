@@ -33,6 +33,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from starlette.concurrency import run_in_threadpool
+
 from api.application.outline import WORDS_PER_PAGE
 from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project, SourceStatus
 from api.domain.outline import assign_positions
@@ -60,11 +62,20 @@ def _strip_synthesized_writing_instructions(summary: str) -> str:
     return _WRITING_INSTRUCTIONS_RE.sub("", summary).strip()
 
 
-def _load_json(path: Path) -> dict[str, Any] | None:
+def _load_json_sync(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+async def _load_json(path: Path) -> dict[str, Any] | None:
+    # Off the event loop (issue #55): a run with many sections did one sync
+    # `read_text`/`json.loads` per section here (`_leaf_content_changes`
+    # below, plus this for the graph/kb-index/review files), each one
+    # blocking every other worker slot's drain loop for however long that
+    # file read took.
+    return await run_in_threadpool(_load_json_sync, path)
 
 
 def _extract_page(loc: str) -> str | None:
@@ -92,10 +103,10 @@ def _extract_citations(content: str, kb_index: dict[str, Any]) -> list[dict[str,
     return list(found.values())
 
 
-def _load_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | None:
+async def _load_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | None:
     reviews_dir = out_dir / "section_reviews"
     for name in (f"{cli_key}_revised.json", f"{cli_key}.json"):
-        data = _load_json(reviews_dir / name)
+        data = await _load_json(reviews_dir / name)
         if data is None:
             continue
         result: dict[str, Any] = {}
@@ -109,13 +120,19 @@ def _load_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | None:
     return None
 
 
-def _leaf_content_changes(
+def _read_section_sync(content_path: Path) -> str | None:
+    if not content_path.is_file():
+        return None
+    return content_path.read_text(encoding="utf-8")
+
+
+async def _leaf_content_changes(
     out_dir: Path, cli_key: str, kb_index: dict[str, Any] | None
 ) -> dict[str, Any]:
     content_path = out_dir / "sections" / f"{cli_key}.md"
-    if not content_path.is_file():
+    content = await run_in_threadpool(_read_section_sync, content_path)
+    if content is None:
         return {}
-    content = content_path.read_text(encoding="utf-8")
     changes: dict[str, Any] = {
         "content_markdown": content,
         "actual_words": len(content.split()),
@@ -123,7 +140,7 @@ def _leaf_content_changes(
     }
     if kb_index is not None:
         changes["rag_citations"] = _extract_citations(content, kb_index)
-    review = _load_section_review(out_dir, cli_key)
+    review = await _load_section_review(out_dir, cli_key)
     if review:
         if "notes" in review:
             changes["reviewer_notes"] = review["notes"]
@@ -132,7 +149,7 @@ def _leaf_content_changes(
     return changes
 
 
-def _matched_node_changes(
+async def _matched_node_changes(
     node: OutlineNode, cli_node: dict[str, Any], out_dir: Path, cli_key: str,
     kb_index: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -152,11 +169,11 @@ def _matched_node_changes(
         # leaving it stale relative to the `target_pages` shown right next
         # to it (issue #65).
         changes["word_budget"] = int(WORDS_PER_PAGE * float(cli_pages))
-    changes.update(_leaf_content_changes(out_dir, cli_key, kb_index))
+    changes.update(await _leaf_content_changes(out_dir, cli_key, kb_index))
     return changes
 
 
-def _new_node(
+async def _new_node(
     project: Project, cli_node: dict[str, Any], parent_id: uuid.UUID | None, cli_key: str,
     out_dir: Path, kb_index: dict[str, Any] | None, order_index: int, now: datetime,
 ) -> OutlineNode:
@@ -187,8 +204,16 @@ def _new_node(
         structure_locked=False,
         created_at=now,
         updated_at=now,
+        # Persisted (not left `None` for `assign_positions` to recompute
+        # later) so a `generate`-mode base run's drift check
+        # (`RunService.regenerate_node`) has a stable record of the key
+        # this node actually had in the CLI's own `structure_graph.json` at
+        # import time, independent of whatever position it's since moved
+        # to (issue #58; #62 tracks `cli_key` persistence more generally -
+        # this only needs it reliable for nodes created here).
+        cli_key=cli_key,
     )
-    changes = _leaf_content_changes(out_dir, cli_key, kb_index)
+    changes = await _leaf_content_changes(out_dir, cli_key, kb_index)
     return dataclass_replace(node, **changes) if changes else node
 
 
@@ -218,7 +243,7 @@ async def import_graph(
     outline_mode: Literal["project", "generate"] = "project",
 ) -> None:
     out_dir = work_dir / OUT_DIRNAME
-    data = _load_json(out_dir / "structure_graph.json")
+    data = await _load_json(out_dir / "structure_graph.json")
     if data is None:
         return
 
@@ -230,7 +255,7 @@ async def import_graph(
         parent, child = edge
         children_by_parent.setdefault(parent, []).append(child)
 
-    kb_index = _load_json(out_dir / "kb_sources.json")
+    kb_index = await _load_json(out_dir / "kb_sources.json")
     now = datetime.now(timezone.utc)
 
     if outline_mode == "generate":
@@ -274,7 +299,7 @@ async def _merge_cli_graph_into_outline(
         cli_node = nodes_json.get(cli_key) or {}
         node = by_cli_key.get(cli_key)
         if node is not None:
-            changes = _matched_node_changes(node, cli_node, out_dir, cli_key, kb_index)
+            changes = await _matched_node_changes(node, cli_node, out_dir, cli_key, kb_index)
             if changes:
                 await outline_repository.update(
                     dataclass_replace(node, **changes, updated_at=now)
@@ -283,9 +308,10 @@ async def _merge_cli_graph_into_outline(
         else:
             order_index = next_order_by_parent.get(parent_id, 0)
             next_order_by_parent[parent_id] = order_index + 1
-            created = await outline_repository.add(
-                _new_node(project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now)
+            new_node = await _new_node(
+                project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now
             )
+            created = await outline_repository.add(new_node)
             node_id = created.id
 
         for child_key in children_by_parent.get(cli_key, []):
@@ -315,15 +341,17 @@ async def _replace_outline_from_cli_graph(
     the database rather than merged/clobbered in place."""
     flat_nodes: list[OutlineNode] = []
 
-    def build(cli_key: str, parent_id: uuid.UUID | None, order_index: int) -> None:
+    async def build(cli_key: str, parent_id: uuid.UUID | None, order_index: int) -> None:
         cli_node = nodes_json.get(cli_key) or {}
-        node = _new_node(project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now)
+        node = await _new_node(
+            project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now
+        )
         flat_nodes.append(node)
         for index, child_key in enumerate(children_by_parent.get(cli_key, [])):
-            build(child_key, node.id, index)
+            await build(child_key, node.id, index)
 
     for index, root_key in enumerate(children_by_parent.get("book", [])):
-        build(root_key, None, index)
+        await build(root_key, None, index)
 
     await outline_repository.replace_all(project.id, flat_nodes)
 
@@ -355,7 +383,7 @@ async def import_single_node(
     a backstop for a run created before that check existed).
     """
     out_dir = work_dir / OUT_DIRNAME
-    data = _load_json(out_dir / "structure_graph.json")
+    data = await _load_json(out_dir / "structure_graph.json")
     if data is None:
         return False
 
@@ -365,8 +393,8 @@ async def import_single_node(
     if node is None or not node.cli_key:
         return False
 
-    kb_index = _load_json(out_dir / "kb_sources.json")
-    changes = _leaf_content_changes(out_dir, node.cli_key, kb_index)
+    kb_index = await _load_json(out_dir / "kb_sources.json")
+    changes = await _leaf_content_changes(out_dir, node.cli_key, kb_index)
     if not changes:
         return False
     await outline_repository.update(

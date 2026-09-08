@@ -355,6 +355,49 @@ async def test_update_node_404(client: AsyncClient) -> None:
     assert response.status_code == 404
 
 
+async def test_concurrent_updates_to_different_fields_do_not_clobber_each_other(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #56: two concurrent `PATCH /outline/{nodeId}`
+    requests touching different fields (a debounced content autosave racing
+    a `structureLocked`/`status` toggle) used to each `list -> replace ->
+    write the whole row` - whichever committed last silently reverted the
+    other's change. Simulates the exact interleaving that used to corrupt
+    this: both "requests" build their write from the *same* baseline row,
+    i.e. both read before either wrote."""
+    project = await _create_project(client)
+    node = await _create_node(client, project["id"], title="Chapter 1")
+    node_id = uuid.UUID(node["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemyOutlineRepository(session).get(node_id)
+    assert baseline is not None
+
+    from dataclasses import replace as dataclass_replace
+
+    autosave = dataclass_replace(
+        baseline,
+        content_markdown="draft content",
+        actual_words=2,
+        updated_at=datetime.now(timezone.utc),
+    )
+    lock_toggle = dataclass_replace(
+        baseline,
+        structure_locked=not baseline.structure_locked,
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async with session_factory() as session:
+        repo = SqlAlchemyOutlineRepository(session)
+        await repo.update(autosave, fields=("content_markdown", "actual_words"))
+        await repo.update(lock_toggle, fields=("structure_locked",))
+        final = await repo.get(node_id)
+
+    assert final is not None
+    assert final.content_markdown == "draft content"
+    assert final.structure_locked == (not baseline.structure_locked)
+
+
 async def test_delete_node_soft_deletes_subtree(
     client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:

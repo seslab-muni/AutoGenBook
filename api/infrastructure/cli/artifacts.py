@@ -25,6 +25,9 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO
+
+from starlette.concurrency import run_in_threadpool
 
 from api.domain.models import ArtifactKind, File, FileKind, RunArtifact
 from api.domain.ports import FileRepository, FileStorage, RunArtifactRepository
@@ -33,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 _SKIP_DIR_PREFIXES = (".kb_cache",)
 _SKIP_SUFFIXES = (".bak",)
+_HASH_CHUNK_SIZE = 1024 * 1024
 
 _AUTHOR_LINE_RE = re.compile(r"^\*\*Author:\*\*.*$", re.MULTILINE)
 
@@ -104,6 +108,32 @@ def _rewrite_author_line(content: str, authors: list[str]) -> str:
     return _AUTHOR_LINE_RE.sub(f"**Author:** {', '.join(authors)}", content, count=1)
 
 
+def _hash_file_sync(path: Path) -> tuple[str, int]:
+    """Stream-hash `path` without ever holding the whole file in memory -
+    only the current chunk plus the running digest state (issue #55: a
+    50 MB PDF used to be `read_bytes()`-ed and `hashlib.sha256(data)`-ed in
+    one call, i.e. loaded into memory whole, on this same call's event
+    loop, blocking every other worker slot's drain loop for however long
+    that took)."""
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(_HASH_CHUNK_SIZE), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _read_and_rewrite_author_line_sync(path: Path, authors: list[str]) -> bytes:
+    # The only artifact whose *content* is modified before upload (the
+    # title-cased `<Title>.md`) - it's the book's own top-level Markdown,
+    # never large enough to be worth streaming, so reading it whole here
+    # (off the event loop) is fine; every other artifact below is streamed
+    # straight from disk instead.
+    data = path.read_bytes()
+    return _rewrite_author_line(data.decode("utf-8", errors="replace"), authors).encode("utf-8")
+
+
 async def upload_artifacts(
     out_dir: Path,
     run_id: uuid.UUID,
@@ -132,9 +162,12 @@ async def upload_artifacts(
 
     created: list[RunArtifact] = []
     for relative_path, kind in collect_artifact_paths(out_dir):
+        stream: BinaryIO | None = None
         try:
             absolute_path = out_dir / relative_path
-            data = absolute_path.read_bytes()
+            content_type, _ = mimetypes.guess_type(absolute_path.name)
+            content_type = content_type or "application/octet-stream"
+
             if kind is ArtifactKind.markdown and authors:
                 # `errors="replace"` (not strict `utf-8`): a single bad byte
                 # in a CLI-generated Markdown file used to raise here, and
@@ -142,25 +175,33 @@ async def upload_artifacts(
                 # site, that skipped *every remaining* artifact for the run
                 # (the title-cased `<Title>.md` sorts before `sections/`) -
                 # now isolated to just this one file's `try` below too.
-                data = _rewrite_author_line(
-                    data.decode("utf-8", errors="replace"), authors
-                ).encode("utf-8")
-
-            content_type, _ = mimetypes.guess_type(absolute_path.name)
-            content_type = content_type or "application/octet-stream"
+                data = await run_in_threadpool(
+                    _read_and_rewrite_author_line_sync, absolute_path, authors
+                )
+                sha256_hex, size_bytes = hashlib.sha256(data).hexdigest(), len(data)
+                stream = io.BytesIO(data)
+            else:
+                # Hashed by streaming through the file once, off the event
+                # loop (issue #55), then uploaded straight from a second
+                # handle on the same file via `storage.put`'s own
+                # `upload_fileobj` - never buffered whole in memory (as a
+                # `BytesIO` built from `read_bytes()` used to, twice over:
+                # once as `data`, once again inside the `BytesIO`).
+                sha256_hex, size_bytes = await run_in_threadpool(_hash_file_sync, absolute_path)
+                stream = await run_in_threadpool(absolute_path.open, "rb")
 
             file = File(
                 id=uuid.uuid4(),
                 storage_key=f"runs/{run_id}/{relative_path}",
                 filename=absolute_path.name,
                 content_type=content_type,
-                size_bytes=len(data),
-                sha256=hashlib.sha256(data).hexdigest(),
+                size_bytes=size_bytes,
+                sha256=sha256_hex,
                 kind=FileKind.artifact,
                 kb_eligible=False,
                 created_at=datetime.now(timezone.utc),
             )
-            await storage.put(file.storage_key, io.BytesIO(data), file.content_type)
+            await storage.put(file.storage_key, stream, file.content_type)
             await file_repository.add(file)
 
             saved = await run_artifact_repository.add(
@@ -177,4 +218,7 @@ async def upload_artifacts(
             logger.exception(
                 "run %s: failed to upload artifact %s, skipping it", run_id, relative_path
             )
+        finally:
+            if stream is not None:
+                stream.close()
     return created
