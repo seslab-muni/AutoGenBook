@@ -229,6 +229,38 @@ async def test_worker_slot_zero_sweeps_stale_runs_and_work_dirs_when_idle(
     assert sweep_calls == [30]
 
 
+async def test_worker_slot_zero_sweeps_orphaned_work_dirs_when_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue #57: the orphan-work-dir sweep (finds directories under
+    `RUNS_DIR` no `runs` row references at all, regardless of status) runs
+    on the same idle cycle as `sweep_stale_work_dirs`, on slot 0 only."""
+    fake_queue = _FakeRunQueue(claim_return=None)
+    _patch_queue(monkeypatch, fake_queue)
+
+    orphan_calls: list[str] = []
+
+    async def _fake_orphan_sweep(run_repository, runs_dir):
+        orphan_calls.append(runs_dir)
+        return 1
+
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fake_orphan_sweep)
+
+    stop_event = asyncio.Event()
+
+    async def _fake_claim_and_execute(*args, **kwargs):
+        stop_event.set()
+        return False
+
+    monkeypatch.setattr(worker_main, "_claim_and_execute", _fake_claim_and_execute)
+
+    await worker_main._worker_slot(
+        0, _fake_session_factory, None, _settings(runs_dir="/app/runs"), stop_event
+    )
+
+    assert orphan_calls == ["/app/runs"]
+
+
 async def test_worker_slot_nonzero_never_sweeps(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_queue = _FakeRunQueue(claim_return=None)
     _patch_queue(monkeypatch, fake_queue)
@@ -237,6 +269,11 @@ async def test_worker_slot_nonzero_never_sweeps(monkeypatch: pytest.MonkeyPatch)
         raise AssertionError("sweep_stale_work_dirs must only run on slot 0")
 
     monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fail_if_called)
+
+    async def _fail_if_orphan_sweep_called(*args, **kwargs):
+        raise AssertionError("sweep_orphaned_work_dirs must only run on slot 0")
+
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fail_if_orphan_sweep_called)
 
     stop_event = asyncio.Event()
 

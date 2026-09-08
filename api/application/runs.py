@@ -476,6 +476,34 @@ async def sweep_stale_work_dirs(run_repository: RunRepository, retention_days: f
     return removed
 
 
+async def sweep_orphaned_work_dirs(run_repository: RunRepository, runs_dir: str) -> int:
+    """Remove any directory directly under `RUNS_DIR` that no `runs` row
+    references at all, regardless of status (issue #57). `ProjectService.
+    delete` soft-deletes a project now, so its `runs` rows (and their
+    `work_dir`s) survive going forward - but a project hard-deleted before
+    that fix landed already cascaded its `runs` rows away, permanently
+    orphaning that project's (potentially hundreds of MB) work directories
+    with nothing left in the database to ever find them by. Unlike
+    `sweep_stale_work_dirs`, this doesn't wait out `retention_days`: a
+    directory with zero referencing rows isn't "idle", it's unreferenced
+    garbage the moment it's found - there's no in-flight run it could
+    possibly still belong to."""
+    runs_root = Path(runs_dir)
+    if not runs_root.is_dir():
+        return 0
+    known = {
+        str(Path(work_dir).resolve()) for work_dir in await run_repository.list_all_work_dirs()
+    }
+    removed = 0
+    for entry in sorted(runs_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if str(entry.resolve()) not in known:
+            await run_in_threadpool(shutil.rmtree, entry, True)
+            removed += 1
+    return removed
+
+
 def _read_run_meta(work_dir: str) -> dict[str, Any] | None:
     path = Path(work_dir) / book_command.OUT_DIRNAME / "run_meta.json"
     try:

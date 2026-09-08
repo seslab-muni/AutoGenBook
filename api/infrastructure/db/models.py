@@ -80,11 +80,28 @@ class ProjectRecord(Base):
         onupdate=sa.func.now(),
         nullable=False,
     )
+    # Soft delete (issue #57): `DELETE /projects/{id}` only ever sets this,
+    # following the same pattern sources/outline nodes already use - never a
+    # SQL `DELETE`, so the project's `runs` rows (and everything cascading
+    # from them: `run_artifacts`, `run_events`) stay in place. A hard
+    # `session.delete` here used to cascade those away out from under
+    # in-flight work: a run still `running` when its project's `DELETE`
+    # returned 204 left the worker's `append_batch`/`_finalize` hitting an
+    # FK violation or an `assert record is not None` against a row that no
+    # longer existed, with the CLI subprocess still running unattended.
+    # `SqlAlchemyProjectRepository.get`/`list` filter this out; `delete`
+    # additionally refuses (409) while a run is still active for the
+    # project - see `ProjectService.delete`.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
     # `passive_deletes=False` (the default) makes the ORM issue explicit child
     # DELETEs when a project is deleted, so cascading works under SQLite too
     # (the test suite's engine doesn't enable `PRAGMA foreign_keys`), on top
-    # of the `ON DELETE CASCADE` FK enforced by Postgres in production.
+    # of the `ON DELETE CASCADE` FK enforced by Postgres in production. Dead
+    # in practice now that `delete` above never issues a SQL `DELETE`
+    # through the ORM - kept as a DB-level safety net, not the primary path.
     # `lazy="selectin"` avoids a lazy-load attempt on the async session.
     sources: Mapped[list["SourceRecord"]] = relationship(
         "SourceRecord",

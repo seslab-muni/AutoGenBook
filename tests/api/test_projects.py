@@ -191,6 +191,26 @@ async def test_delete_project_404(client: AsyncClient) -> None:
     assert response.headers["content-type"] == "application/problem+json"
 
 
+async def test_delete_project_409_while_a_run_is_active(client: AsyncClient) -> None:
+    """issue #57: `DELETE /projects/{id}` used to succeed (204) even with an
+    active run, hard-cascading the run row away out from under the
+    worker's still-running CLI subprocess - the next `append_batch`/
+    `_finalize` would then hit an FK violation or an `assert record is not
+    None` against a row that no longer existed. It must refuse instead,
+    leaving the project (and its active run) untouched."""
+    created = await _create_project(client)
+
+    run_response = await client.post(f"/api/v1/projects/{created['id']}/runs", json={})
+    assert run_response.status_code == 202, run_response.text
+
+    delete_response = await client.delete(f"/api/v1/projects/{created['id']}")
+    assert delete_response.status_code == 409
+    assert delete_response.headers["content-type"] == "application/problem+json"
+
+    get_response = await client.get(f"/api/v1/projects/{created['id']}")
+    assert get_response.status_code == 200
+
+
 async def test_duplicate_project_creates_new_id_and_fresh_timestamps(
     client: AsyncClient,
 ) -> None:
