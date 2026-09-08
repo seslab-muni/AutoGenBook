@@ -98,15 +98,12 @@ class RunService:
         *,
         outline: Literal["project", "generate"] = "project",
         output_format: Literal["markdown", "latex", "pdf"] | None = None,
-        allow_subdivision: bool = False,
+        allow_subdivision: bool = True,
         enable_web_rag: bool = False,
         audit_book: bool = False,
         audit_book_mode: Literal["off", "warn", "strict"] = "warn",
         legacy_tex: bool = False,
-        rebuild_kb: bool = False,
         fail_fast_schema: bool = False,
-        resume: bool = False,
-        export_tex_only: bool = False,
     ) -> Run:
         project = await self._projects.get(project_id)
         if project is None:
@@ -147,10 +144,7 @@ class RunService:
             audit_book=audit_book,
             audit_book_mode=audit_book_mode,
             legacy_tex=legacy_tex,
-            rebuild_kb=rebuild_kb,
             fail_fast_schema=fail_fast_schema,
-            resume=resume,
-            export_tex_only=export_tex_only,
         )
 
         run_id = uuid.uuid4()

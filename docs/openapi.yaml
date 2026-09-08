@@ -2262,7 +2262,7 @@ components:
         allowSubdivision:
           type: boolean
           title: Allowsubdivision
-          default: false
+          default: true
         enableWebRag:
           type: boolean
           title: Enablewebrag
@@ -2283,21 +2283,9 @@ components:
           type: boolean
           title: Legacytex
           default: false
-        rebuildKb:
-          type: boolean
-          title: Rebuildkb
-          default: false
         failFastSchema:
           type: boolean
           title: Failfastschema
-          default: false
-        resume:
-          type: boolean
-          title: Resume
-          default: false
-        exportTexOnly:
-          type: boolean
-          title: Exporttexonly
           default: false
       additionalProperties: false
       type: object
@@ -2306,7 +2294,26 @@ components:
 
         to the project''s own `output_format` when omitted (resolved by
 
-        `RunService.create`''s caller, not here).'
+        `RunService.create`''s caller, not here).
+
+
+        `resume`, `exportTexOnly` and `rebuildKb` are deliberately not exposed
+
+        here (issue #60): they only have meaningful semantics on a
+
+        `regenerate_section`/`export` run resuming an existing work directory,
+
+        which `RunService.regenerate_node`/`export` already set on the run''s
+
+        `RunOptions` themselves via `dataclasses.replace(base_run.options, ...)`.
+
+        A fresh `full` run always starts a brand-new work directory, so
+
+        `resume=True` would resume nothing, `exportTexOnly=True` has no base
+
+        Markdown to skip regenerating, and `rebuildKb` has no pre-existing index
+
+        to force a rebuild of.'
     RunOptionsOut:
       properties:
         outline:

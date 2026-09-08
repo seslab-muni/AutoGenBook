@@ -15,6 +15,8 @@ from api.infrastructure.db.models import RunEventRecord, RunRecord
 
 _ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
 
+_RUN_OPTIONS_FIELDS = {f.name for f in dataclasses.fields(RunOptions)}
+
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
     # SQLite drops tzinfo on round-trip (unlike Postgres); re-attach it.
@@ -23,13 +25,27 @@ def _as_aware_utc(value: datetime | None) -> datetime | None:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
+def _run_options_from_json(data: dict) -> RunOptions:
+    """Tolerant `RunOptions` deserialization (issue #60): a stored `options`
+    JSON blob is a snapshot from whatever `RunOptions` shape existed when the
+    row was written. `RunOptions(**data)` would raise `TypeError` on any key
+    the dataclass no longer has (a field removed/renamed since) and can never
+    supply a value for a field added since - both would break every read of
+    a pre-existing row (`GET /runs/...`, `GET /projects/{id}/runs`, the
+    worker's `claim()`) until a data migration ran. Filtering to just the
+    keys `RunOptions` currently declares drops unknown/removed keys silently
+    and leaves any newly-added field to fall back to its own dataclass
+    default instead."""
+    return RunOptions(**{k: v for k, v in data.items() if k in _RUN_OPTIONS_FIELDS})
+
+
 def run_to_domain(record: RunRecord) -> Run:
     return Run(
         id=record.id,
         project_id=record.project_id,
         kind=record.kind,
         status=record.status,
-        options=RunOptions(**record.options),
+        options=_run_options_from_json(record.options),
         base_run_id=record.base_run_id,
         target_node_id=record.target_node_id,
         target_node_previous_status=record.target_node_previous_status,
