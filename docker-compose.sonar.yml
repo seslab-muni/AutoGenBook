@@ -1,0 +1,84 @@
+# Standalone static-analysis stack: SonarQube Community Edition + its own
+# Postgres metadata store. Kept out of docker-compose.yml on purpose so
+# `docker compose up` for the app never also boots this (heavier, dev-only)
+# stack. Run with:
+#
+#   docker compose -f docker-compose.sonar.yml up -d
+#
+# then see docs/STATIC_ANALYSIS.md for first-time setup (admin password
+# reset, project token) and how to trigger a scan.
+#
+# Prerequisite (Linux hosts only, required by SonarQube's embedded
+# Elasticsearch): vm.max_map_count must be >= 262144.
+#   sudo sysctl -w vm.max_map_count=262144
+services:
+  sonarqube:
+    # Not `lts-community`: as of writing that resolves to SonarQube 9.9,
+    # whose bundled TypeScript analyzer predates tsconfig options this
+    # project's app/tsconfig.app.json uses (verbatimModuleSyntax,
+    # erasableSyntaxOnly, allowArbitraryExtensions, ...), so it silently
+    # skips every frontend file. `community` tracks the current release.
+    image: sonarqube:community
+    depends_on:
+      sonarqube-db:
+        condition: service_healthy
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonarqube-db:5432/${SONAR_DB_NAME:-sonarqube}
+      SONAR_JDBC_USERNAME: ${SONAR_DB_USER:-sonarqube}
+      SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD:-sonarqube}
+    ports:
+      # Loopback-only by default, same convention as the main stack's `web`
+      # service - SonarQube ships with a default admin/admin login.
+      - "${SONAR_BIND_HOST:-127.0.0.1}:${SONAR_PORT:-9000}:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    networks:
+      - sonarnet
+
+  # One-off scanner, not started by `up` (profile-gated). Run via
+  # scripts/sonar_scan.sh, or directly:
+  #   SONAR_TOKEN=... docker compose -f docker-compose.sonar.yml run --rm sonar-scanner
+  sonar-scanner:
+    image: sonarsource/sonar-scanner-cli:latest
+    profiles: ["scan"]
+    depends_on:
+      - sonarqube
+    environment:
+      SONAR_HOST_URL: http://sonarqube:9000
+      # Intentionally not required here: that would break `up -d sonarqube
+      # sonarqube-db` (compose interpolates the whole file regardless of
+      # which services are selected). scripts/sonar_scan.sh checks for it
+      # before invoking this service.
+      SONAR_TOKEN: ${SONAR_TOKEN:-}
+    volumes:
+      - .:/usr/src
+    working_dir: /usr/src
+    networks:
+      - sonarnet
+
+  sonarqube-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${SONAR_DB_NAME:-sonarqube}
+      POSTGRES_USER: ${SONAR_DB_USER:-sonarqube}
+      POSTGRES_PASSWORD: ${SONAR_DB_PASSWORD:-sonarqube}
+    volumes:
+      - sonarqube_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sonarnet
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonarqube_db_data:
+
+networks:
+  sonarnet:

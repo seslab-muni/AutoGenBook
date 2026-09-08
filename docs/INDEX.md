@@ -11,6 +11,7 @@
 - Troubleshooting: `TROUBLESHOOTING.md`
 - Developer guide: `DEVELOPER_GUIDE.md`
 - Security: `SECURITY.md`
+- Static analysis (SonarQube + Semgrep): `STATIC_ANALYSIS.md`
 - Glossary: `GLOSSARY.md`
 
 Existing design notes:

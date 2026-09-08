@@ -4,7 +4,16 @@ app/.env*
 !app/.env.example
 app/coverage
 
+/.env
+!/.env.example
+
 .venv
 __pycache__/
 *.py[cod]
 .pytest_cache/
+api/coverage.xml
+.coverage
+
+# Static analysis (docs/STATIC_ANALYSIS.md)
+.scannerwork/
+semgrep-results.json
