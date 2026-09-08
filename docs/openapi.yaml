@@ -1424,11 +1424,23 @@ components:
       description: 'Flat shape - one row, addressed by `parentId` + `orderIndex`.
 
 
-        `level`, `sectionNumber` and `cliKey` are always derived from the current
+        `level`, `sectionNumber` and `cliKey` returned here are always the
 
-        tree shape (`api.domain.outline.assign_positions`) - never persisted
+        current tree shape''s derived value (`api.domain.outline.
 
-        client-supplied values.'
+        assign_positions`), never a client-supplied one - a client can''t set any
+
+        of the three (`OutlineNodeCreate`/`OutlineNodeUpdate` don''t accept them).
+
+        The `cli_key` *column*, unlike `level`/`section_number`, is genuinely
+
+        persisted for a node a run has imported/regenerated (`graph_import.py`''s
+
+        `_new_node`) - `RunService.regenerate_node` reads that stored value back
+
+        to detect outline drift since the node''s base run. See `graph_import.
+
+        py`''s module docstring for the full read/write story.'
     OutlineNodeCreate:
       properties:
         parentId:

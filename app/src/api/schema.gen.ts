@@ -487,9 +487,15 @@ export interface components {
          * OutlineNode
          * @description Flat shape - one row, addressed by `parentId` + `orderIndex`.
          *
-         *     `level`, `sectionNumber` and `cliKey` are always derived from the current
-         *     tree shape (`api.domain.outline.assign_positions`) - never persisted
-         *     client-supplied values.
+         *     `level`, `sectionNumber` and `cliKey` returned here are always the
+         *     current tree shape's derived value (`api.domain.outline.
+         *     assign_positions`), never a client-supplied one - a client can't set any
+         *     of the three (`OutlineNodeCreate`/`OutlineNodeUpdate` don't accept them).
+         *     The `cli_key` *column*, unlike `level`/`section_number`, is genuinely
+         *     persisted for a node a run has imported/regenerated (`graph_import.py`'s
+         *     `_new_node`) - `RunService.regenerate_node` reads that stored value back
+         *     to detect outline drift since the node's base run. See `graph_import.
+         *     py`'s module docstring for the full read/write story.
          */
         OutlineNode: {
             /**
@@ -1038,6 +1044,16 @@ export interface components {
          * @description Request body of `POST /projects/{id}/runs`. `output_format` defaults
          *     to the project's own `output_format` when omitted (resolved by
          *     `RunService.create`'s caller, not here).
+         *
+         *     `resume`, `exportTexOnly` and `rebuildKb` are deliberately not exposed
+         *     here (issue #60): they only have meaningful semantics on a
+         *     `regenerate_section`/`export` run resuming an existing work directory,
+         *     which `RunService.regenerate_node`/`export` already set on the run's
+         *     `RunOptions` themselves via `dataclasses.replace(base_run.options, ...)`.
+         *     A fresh `full` run always starts a brand-new work directory, so
+         *     `resume=True` would resume nothing, `exportTexOnly=True` has no base
+         *     Markdown to skip regenerating, and `rebuildKb` has no pre-existing index
+         *     to force a rebuild of.
          */
         RunOptionsIn: {
             /**
@@ -1050,7 +1066,7 @@ export interface components {
             outputFormat?: ("markdown" | "latex" | "pdf") | null;
             /**
              * Allowsubdivision
-             * @default false
+             * @default true
              */
             allowSubdivision?: boolean;
             /**
@@ -1075,25 +1091,10 @@ export interface components {
              */
             legacyTex?: boolean;
             /**
-             * Rebuildkb
-             * @default false
-             */
-            rebuildKb?: boolean;
-            /**
              * Failfastschema
              * @default false
              */
             failFastSchema?: boolean;
-            /**
-             * Resume
-             * @default false
-             */
-            resume?: boolean;
-            /**
-             * Exporttexonly
-             * @default false
-             */
-            exportTexOnly?: boolean;
         };
         /** RunOptionsOut */
         RunOptionsOut: {
