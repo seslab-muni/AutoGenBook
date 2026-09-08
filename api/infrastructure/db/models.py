@@ -167,6 +167,19 @@ class OutlineNodeRecord(Base):
         # avoid ever colliding within a single statement, since this
         # constraint can't defer the check to commit time the way a
         # deferrable table constraint could.
+        #
+        # `postgresql_nulls_not_distinct` (Postgres 15+, the version this
+        # project targets - `docker-compose.yml` pins `postgres:16-alpine`)
+        # makes two rows with `parent_id IS NULL` (root-level siblings)
+        # compare equal on that column instead of Postgres's default "every
+        # NULL is distinct from every other NULL" - without it, two root
+        # nodes could silently share the same `order_index`, since the
+        # *whole* indexed tuple was never considered a duplicate whenever
+        # any one column was NULL (issue #67). SQLite has no equivalent
+        # syntax and ignores this dialect-specific option entirely, so the
+        # collision there is caught by `OutlineService.create` routing an
+        # explicit `orderIndex` through the same shift-siblings logic
+        # `update` already uses, rather than by this index.
         sa.Index(
             "uq_outline_nodes_project_parent_order",
             "project_id",
@@ -175,6 +188,7 @@ class OutlineNodeRecord(Base):
             unique=True,
             postgresql_where=sa.text("deleted_at IS NULL"),
             sqlite_where=sa.text("deleted_at IS NULL"),
+            postgresql_nulls_not_distinct=True,
         ),
         sa.Index("ix_outline_nodes_project_id_cli_key", "project_id", "cli_key"),
     )
