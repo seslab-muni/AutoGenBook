@@ -79,7 +79,10 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
 
   const allSources = data?.items ?? [];
   const availableTypes = useMemo(
-    () => [...new Set((data?.items ?? []).map((source) => source.type))].sort(),
+    () =>
+      [...new Set((data?.items ?? []).map((source) => source.type))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
     [data],
   );
 

@@ -59,6 +59,11 @@ function createRequestId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID();
   }
+  if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
+    return Array.from(crypto.getRandomValues(new Uint32Array(4)), (word) =>
+      word.toString(36),
+    ).join('');
+  }
   return Math.random().toString(36).slice(2);
 }
 
