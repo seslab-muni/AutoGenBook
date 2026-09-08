@@ -8,6 +8,10 @@ import os
 # anything that constructs a `Settings()` without this would fail collection
 # entirely. 40 bytes, comfortably over the 32-byte minimum.
 os.environ.setdefault("AUTH_JWT_SECRET", "pytest-only-secret-do-not-use-in-prod-40b")
+# Same reasoning: `Settings.database_url` is now a required field too. Tests
+# never actually connect through it (they build their own engine from
+# `TEST_DATABASE_URL` below) - this only needs to satisfy pydantic.
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
 # The ASGI test transport talks plain http://testserver, never https - a
 # `Secure` cookie (the production default) would never be sent back by a
 # real browser/httpx client over that scheme, so every request after login

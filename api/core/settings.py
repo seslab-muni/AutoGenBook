@@ -27,10 +27,12 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
 
-    database_url: str = Field(
-        default="postgresql://autogenbook:autogenbook@db:5432/autogenbook",
-        alias="DATABASE_URL",
-    )
+    # No default: a hardcoded default bakes a guessable password into every
+    # checkout. It's never actually relied on - `docker-compose.yml`'s
+    # `x-app-env` anchor (used by both `api` and `worker`) always passes
+    # `DATABASE_URL` explicitly, and `docs/DEVELOPER_GUIDE.md`'s documented
+    # Alembic invocation always passes it explicitly on the command line too.
+    database_url: str = Field(alias="DATABASE_URL")
 
     s3_endpoint_url: str = Field(default="http://minio:9000", alias="S3_ENDPOINT_URL")
     s3_access_key: str = Field(default="autogenbook", alias="S3_ACCESS_KEY")
