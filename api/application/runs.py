@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import shutil
 import threading
 import uuid
@@ -65,6 +66,34 @@ _DRAIN_POLL_INTERVAL_S = 1.0
 # linear backoff before giving up and tearing down the still-running CLI
 # subprocess (issue #48), rather than dying on the very first hiccup.
 _DRAIN_MAX_CONSECUTIVE_FAILURES = 5
+
+# Matches an absolute filesystem path (`/app/runs/<uuid>/out/...`, a MinIO/S3
+# endpoint URL's path component, ...) or an `http(s)://` URL - the shapes a
+# raw boto3/OSError message tends to carry (issue #82). Two or more path
+# segments after the leading `/`, so short, harmless things aren't flagged.
+_SENSITIVE_MESSAGE_RE = re.compile(r"https?://|/(?:[\w.\-]+/)+[\w.\-]*")
+
+_GENERIC_RUN_FAILURE_MESSAGE = (
+    "run failed due to an internal error; see the worker logs for details"
+)
+
+
+def _sanitize_run_error(message: str) -> str:
+    """`GenerationService.execute`'s catch-all hands whatever exception it
+    caught here to `_fail`, which persists it verbatim as `run.error` and
+    the terminal `done` event's payload - both returned directly to API
+    clients. A raw `str(exc)` can carry a boto3 S3 endpoint URL and
+    bucket/key, or an absolute filesystem path under the run's work
+    directory; neither belongs in a client-facing response (issue #82). The
+    real exception, with its real message and traceback, is always still
+    logged server-side by `execute`'s `logger.exception` right before this
+    runs - only what's stored/returned to the API is generalized here, and
+    only when it actually looks sensitive (an ordinary, already-safe message
+    like `"CLI exited with code 1"` or a deliberately-raised, human-authored
+    `RuntimeError` passes through unchanged)."""
+    if _SENSITIVE_MESSAGE_RE.search(message):
+        return _GENERIC_RUN_FAILURE_MESSAGE
+    return message
 
 
 class RunService:
@@ -701,7 +730,7 @@ class GenerationService:
             # LLM spend) every `WORKER_STALE_S`. Roll back first so `_fail`
             # can actually persist a terminal status.
             await self._runs.rollback()
-            return await self._fail(run, str(exc), project)
+            return await self._fail(run, _sanitize_run_error(str(exc)), project)
 
     async def _prepare_work_dir(
         self, run: Run, project: Project, outline_tree: list[OutlineTree]

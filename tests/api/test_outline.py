@@ -276,6 +276,33 @@ async def test_create_node_depth_limit_rejected_with_422(client: AsyncClient) ->
     assert response.headers["content-type"] == "application/problem+json"
 
 
+async def test_create_node_rejects_blank_title_with_422(client: AsyncClient) -> None:
+    """Regression for issue #61: `title=""`/`"   "` used to be accepted
+    silently by `OutlineNodeCreate` instead of a 422."""
+    project = await _create_project(client)
+    project_id = project["id"]
+
+    empty = await client.post(
+        f"/api/v1/projects/{project_id}/outline", json={"title": ""}
+    )
+    blank = await client.post(
+        f"/api/v1/projects/{project_id}/outline", json={"title": "   "}
+    )
+
+    assert empty.status_code == 422
+    assert blank.status_code == 422
+
+
+async def test_replace_outline_rejects_blank_node_title(client: AsyncClient) -> None:
+    project = await _create_project(client)
+
+    response = await client.put(
+        f"/api/v1/projects/{project['id']}/outline", json=[{"title": ""}]
+    )
+
+    assert response.status_code == 422
+
+
 async def test_create_node_missing_parent_404s(client: AsyncClient) -> None:
     project = await _create_project(client)
 
@@ -775,6 +802,22 @@ async def test_replace_outline_rejects_depth_exceeding_max_outline_levels(
 
     assert response.status_code == 422
     assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_replace_outline_with_empty_list_reports_limit_at_least_one(
+    client: AsyncClient,
+) -> None:
+    """Regression for issue #61: this response echoes `limit=len(items)`,
+    which used to fall to `limit=0` for an empty outline even though
+    `PageParams.limit`'s documented minimum everywhere else is 1."""
+    project = await _create_project(client)
+
+    response = await client.put(f"/api/v1/projects/{project['id']}/outline", json=[])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["limit"] >= 1
 
 
 async def test_replace_outline_404_when_project_missing(client: AsyncClient) -> None:

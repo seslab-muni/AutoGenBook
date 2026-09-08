@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.core.settings import Settings, get_settings
+from api.domain.models import File, FileKind
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.storage.memory import InMemoryFileStorage
 
@@ -68,6 +72,43 @@ async def test_upload_list_get_download_delete_round_trip(
 
     empty_list = await client.get("/api/v1/files")
     assert empty_list.json()["total"] == 0
+
+
+async def test_list_files_filters_by_kind(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #61: `GET /files` had no way to exclude run
+    artifacts from the upload picker's own file listing - add an optional
+    `kind` filter."""
+    upload_response = await _upload(client, "notes.txt", b"hello", "text/plain")
+    assert upload_response.status_code == 201
+    upload_id = upload_response.json()["id"]
+
+    async with session_factory() as session:
+        await SqlAlchemyFileRepository(session).add(
+            File(
+                id=uuid.uuid4(),
+                storage_key="runs/some-run/out/book.md",
+                filename="book.md",
+                content_type="text/markdown",
+                size_bytes=3,
+                sha256="1" * 64,
+                kind=FileKind.artifact,
+                kb_eligible=False,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+    unfiltered = await client.get("/api/v1/files")
+    assert unfiltered.json()["total"] == 2
+
+    uploads_only = await client.get("/api/v1/files", params={"kind": "upload"})
+    assert uploads_only.json()["total"] == 1
+    assert [item["id"] for item in uploads_only.json()["items"]] == [upload_id]
+
+    artifacts_only = await client.get("/api/v1/files", params={"kind": "artifact"})
+    assert artifacts_only.json()["total"] == 1
+    assert artifacts_only.json()["items"][0]["filename"] == "book.md"
 
 
 async def test_get_missing_file_returns_404(client: AsyncClient) -> None:

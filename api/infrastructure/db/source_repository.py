@@ -118,6 +118,7 @@ class SqlAlchemySourceRepository:
         record = await self._session.get(SourceRecord, source.id)
         assert record is not None
         record.file_id = source.file_id
+        record.source_type = source.source_type
         record.authors = source.authors
         record.year = source.year
         record.doi = source.doi

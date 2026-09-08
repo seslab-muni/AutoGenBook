@@ -6,7 +6,7 @@ from datetime import datetime
 from pydantic import ConfigDict, Field
 
 from api.domain.models import MathLevel, NodeStatus
-from api.presentation.schemas.common import BaseSchema
+from api.presentation.schemas.common import BaseSchema, NonBlankStr
 
 
 class OutlineNode(BaseSchema):
@@ -52,7 +52,7 @@ class OutlineNodeCreate(BaseSchema):
     model_config = ConfigDict(extra="forbid")
 
     parent_id: uuid.UUID | None = None
-    title: str
+    title: NonBlankStr
     order_index: int | None = None
     summary: str = ""
     target_pages: float | None = None
@@ -91,7 +91,7 @@ class OutlineTreeReplaceNode(BaseSchema):
 
     model_config = ConfigDict(extra="forbid")
 
-    title: str
+    title: NonBlankStr
     summary: str = ""
     target_pages: float | None = None
     sub_prompt: str | None = None

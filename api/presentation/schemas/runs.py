@@ -99,6 +99,18 @@ class RunEvent(BaseSchema):
     payload: dict | None = None
 
 
+class RunEventPage(BaseSchema):
+    """`GET /runs/{id}/events`'s response envelope. Deliberately not `Page`:
+    this endpoint pages by `seq` (a monotonically increasing cursor), not by
+    row position, so `Page.offset` echoing `afterSeq` misrepresented a
+    sequence cursor as a row offset (issue #61)."""
+
+    items: list[RunEvent]
+    total: int
+    limit: int
+    after_seq: int
+
+
 async def run_to_schema(run: RunDomain) -> Run:
     # Off the event loop (issue #55): `Path.is_dir()` is a `stat(2)` against
     # the shared `runs_data` volume, done once per run in a list response -

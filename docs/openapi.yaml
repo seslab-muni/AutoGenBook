@@ -88,6 +88,14 @@ paths:
           minimum: 0
           default: 0
           title: Offset
+      - name: kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/FileKind'
+          - type: 'null'
+          title: Kind
       responses:
         '200':
           description: Successful Response
@@ -376,10 +384,15 @@ paths:
           title: Includeoutline
       responses:
         '200':
-          description: Successful Response
+          description: The project's spec, as plain text (`?format=txt`) or the CLI's
+            `book_structure.json`-shaped JSON (`?format=json`).
           content:
             application/json:
-              schema: {}
+              schema:
+                $ref: '#/components/schemas/BookStructure'
+            text/plain:
+              schema:
+                type: string
         '422':
           description: Validation Error
           content:
@@ -608,7 +621,11 @@ paths:
           description: Successful Response
           content:
             application/json:
-              schema: {}
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/Page_OutlineNode_'
+                - $ref: '#/components/schemas/Page_OutlineNodeTree_'
+                title: Response Outline-List Outline Nodes
         '422':
           description: Validation Error
           content:
@@ -1024,7 +1041,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Page_RunEvent_'
+                $ref: '#/components/schemas/RunEventPage'
         '422':
           description: Validation Error
           content:
@@ -1131,6 +1148,87 @@ components:
       required:
       - file
       title: Body_files-upload_file
+    BookStructure:
+      properties:
+        title:
+          type: string
+          title: Title
+        summary:
+          type: string
+          title: Summary
+        n_pages:
+          type: number
+          title: N Pages
+        target_readers:
+          type: string
+          title: Target Readers
+        equation_frequency_level:
+          type: integer
+          title: Equation Frequency Level
+        do_consider_outline:
+          type: boolean
+          title: Do Consider Outline
+        do_consider_previous_sections:
+          type: boolean
+          title: Do Consider Previous Sections
+        additional_requirements:
+          type: string
+          title: Additional Requirements
+        max_depth:
+          type: integer
+          title: Max Depth
+        max_output_pages:
+          type: number
+          title: Max Output Pages
+        childs:
+          items:
+            $ref: '#/components/schemas/BookStructureNode'
+          type: array
+          title: Childs
+      type: object
+      required:
+      - title
+      - summary
+      - n_pages
+      - target_readers
+      - equation_frequency_level
+      - do_consider_outline
+      - do_consider_previous_sections
+      - additional_requirements
+      - max_depth
+      - max_output_pages
+      title: BookStructure
+    BookStructureNode:
+      properties:
+        title:
+          type: string
+          title: Title
+        summary:
+          type: string
+          title: Summary
+        n_pages:
+          type: number
+          title: N Pages
+        needsSubdivision:
+          type: boolean
+          title: Needssubdivision
+        childs:
+          items:
+            $ref: '#/components/schemas/BookStructureNode'
+          type: array
+          title: Childs
+        structure_locked:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Structure Locked
+      type: object
+      required:
+      - title
+      - summary
+      - n_pages
+      - needsSubdivision
+      title: BookStructureNode
     ExportRequestIn:
       properties:
         format:
@@ -1341,6 +1439,7 @@ components:
           title: Parentid
         title:
           type: string
+          minLength: 1
           title: Title
         orderIndex:
           anyOf:
@@ -1581,6 +1680,7 @@ components:
       properties:
         title:
           type: string
+          minLength: 1
           title: Title
         summary:
           type: string
@@ -1650,6 +1750,29 @@ components:
       - limit
       - offset
       title: Page[File]
+    Page_OutlineNodeTree_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/OutlineNodeTree'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[OutlineNodeTree]
     Page_OutlineNode_:
       properties:
         items:
@@ -1719,29 +1842,6 @@ components:
       - limit
       - offset
       title: Page[RunArtifact]
-    Page_RunEvent_:
-      properties:
-        items:
-          items:
-            $ref: '#/components/schemas/RunEvent'
-          type: array
-          title: Items
-        total:
-          type: integer
-          title: Total
-        limit:
-          type: integer
-          title: Limit
-        offset:
-          type: integer
-          title: Offset
-      type: object
-      required:
-      - items
-      - total
-      - limit
-      - offset
-      title: Page[RunEvent]
     Page_Run_:
       properties:
         items:
@@ -1877,6 +1977,7 @@ components:
       properties:
         title:
           type: string
+          minLength: 1
           title: Title
         subtitle:
           type: string
@@ -1884,10 +1985,12 @@ components:
         authors:
           items:
             type: string
+            minLength: 1
           type: array
           title: Authors
         topic:
           type: string
+          minLength: 1
           title: Topic
         targetAudience:
           $ref: '#/components/schemas/TargetAudience'
@@ -2011,6 +2114,7 @@ components:
         title:
           anyOf:
           - type: string
+            minLength: 1
           - type: 'null'
           title: Title
         subtitle:
@@ -2022,12 +2126,14 @@ components:
           anyOf:
           - items:
               type: string
+              minLength: 1
             type: array
           - type: 'null'
           title: Authors
         topic:
           anyOf:
           - type: string
+            minLength: 1
           - type: 'null'
           title: Topic
         targetAudience:
@@ -2234,6 +2340,37 @@ components:
       - stage
       - message
       title: RunEvent
+    RunEventPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RunEvent'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        afterSeq:
+          type: integer
+          title: Afterseq
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - afterSeq
+      title: RunEventPage
+      description: '`GET /runs/{id}/events`''s response envelope. Deliberately not
+        `Page`:
+
+        this endpoint pages by `seq` (a monotonically increasing cursor), not by
+
+        row position, so `Page.offset` echoing `afterSeq` misrepresented a
+
+        sequence cursor as a row offset (issue #61).'
     RunKind:
       type: string
       enum:
@@ -2463,6 +2600,7 @@ components:
         year:
           anyOf:
           - type: string
+            pattern: ^\d{4}$
           - type: 'null'
           title: Year
         doi:
@@ -2510,6 +2648,10 @@ components:
       title: SourceType
     SourceUpdate:
       properties:
+        type:
+          anyOf:
+          - $ref: '#/components/schemas/SourceType'
+          - type: 'null'
         authors:
           anyOf:
           - type: string
@@ -2518,6 +2660,7 @@ components:
         year:
           anyOf:
           - type: string
+            pattern: ^\d{4}$
           - type: 'null'
           title: Year
         doi:

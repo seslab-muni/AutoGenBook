@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from starlette import status
 
 from api.application.files import FileService
+from api.domain.models import FileKind
 from api.presentation.deps import get_file_service
 from api.presentation.schemas.common import Page
 from api.presentation.schemas.files import File as FileSchema
@@ -30,9 +31,10 @@ async def upload_file(
 async def list_files(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    kind: FileKind | None = Query(default=None),
     service: FileService = Depends(get_file_service),
 ):
-    items, total = await service.list(limit=limit, offset=offset)
+    items, total = await service.list(limit=limit, offset=offset, kind=kind)
     return Page[FileSchema](items=items, total=total, limit=limit, offset=offset)
 
 

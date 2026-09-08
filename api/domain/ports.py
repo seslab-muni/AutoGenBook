@@ -6,7 +6,16 @@ from typing import Any, BinaryIO, Protocol
 
 from datetime import datetime
 
-from api.domain.models import File, OutlineNode, Project, Run, RunArtifact, RunEvent, Source
+from api.domain.models import (
+    File,
+    FileKind,
+    OutlineNode,
+    Project,
+    Run,
+    RunArtifact,
+    RunEvent,
+    Source,
+)
 
 
 class ProjectRepository(Protocol):
@@ -50,7 +59,9 @@ class FileRepository(Protocol):
 
     async def get(self, file_id: uuid.UUID) -> File | None: ...
 
-    async def list(self, limit: int, offset: int) -> tuple[Sequence[File], int]: ...
+    async def list(
+        self, limit: int, offset: int, *, kind: FileKind | None = None
+    ) -> tuple[Sequence[File], int]: ...
 
     async def delete(self, file: File) -> None: ...
 

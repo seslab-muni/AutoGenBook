@@ -21,6 +21,7 @@ from api.presentation.schemas.runs import (
     Run,
     RunArtifact,
     RunEvent,
+    RunEventPage,
     RunOptionsIn,
     artifact_to_schema,
     event_to_schema,
@@ -124,19 +125,19 @@ async def export_run(
     return await run_to_schema(run)
 
 
-@router.get("/runs/{run_id}/events", response_model=Page[RunEvent])
+@router.get("/runs/{run_id}/events", response_model=RunEventPage)
 async def list_run_events(
     run_id: uuid.UUID,
     after_seq: int = Query(default=0, ge=0, alias="afterSeq"),
     limit: int = Query(default=200, ge=1, le=1000),
     service: RunService = Depends(get_run_service),
-) -> Page[RunEvent]:
+) -> RunEventPage:
     events, total = await service.events(run_id, after_seq=after_seq, limit=limit)
-    return Page[RunEvent](
+    return RunEventPage(
         items=[event_to_schema(event) for event in events],
         total=total,
         limit=limit,
-        offset=after_seq,
+        after_seq=after_seq,
     )
 
 

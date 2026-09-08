@@ -77,6 +77,12 @@ async def update_source(
     service: SourceService = Depends(get_source_service),
 ) -> Source:
     changes = body.model_dump(exclude_unset=True)
+    if "type" in changes:
+        # `Source.type` on the wire is `Source.source_type` in the domain
+        # model (`SourceService.add` does the same translation for `POST`) -
+        # `SourceService.update`'s `setattr(source, field_name, value)`
+        # needs the domain attribute name, not the schema's.
+        changes["source_type"] = changes.pop("type")
     source, file = await service.update(project_id, source_id, changes)
     return source_to_schema(source, file)
 

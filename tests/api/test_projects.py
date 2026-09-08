@@ -349,3 +349,39 @@ async def test_update_project_rejects_bounds_violations(client: AsyncClient) -> 
     )
 
     assert response.status_code == 422
+
+
+async def test_create_project_rejects_blank_title_topic_and_authors(
+    client: AsyncClient,
+) -> None:
+    """Regression for issue #61: `title=""`, `topic=""`, and `authors=[""]`
+    (empty or whitespace-only) used to be accepted silently instead of a 422."""
+    empty_title = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "title": ""}
+    )
+    blank_title = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "title": "   "}
+    )
+    empty_topic = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "topic": ""}
+    )
+    blank_author = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "authors": [""]}
+    )
+
+    for response in (empty_title, blank_title, empty_topic, blank_author):
+        assert response.status_code == 422, response.text
+        assert response.headers["content-type"] == "application/problem+json"
+
+    listing = await client.get("/api/v1/projects")
+    assert listing.json()["total"] == 0
+
+
+async def test_update_project_rejects_blank_title(client: AsyncClient) -> None:
+    created = await _create_project(client)
+
+    response = await client.patch(
+        f"/api/v1/projects/{created['id']}", json={"title": "  "}
+    )
+
+    assert response.status_code == 422
