@@ -117,6 +117,10 @@ Subprocesses are used for LaTeX compilation and for scientist experiments. (`boo
 
 Pipelines return non-zero exit codes for missing inputs or audit failures and propagate exceptions for unexpected errors. (`autogenbook/pipelines/book_pipeline.py:run_book`, `autogenbook/pipelines/paper_pipeline.py:run_paper`, `autogenbook/pipelines/proposal_pipeline.py:run_proposal`)
 
+## Web service layer (`api/`)
+
+The CLI described above is also wrapped by a separate FastAPI service (`api/core`, `api/domain`, `api/application`, `api/infrastructure`, `api/presentation`, `api/worker`) plus a React/TanStack frontend (`app/`), run together via Docker Compose. The worker invokes the same CLI (`main.py`) as a subprocess per generation run rather than importing pipeline code directly, so this layer adds a service boundary around the CLI without changing the architecture above it. This is a distinct architecture from — and not covered further by — this document; see `docs/WEB_API_REFERENCE.md` for the HTTP API/worker design and `docs/OPERATIONS.md` for the Compose service topology.
+
 ## Extension points
 
 - Add a new mode by creating a pipeline module, registering it in the orchestrator, and adding CLI flags. (`autogenbook/orchestrator.py:run`, `main.py:parse_args`)

@@ -746,9 +746,9 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Open `http://localhost:8080`. Only the Nginx web container is published to the host. The FastAPI service is available to Nginx at `http://api:8000`, and PostgreSQL is available only to the API on Docker's internal backend network. API calls from the UI should use relative `/api/...` URLs; Nginx proxies them internally. Generated files are persisted in `./output`, and PostgreSQL data is stored in the `postgres_data` named volume.
+Open `http://localhost:8080`. Only the Nginx web container is published to the host. The FastAPI service (`api`) and the generation `worker` are both reachable only on Docker's internal backend network, alongside `db` (PostgreSQL) and `minio` (S3-compatible object storage); `minio-init` is a one-shot job that provisions the upload bucket before `api`/`worker` start. API calls from the UI should use relative `/api/...` URLs; Nginx proxies them internally. Generated run artifacts live in the `runs_data` named volume (shared between `api` and `worker`, not a `./output` bind mount), object storage data in `minio_data`, and PostgreSQL data in `postgres_data`.
 
-The initial API contract exposes `GET /api/health` and `GET /api/ready`; the latter verifies the database connection. The UI remains mock-backed until its project and generation actions are wired to these endpoints.
+The API implements the full project/generation contract — files, projects, sources, outline, runs (including SSE run-event streaming) — plus system health checks (`GET /api/v1/health`, `GET /api/v1/ready`, the latter verifying the database and object-storage connections; legacy unversioned `/api/health`/`/api/ready` aliases exist only for the Compose healthcheck). The UI is wired to this contract with real screens (projects hub, per-project sources/outline/editor/runs views). See `docs/WEB_API_REFERENCE.md` / `docs/openapi.yaml` for the full endpoint reference and `docs/OPERATIONS.md` for the complete service/volume/environment-variable breakdown.
 
 ## Security notes
 
@@ -764,7 +764,7 @@ See `docs/INDEX.md` for the full documentation index. (`docs/INDEX.md`)
 
 ## Limitations
 
-- The FastAPI layer currently provides deployment/health scaffolding; project and generation endpoints still need to be implemented. (`api/main.py`)
+- The FastAPI layer (`api/`) has no authentication or CORS middleware yet (issue #50); see `docs/WEB_API_REFERENCE.md` for the implemented endpoint surface and its current gaps. (`api/main.py`)
 - LLM calls require credentials for the configured endpoint (OpenRouter requires `OPENROUTER_API_KEY`). (`openrouter_llm.py:OpenRouterLLM.__init__`)
 - PDF generation requires LuaLaTeX. (`book_builder.py:compile_pdf`)
 

@@ -129,3 +129,7 @@ See `docs/API_REFERENCE.md` for the full CLI reference. (`docs/API_REFERENCE.md`
 | --- | --- | --- | --- |
 | `PYTHONUTF8` | No | Set to `1` at startup to enforce UTF-8. | `main.py` |
 | `PYTHONIOENCODING` | No | Set in smoke tests for UTF-8 output. | `autogenbook/smoke_test.py:_run` |
+
+## Web service (`api`/`worker`) configuration
+
+The tables above cover the CLI (`main.py`) itself. The separate FastAPI service and generation worker under `api/` have their own configuration surface (`api/core/settings.py:Settings`, environment-variable driven, injected by `docker-compose.yml`'s `x-app-env`/`worker` blocks and sourced from `.env`/`.env.example`) plus a test-only `TEST_DATABASE_URL` and Alembic's `DATABASE_URL`-driven migrations. It reuses several of the CLI variables above (`OPENROUTER_API_KEY`, `AUTOGENBOOK_LLM_*`, `TAVILY_API_KEY`, `MCP_GATEWAY_ENABLE`, `AUTOGENBOOK_KB_OCR*`) by passing them through to the CLI subprocess the worker launches. See `docs/OPERATIONS.md` for the full `api`/`worker` variable list and `docs/DEVELOPER_GUIDE.md` for the `pytest`/Alembic workflow.
