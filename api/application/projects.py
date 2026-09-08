@@ -4,15 +4,22 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from api.core.errors import Conflict, NotFound
+from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.domain.models import OutputFormat, Project, ProjectSummary, TargetAudience
-from api.domain.ports import ProjectRepository, RunRepository
+from api.domain.outline import max_depth
+from api.domain.ports import OutlineRepository, ProjectRepository, RunRepository
 
 
 class ProjectService:
-    def __init__(self, repository: ProjectRepository, run_repository: RunRepository) -> None:
+    def __init__(
+        self,
+        repository: ProjectRepository,
+        run_repository: RunRepository,
+        outline_repository: OutlineRepository,
+    ) -> None:
         self._repository = repository
         self._run_repository = run_repository
+        self._outline_repository = outline_repository
 
     async def create(
         self,
@@ -60,7 +67,7 @@ class ProjectService:
         return project
 
     async def list(self, *, limit: int, offset: int) -> tuple[list[ProjectSummary], int]:
-        projects, total = await self._repository.list(limit=limit, offset=offset)
+        rows, total = await self._repository.list_with_counts(limit=limit, offset=offset)
         summaries = [
             ProjectSummary(
                 id=project.id,
@@ -70,18 +77,32 @@ class ProjectService:
                 topic=project.topic,
                 target_audience=project.target_audience,
                 total_pages_budget=project.total_pages_budget,
-                sources_count=await self._repository.sources_count(project.id),
-                outline_node_count=await self._repository.outline_node_count(project.id),
+                sources_count=sources_count,
+                outline_node_count=outline_node_count,
                 last_run_id=project.last_run_id,
                 created_at=project.created_at,
                 updated_at=project.updated_at,
             )
-            for project in projects
+            for project, sources_count, outline_node_count in rows
         ]
         return summaries, total
 
     async def update(self, project_id: uuid.UUID, changes: dict[str, Any]) -> Project:
         project = await self.get(project_id)
+        if "max_outline_levels" in changes:
+            new_limit = changes["max_outline_levels"]
+            # A lowered limit that leaves existing nodes deeper than it
+            # would allow makes the project permanently inconsistent with
+            # its own limit - the wizard has no way to repair that short of
+            # deleting nodes. Reject instead of silently pruning anything
+            # (issue #68).
+            flat = await self._outline_repository.list(project_id)
+            current_depth = max_depth(flat)
+            if current_depth > new_limit:
+                raise ValidationFailed(
+                    f"maxOutlineLevels {new_limit} is below the outline's current "
+                    f"depth ({current_depth}); reduce the outline's depth first"
+                )
         for field_name, value in changes.items():
             setattr(project, field_name, value)
         project.updated_at = datetime.now(timezone.utc)
@@ -112,11 +133,11 @@ class ProjectService:
     async def duplicate(self, project_id: uuid.UUID) -> Project:
         source = await self.get(project_id)
         now = datetime.now(timezone.utc)
-        # `sources` don't exist yet (issue #5); once they do, this is where
-        # the duplicate should copy them by reference alongside the metadata
-        # below. Outline nodes are deep-copied by the router
-        # (`OutlineService.duplicate_from`, issue #6) right after this
-        # returns, since `ProjectService` only knows project metadata.
+        # Sources are copied by the router right after this returns
+        # (`duplicate_project`'s own loop over `SourceService.add`), and
+        # outline nodes by `OutlineService.duplicate_from` - both by
+        # reference/deep-copy, since `ProjectService` only knows project
+        # metadata.
         duplicate = Project(
             id=uuid.uuid4(),
             owner_id=source.owner_id,

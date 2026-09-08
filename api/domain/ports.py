@@ -6,13 +6,24 @@ from typing import Any, BinaryIO, Protocol
 
 from datetime import datetime
 
-from api.domain.models import File, OutlineNode, Project, Run, RunArtifact, RunEvent, Source
+from api.domain.models import (
+    File,
+    FileKind,
+    OutlineNode,
+    Project,
+    Run,
+    RunArtifact,
+    RunEvent,
+    Source,
+)
 
 
 class ProjectRepository(Protocol):
     async def get(self, project_id: uuid.UUID) -> Project | None: ...
 
-    async def list(self, limit: int, offset: int) -> tuple[list[Project], int]: ...
+    async def list_with_counts(
+        self, limit: int, offset: int
+    ) -> tuple[list[tuple[Project, int, int]], int]: ...
 
     async def add(self, project: Project) -> Project: ...
 
@@ -21,10 +32,6 @@ class ProjectRepository(Protocol):
     ) -> Project: ...
 
     async def delete(self, project_id: uuid.UUID) -> None: ...
-
-    async def sources_count(self, project_id: uuid.UUID) -> int: ...
-
-    async def outline_node_count(self, project_id: uuid.UUID) -> int: ...
 
 
 class FileStorage(Protocol):
@@ -50,7 +57,11 @@ class FileRepository(Protocol):
 
     async def get(self, file_id: uuid.UUID) -> File | None: ...
 
-    async def list(self, limit: int, offset: int) -> tuple[Sequence[File], int]: ...
+    async def get_many(self, file_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, File]: ...
+
+    async def list(
+        self, limit: int, offset: int, *, kind: FileKind | None = None
+    ) -> tuple[Sequence[File], int]: ...
 
     async def delete(self, file: File) -> None: ...
 

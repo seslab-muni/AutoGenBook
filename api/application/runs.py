@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import shutil
 import threading
 import uuid
@@ -66,6 +67,34 @@ _DRAIN_POLL_INTERVAL_S = 1.0
 # subprocess (issue #48), rather than dying on the very first hiccup.
 _DRAIN_MAX_CONSECUTIVE_FAILURES = 5
 
+# Matches an absolute filesystem path (`/app/runs/<uuid>/out/...`, a MinIO/S3
+# endpoint URL's path component, ...) or an `http(s)://` URL - the shapes a
+# raw boto3/OSError message tends to carry (issue #82). Two or more path
+# segments after the leading `/`, so short, harmless things aren't flagged.
+_SENSITIVE_MESSAGE_RE = re.compile(r"https?://|/(?:[\w.\-]+/)+[\w.\-]*")
+
+_GENERIC_RUN_FAILURE_MESSAGE = (
+    "run failed due to an internal error; see the worker logs for details"
+)
+
+
+def _sanitize_run_error(message: str) -> str:
+    """`GenerationService.execute`'s catch-all hands whatever exception it
+    caught here to `_fail`, which persists it verbatim as `run.error` and
+    the terminal `done` event's payload - both returned directly to API
+    clients. A raw `str(exc)` can carry a boto3 S3 endpoint URL and
+    bucket/key, or an absolute filesystem path under the run's work
+    directory; neither belongs in a client-facing response (issue #82). The
+    real exception, with its real message and traceback, is always still
+    logged server-side by `execute`'s `logger.exception` right before this
+    runs - only what's stored/returned to the API is generalized here, and
+    only when it actually looks sensitive (an ordinary, already-safe message
+    like `"CLI exited with code 1"` or a deliberately-raised, human-authored
+    `RuntimeError` passes through unchanged)."""
+    if _SENSITIVE_MESSAGE_RE.search(message):
+        return _GENERIC_RUN_FAILURE_MESSAGE
+    return message
+
 
 class RunService:
     def __init__(
@@ -98,15 +127,12 @@ class RunService:
         *,
         outline: Literal["project", "generate"] = "project",
         output_format: Literal["markdown", "latex", "pdf"] | None = None,
-        allow_subdivision: bool = False,
+        allow_subdivision: bool = True,
         enable_web_rag: bool = False,
         audit_book: bool = False,
         audit_book_mode: Literal["off", "warn", "strict"] = "warn",
         legacy_tex: bool = False,
-        rebuild_kb: bool = False,
         fail_fast_schema: bool = False,
-        resume: bool = False,
-        export_tex_only: bool = False,
     ) -> Run:
         project = await self._projects.get(project_id)
         if project is None:
@@ -147,10 +173,7 @@ class RunService:
             audit_book=audit_book,
             audit_book_mode=audit_book_mode,
             legacy_tex=legacy_tex,
-            rebuild_kb=rebuild_kb,
             fail_fast_schema=fail_fast_schema,
-            resume=resume,
-            export_tex_only=export_tex_only,
         )
 
         run_id = uuid.uuid4()
@@ -262,11 +285,15 @@ class RunService:
     ) -> tuple[list[tuple[RunArtifact, File]], int]:
         await self._get(run_id)
         artifacts_, total = await self._artifacts.list(run_id, limit, offset)
-        pairs: list[tuple[RunArtifact, File]] = []
-        for artifact in artifacts_:
-            file = await self._files.get(artifact.file_id)
-            if file is not None:
-                pairs.append((artifact, file))
+        # One batched lookup instead of one `SELECT` per artifact (issue
+        # #51) - a run produces one artifact per section plus reviews, so
+        # 50-200 rows here is normal.
+        files_by_id = await self._files.get_many([artifact.file_id for artifact in artifacts_])
+        pairs = [
+            (artifact, files_by_id[artifact.file_id])
+            for artifact in artifacts_
+            if artifact.file_id in files_by_id
+        ]
         return pairs, total
 
     async def _resolvable_base_run(self, project_id: uuid.UUID, base_run_id: uuid.UUID | None) -> Run:
@@ -701,7 +728,7 @@ class GenerationService:
             # LLM spend) every `WORKER_STALE_S`. Roll back first so `_fail`
             # can actually persist a terminal status.
             await self._runs.rollback()
-            return await self._fail(run, str(exc), project)
+            return await self._fail(run, _sanitize_run_error(str(exc)), project)
 
     async def _prepare_work_dir(
         self, run: Run, project: Project, outline_tree: list[OutlineTree]

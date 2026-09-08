@@ -20,21 +20,28 @@ from api.presentation.schemas.common import BaseSchema
 class RunOptionsIn(BaseSchema):
     """Request body of `POST /projects/{id}/runs`. `output_format` defaults
     to the project's own `output_format` when omitted (resolved by
-    `RunService.create`'s caller, not here)."""
+    `RunService.create`'s caller, not here).
+
+    `resume`, `exportTexOnly` and `rebuildKb` are deliberately not exposed
+    here (issue #60): they only have meaningful semantics on a
+    `regenerate_section`/`export` run resuming an existing work directory,
+    which `RunService.regenerate_node`/`export` already set on the run's
+    `RunOptions` themselves via `dataclasses.replace(base_run.options, ...)`.
+    A fresh `full` run always starts a brand-new work directory, so
+    `resume=True` would resume nothing, `exportTexOnly=True` has no base
+    Markdown to skip regenerating, and `rebuildKb` has no pre-existing index
+    to force a rebuild of."""
 
     model_config = ConfigDict(extra="forbid")
 
     outline: Literal["project", "generate"] = "project"
     output_format: Literal["markdown", "latex", "pdf"] | None = None
-    allow_subdivision: bool = False
+    allow_subdivision: bool = True
     enable_web_rag: bool = False
     audit_book: bool = False
     audit_book_mode: Literal["off", "warn", "strict"] = "warn"
     legacy_tex: bool = False
-    rebuild_kb: bool = False
     fail_fast_schema: bool = False
-    resume: bool = False
-    export_tex_only: bool = False
 
 
 class RegenerateRequestIn(BaseSchema):
@@ -97,6 +104,18 @@ class RunEvent(BaseSchema):
     stage: str
     message: str
     payload: dict | None = None
+
+
+class RunEventPage(BaseSchema):
+    """`GET /runs/{id}/events`'s response envelope. Deliberately not `Page`:
+    this endpoint pages by `seq` (a monotonically increasing cursor), not by
+    row position, so `Page.offset` echoing `afterSeq` misrepresented a
+    sequence cursor as a row offset (issue #61)."""
+
+    items: list[RunEvent]
+    total: int
+    limit: int
+    after_seq: int
 
 
 async def run_to_schema(run: RunDomain) -> Run:

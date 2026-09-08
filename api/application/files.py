@@ -131,8 +131,10 @@ class FileService:
             raise NotFound(f"file {file_id} not found")
         return file
 
-    async def list(self, limit: int, offset: int) -> tuple[list[File], int]:
-        items, total = await self._repository.list(limit, offset)
+    async def list(
+        self, limit: int, offset: int, *, kind: FileKind | None = None
+    ) -> tuple[list[File], int]:
+        items, total = await self._repository.list(limit, offset, kind=kind)
         return list(items), total
 
     async def delete(self, file_id: uuid.UUID) -> None:

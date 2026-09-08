@@ -88,19 +88,34 @@ class SourceService:
         source = await self._sources.add(source)
         return source, file
 
+    async def _pair_with_files(self, sources: list[Source]) -> list[tuple[Source, File]]:
+        # One batched `SELECT ... WHERE id IN (...)` instead of one `SELECT`
+        # per source (issue #51) - `list_for_embed` in particular runs on
+        # every `GET/POST/PATCH /projects/{id}` and on `duplicate`.
+        files_by_id = await self._files.get_many(
+            [source.file_id for source in sources if source.file_id is not None]
+        )
+        pairs = []
+        for source in sources:
+            file = files_by_id.get(source.file_id) if source.file_id is not None else None
+            if file is None:
+                raise NotFound(f"file {source.file_id} does not exist")
+            pairs.append((source, file))
+        return pairs
+
     async def list(
         self, project_id: uuid.UUID, *, limit: int, offset: int
     ) -> tuple[list[tuple[Source, File]], int]:
         await self._require_project(project_id)
         sources, total = await self._sources.list(project_id, limit, offset)
-        rows = [(source, await self._require_file(source.file_id)) for source in sources]
+        rows = await self._pair_with_files(sources)
         return rows, total
 
     async def list_for_embed(self, project_id: uuid.UUID) -> list[tuple[Source, File]]:
         # Used to embed the full `sources` array on a `Project` response; the
         # caller has already resolved the project, so no existence check here.
         sources = await self._sources.list_all(project_id)
-        return [(source, await self._require_file(source.file_id)) for source in sources]
+        return await self._pair_with_files(sources)
 
     async def get(self, project_id: uuid.UUID, source_id: uuid.UUID) -> tuple[Source, File]:
         await self._require_project(project_id)

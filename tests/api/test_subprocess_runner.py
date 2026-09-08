@@ -95,9 +95,12 @@ def test_run_emits_at_least_one_section_event(tmp_path):
     assert len(section_events) >= 1
     for event in section_events:
         assert event.payload is not None
-        assert "node_key" in event.payload
-        assert "content_file_path" in event.payload
-        assert Path(event.payload["content_file_path"]).exists()
+        assert "nodeKey" in event.payload
+        # Regression for issue #82: `content_file_path` is an absolute path
+        # on the worker container's own filesystem - it must never be
+        # exposed to API clients through a run event's payload.
+        assert "content_file_path" not in event.payload
+        assert "contentFilePath" not in event.payload
 
 
 def test_run_propagates_nonzero_exit_code_on_missing_input(tmp_path):

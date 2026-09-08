@@ -4,9 +4,13 @@ import dataclasses
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.core.errors import NotFound
+from api.infrastructure.db.models import ProjectRecord
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 
 MINIMAL_PAYLOAD = {
@@ -276,6 +280,60 @@ async def test_duplicate_project_404(client: AsyncClient) -> None:
     assert response.headers["content-type"] == "application/problem+json"
 
 
+async def test_list_projects_query_count_stays_flat_as_projects_grow(
+    client: AsyncClient, count_statements
+) -> None:
+    """Regression for issue #51: `ProjectService.list` used to run two
+    `count(*)` queries per project (`sources_count`, `outline_node_count`)
+    on top of the page's own query, so `GET /projects` cost grew linearly
+    with the number of projects returned. `list_with_counts` folds both
+    counts into the page query via a grouped-count subquery join instead,
+    so the statement count for one page must stay flat regardless of how
+    many projects are on it."""
+    await _create_project(client, title="First")
+
+    with count_statements() as statements:
+        response = await client.get("/api/v1/projects")
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    first_page_statement_count = len(statements)
+
+    for i in range(9):
+        await _create_project(client, title=f"Project {i}")
+
+    with count_statements() as statements:
+        response = await client.get("/api/v1/projects")
+    assert response.status_code == 200
+    assert response.json()["total"] == 10
+    assert len(statements) == first_page_statement_count
+
+
+async def test_get_project_record_does_not_eagerly_load_sources_relationship(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    count_statements,
+) -> None:
+    """Regression for issue #51: `ProjectRecord.sources` was `lazy="selectin"`,
+    so every `session.get(ProjectRecord, ...)` - which `_require_project` in
+    the sources/outline/runs services calls on every request - issued an
+    extra `SELECT ... FROM project_sources` to eagerly load a relationship
+    nothing reads as an ORM attribute. `lazy="raise"` means a plain `get`
+    costs exactly one statement, and any accidental future access raises
+    loudly instead of silently costing a query."""
+    created = await _create_project(client)
+    project_id = uuid.UUID(created["id"])
+
+    async with session_factory() as session:
+        with count_statements() as statements:
+            record = await session.get(ProjectRecord, project_id)
+        assert record is not None
+        assert len(statements) == 1
+        assert all("project_sources" not in statement for statement in statements)
+
+        with pytest.raises(InvalidRequestError):
+            _ = record.sources
+
+
 async def test_create_project_rejects_total_pages_budget_out_of_bounds(
     client: AsyncClient,
 ) -> None:
@@ -346,6 +404,119 @@ async def test_update_project_rejects_bounds_violations(client: AsyncClient) -> 
 
     response = await client.patch(
         f"/api/v1/projects/{created['id']}", json={"totalPagesBudget": 1}
+    )
+
+    assert response.status_code == 422
+
+
+async def test_update_project_rejects_lowering_max_outline_levels_below_existing_depth(
+    client: AsyncClient,
+) -> None:
+    """Regression for issue #68: `PATCH /projects/{id}` used to apply a
+    lowered `maxOutlineLevels` without checking the outline that already
+    exists - the outline kept its deeper nodes, permanently inconsistent
+    with the project's own limit, with no way for the wizard to repair it
+    short of deleting nodes. Must be rejected with 422 instead."""
+    created = await _create_project(client, maxOutlineLevels=3)
+    project_id = created["id"]
+
+    level1 = await client.post(
+        f"/api/v1/projects/{project_id}/outline", json={"title": "L1"}
+    )
+    assert level1.status_code == 201, level1.text
+    level2 = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "L2", "parentId": level1.json()["id"]},
+    )
+    assert level2.status_code == 201, level2.text
+    level3 = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "L3", "parentId": level2.json()["id"]},
+    )
+    assert level3.status_code == 201, level3.text
+
+    response = await client.patch(
+        f"/api/v1/projects/{project_id}", json={"maxOutlineLevels": 2}
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+    unchanged = await client.get(f"/api/v1/projects/{project_id}")
+    assert unchanged.json()["maxOutlineLevels"] == 3
+
+
+async def test_update_project_allows_raising_max_outline_levels(client: AsyncClient) -> None:
+    created = await _create_project(client, maxOutlineLevels=1)
+    project_id = created["id"]
+    await client.post(f"/api/v1/projects/{project_id}/outline", json={"title": "L1"})
+
+    response = await client.patch(
+        f"/api/v1/projects/{project_id}", json={"maxOutlineLevels": 5}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["maxOutlineLevels"] == 5
+
+
+async def test_project_repository_update_raises_not_found_when_row_vanishes(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #62: `SqlAlchemyProjectRepository.update` used
+    to `assert record is not None` when the row disappeared between the
+    caller's read and this write (e.g. a concurrent hard delete) - a bare
+    `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
+    entirely and lets the next line raise a confusing `AttributeError`
+    instead). Must raise a proper `NotFound` (404-mapped) error instead."""
+    created = await _create_project(client)
+    project_id = uuid.UUID(created["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemyProjectRepository(session).get(project_id)
+    assert baseline is not None
+
+    async with session_factory() as session:
+        record = await session.get(ProjectRecord, project_id)
+        assert record is not None
+        await session.delete(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(NotFound):
+            await SqlAlchemyProjectRepository(session).update(baseline, fields=("title",))
+
+
+async def test_create_project_rejects_blank_title_topic_and_authors(
+    client: AsyncClient,
+) -> None:
+    """Regression for issue #61: `title=""`, `topic=""`, and `authors=[""]`
+    (empty or whitespace-only) used to be accepted silently instead of a 422."""
+    empty_title = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "title": ""}
+    )
+    blank_title = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "title": "   "}
+    )
+    empty_topic = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "topic": ""}
+    )
+    blank_author = await client.post(
+        "/api/v1/projects", json={**MINIMAL_PAYLOAD, "authors": [""]}
+    )
+
+    for response in (empty_title, blank_title, empty_topic, blank_author):
+        assert response.status_code == 422, response.text
+        assert response.headers["content-type"] == "application/problem+json"
+
+    listing = await client.get("/api/v1/projects")
+    assert listing.json()["total"] == 0
+
+
+async def test_update_project_rejects_blank_title(client: AsyncClient) -> None:
+    created = await _create_project(client)
+
+    response = await client.patch(
+        f"/api/v1/projects/{created['id']}", json={"title": "  "}
     )
 
     assert response.status_code == 422

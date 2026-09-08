@@ -96,17 +96,22 @@ class ProjectRecord(Base):
         sa.DateTime(timezone=True), nullable=True
     )
 
-    # `passive_deletes=False` (the default) makes the ORM issue explicit child
-    # DELETEs when a project is deleted, so cascading works under SQLite too
-    # (the test suite's engine doesn't enable `PRAGMA foreign_keys`), on top
-    # of the `ON DELETE CASCADE` FK enforced by Postgres in production. Dead
-    # in practice now that `delete` above never issues a SQL `DELETE`
-    # through the ORM - kept as a DB-level safety net, not the primary path.
-    # `lazy="selectin"` avoids a lazy-load attempt on the async session.
+    # `delete` above never issues a SQL `DELETE` through the ORM (soft
+    # delete only, issue #57), so this relationship's `cascade` never
+    # actually fires - cascading deletes are the `ON DELETE CASCADE` FK on
+    # `project_sources.project_id`, enforced by Postgres directly. Nothing
+    # reads `.sources` as an ORM attribute either (`SourceService`/
+    # `ProjectService` both go through `SourceRepository`/counted queries
+    # instead), so `lazy="selectin"` was pure overhead: every `session.get
+    # (ProjectRecord, ...)` - which `_require_project` in sources/outline/
+    # runs services calls on every request - issued an extra `SELECT
+    # project_sources` to eagerly load a relationship nothing looked at
+    # (issue #51). `lazy="raise"` turns any future accidental access into a
+    # loud `InvalidRequestError` instead of a silent per-request query.
     sources: Mapped[list["SourceRecord"]] = relationship(
         "SourceRecord",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="raise",
     )
 
 
@@ -125,6 +130,18 @@ class SourceRecord(Base):
             sqlite_where=sa.text("deleted_at IS NULL"),
         ),
         sa.Index("ix_project_sources_project_id", "project_id"),
+        # `SqlAlchemyFileRepository.is_referenced` filters on exactly this
+        # (`file_id`, `deleted_at IS NULL`) on every `DELETE /files/{id}` -
+        # unindexed, that was a sequential scan of the whole table (issue
+        # #54). Partial on active rows only, matching what the query (and
+        # the `uq_project_sources_project_file_active` index above) already
+        # scope to.
+        sa.Index(
+            "ix_project_sources_file_id_active",
+            "file_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
@@ -207,7 +224,17 @@ class OutlineNodeRecord(Base):
             sqlite_where=sa.text("deleted_at IS NULL"),
             postgresql_nulls_not_distinct=True,
         ),
-        sa.Index("ix_outline_nodes_project_id_cli_key", "project_id", "cli_key"),
+        # `delete_subtree`'s recursive CTE walks descendants by `parent_id`
+        # (and any parent delete/cascade scans by it too) - unindexed, that
+        # was a full table scan per level (issue #54). Partial on active
+        # rows, matching every read path (`list`/`get`/`_assert_live_parent`)
+        # which already filters `deleted_at IS NULL`.
+        sa.Index(
+            "ix_outline_nodes_parent_id_active",
+            "parent_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
@@ -301,6 +328,23 @@ class RunRecord(Base):
             postgresql_where=sa.text("status IN ('queued', 'running')"),
             sqlite_where=sa.text("status IN ('queued', 'running')"),
         ),
+        # `SqlAlchemyRunRepository.list` (the full run-history list, not
+        # just active runs) filters on `project_id` and orders by
+        # `queued_at DESC` - `uq_runs_project_active` above is partial to
+        # active rows only, so it can't serve this. Composite + the DESC
+        # ordering it's already read in avoids both a scan and a separate
+        # sort (issue #54).
+        sa.Index("ix_runs_project_id_queued_at", "project_id", sa.text("queued_at DESC")),
+        # `sweep_stale_work_dirs`'s `list_stale_work_dirs` groups over every
+        # `runs` row by `work_dir` and filters on `max(finished_at) <
+        # cutoff` every worker poll cycle - partial on terminal rows, the
+        # only ones that ever carry a `finished_at` at all.
+        sa.Index(
+            "ix_runs_finished_at_terminal",
+            "finished_at",
+            postgresql_where=sa.text("status IN ('succeeded', 'failed', 'cancelled')"),
+            sqlite_where=sa.text("status IN ('succeeded', 'failed', 'cancelled')"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
@@ -370,6 +414,10 @@ class RunArtifactRecord(Base):
     __table_args__ = (
         sa.UniqueConstraint("run_id", "relative_path", name="uq_run_artifacts_run_id_path"),
         sa.Index("ix_run_artifacts_run_id", "run_id"),
+        # `SqlAlchemyFileRepository.is_referenced` also checks this table by
+        # `file_id` on every `DELETE /files/{id}` (issue #54) - unindexed
+        # like `project_sources.file_id` was.
+        sa.Index("ix_run_artifacts_file_id", "file_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)

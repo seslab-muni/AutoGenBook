@@ -9,6 +9,8 @@ limit_req_zone $binary_remote_addr zone=api_req:10m rate=10r/s;
 limit_conn_zone $binary_remote_addr zone=api_conn:10m;
 
 server {
+    # 8080, not 80: the container runs as the non-root `nginx` user (see
+    # app/Dockerfile), which can't bind a privileged (<1024) port.
     listen 8080;
     server_name _;
 

@@ -12,6 +12,7 @@ from api.application.projects import ProjectService
 from api.application.sources import SourceService
 from api.core.db import get_session
 from api.domain.models import Project as ProjectDomain
+from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 from api.presentation.deps import get_outline_service
@@ -26,17 +27,22 @@ from api.presentation.schemas.projects import (
     ProjectUpdate,
 )
 from api.presentation.schemas.sources import source_to_schema
+from api.presentation.schemas.spec import BookStructure
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-async def current_owner() -> uuid.UUID | None:
+def current_owner() -> uuid.UUID | None:
     # No auth yet; ownership filtering switches on later without route changes.
     return None
 
 
 def get_project_service(session: AsyncSession = Depends(get_session)) -> ProjectService:
-    return ProjectService(SqlAlchemyProjectRepository(session), SqlAlchemyRunRepository(session))
+    return ProjectService(
+        SqlAlchemyProjectRepository(session),
+        SqlAlchemyRunRepository(session),
+        SqlAlchemyOutlineRepository(session),
+    )
 
 
 async def _outline_tree(
@@ -197,7 +203,18 @@ async def duplicate_project(
     return await _to_schema(project, source_service, outline)
 
 
-@router.get("/{project_id}/spec", response_model=None)
+@router.get(
+    "/{project_id}/spec",
+    response_model=None,
+    responses={
+        200: {
+            "description": "The project's spec, as plain text (`?format=txt`) or "
+            "the CLI's `book_structure.json`-shaped JSON (`?format=json`).",
+            "model": BookStructure,
+            "content": {"text/plain": {"schema": {"type": "string"}}},
+        }
+    },
+)
 async def get_project_spec(
     project_id: uuid.UUID,
     format: str = Query(default="txt", pattern="^(txt|json)$"),

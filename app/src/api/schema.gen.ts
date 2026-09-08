@@ -11,11 +11,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Liveness check
-         * @description **Implemented** (`api/presentation/routers/system.py:health`). Always returns `ok`; does not check dependencies.
-         */
-        get: operations["getHealth"];
+        /** Health */
+        get: operations["system-health"];
         put?: never;
         post?: never;
         delete?: never;
@@ -31,11 +28,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Readiness check (verifies Postgres connectivity)
-         * @description **Implemented** (`api/presentation/routers/system.py:ready`). Runs `SELECT 1` through the async session, then calls the object-storage adapter's `healthcheck()` (`api/infrastructure/storage/s3.py`).
-         */
-        get: operations["getReady"];
+        /** Ready */
+        get: operations["system-ready"];
         put?: never;
         post?: never;
         delete?: never;
@@ -51,51 +45,44 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List uploaded/artifact files */
-        get: operations["listFiles"];
+        /** List Files */
+        get: operations["files-list_files"];
         put?: never;
-        /** Upload a file */
-        post: operations["uploadFile"];
+        /** Upload File */
+        post: operations["files-upload_file"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/files/{fileId}": {
+    "/api/v1/files/{file_id}": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                fileId: components["parameters"]["FileId"];
-            };
+            path?: never;
             cookie?: never;
         };
-        /** Get file metadata */
-        get: operations["getFile"];
+        /** Get File */
+        get: operations["files-get_file"];
         put?: never;
         post?: never;
-        /** Delete a file */
-        delete: operations["deleteFile"];
+        /** Delete File */
+        delete: operations["files-delete_file"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/files/{fileId}/content": {
+    "/api/v1/files/{file_id}/content": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                fileId: components["parameters"]["FileId"];
-            };
+            path?: never;
             cookie?: never;
         };
-        /**
-         * Download file bytes
-         * @description Streamed response with `Content-Disposition: attachment`, `Content-Length` and `ETag: "<sha256>"`.
-         */
-        get: operations["getFileContent"];
+        /** Get File Content */
+        get: operations["files-get_file_content"];
         put?: never;
         post?: never;
         delete?: never;
@@ -111,223 +98,189 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List projects
-         * @description Sorted by `updatedAt` descending.
-         */
-        get: operations["listProjects"];
+        /** List Projects */
+        get: operations["projects-list_projects"];
         put?: never;
-        /** Create a project */
-        post: operations["createProject"];
+        /** Create Project */
+        post: operations["projects-create_project"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{projectId}": {
+    "/api/v1/projects/{project_id}": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
+            path?: never;
             cookie?: never;
         };
-        /** Get a project */
-        get: operations["getProject"];
+        /** Get Project */
+        get: operations["projects-get_project"];
         put?: never;
         post?: never;
-        /**
-         * Delete a project
-         * @description Cascades to sources, outline nodes and runs via foreign keys.
-         */
-        delete: operations["deleteProject"];
+        /** Delete Project */
+        delete: operations["projects-delete_project"];
         options?: never;
         head?: never;
-        /**
-         * Update project metadata
-         * @description Metadata fields only. `sources`/`outline` keys are rejected with 422 - they have their own endpoints (issues #5, #6).
-         */
-        patch: operations["updateProject"];
+        /** Update Project */
+        patch: operations["projects-update_project"];
         trace?: never;
     };
-    "/api/v1/projects/{projectId}/duplicate": {
+    "/api/v1/projects/{project_id}/duplicate": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
+            path?: never;
             cookie?: never;
         };
         get?: never;
         put?: never;
-        /**
-         * Duplicate a project
-         * @description Title suffixed " (Copy)". Copies sources by reference (same `fileId`s) and deep-copies outline nodes with new ids.
-         */
-        post: operations["duplicateProject"];
+        /** Duplicate Project */
+        post: operations["projects-duplicate_project"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{projectId}/sources": {
+    "/api/v1/projects/{project_id}/spec": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
+            path?: never;
             cookie?: never;
         };
-        /** List a project's attached sources */
-        get: operations["listSources"];
-        put?: never;
-        /**
-         * Attach an already-uploaded file to a project as a source
-         * @description There is no indexing at upload time - the CLI builds its BM25 index per run (issue #9), so a new source starts `status: ready` with `chunksCount: null`, not the draft contract's `202 indexing`.
-         */
-        post: operations["addSource"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/projects/{projectId}/sources/{sourceId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-                sourceId: components["parameters"]["SourceId"];
-            };
-            cookie?: never;
-        };
-        /** Get a source */
-        get: operations["getSource"];
+        /** Get Project Spec */
+        get: operations["projects-get_project_spec"];
         put?: never;
         post?: never;
-        /**
-         * Detach a source from the project
-         * @description Removes the attachment; the underlying file is not deleted.
-         */
-        delete: operations["removeSource"];
-        options?: never;
-        head?: never;
-        /** Update a source's bibliographic metadata */
-        patch: operations["updateSource"];
-        trace?: never;
-    };
-    "/api/v1/projects/{projectId}/outline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        /** List outline nodes, flat or nested */
-        get: operations["listOutlineNodes"];
-        /**
-         * Replace the whole outline tree
-         * @description Deletes and recreates every node from a nested tree without ids (e.g. wizard step 2, or a client-side reorder). Returns the new flat list.
-         */
-        put: operations["replaceOutline"];
-        /** Create one outline node */
-        post: operations["createOutlineNode"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{projectId}/outline/{nodeId}": {
+    "/api/v1/projects/{project_id}/sources": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-                nodeId: components["parameters"]["NodeId"];
-            };
+            path?: never;
             cookie?: never;
         };
-        /**
-         * Get an outline node
-         * @description Includes full `contentMarkdown`/`contentLatex`/`ragCitations`.
-         */
-        get: operations["getOutlineNode"];
+        /** List Sources */
+        get: operations["sources-list_sources"];
         put?: never;
-        post?: never;
-        /** Delete an outline node (cascades to descendants) */
-        delete: operations["deleteOutlineNode"];
+        /** Add Source */
+        post: operations["sources-add_source"];
+        delete?: never;
         options?: never;
         head?: never;
-        /**
-         * Update an outline node
-         * @description Consolidates rename/content-edit/math-level/equation-density/budget/move into one generic PATCH, since they all mutate the same row. Editing `contentMarkdown` recomputes `actualWords` server-side.
-         */
-        patch: operations["updateOutlineNode"];
+        patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{projectId}/outline/{nodeId}/regenerate": {
+    "/api/v1/projects/{project_id}/sources/{source_id}": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-                nodeId: components["parameters"]["NodeId"];
-            };
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Source */
+        get: operations["sources-get_source"];
+        put?: never;
+        post?: never;
+        /** Remove Source */
+        delete: operations["sources-remove_source"];
+        options?: never;
+        head?: never;
+        /** Update Source */
+        patch: operations["sources-update_source"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/outline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Outline Nodes */
+        get: operations["outline-list_outline_nodes"];
+        /** Replace Outline */
+        put: operations["outline-replace_outline"];
+        /** Create Outline Node */
+        post: operations["outline-create_outline_node"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/outline/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Outline Node */
+        get: operations["outline-get_outline_node"];
+        put?: never;
+        post?: never;
+        /** Delete Outline Node */
+        delete: operations["outline-delete_outline_node"];
+        options?: never;
+        head?: never;
+        /** Update Outline Node */
+        patch: operations["outline-update_outline_node"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["runs-list_runs"];
+        put?: never;
+        /** Create Run */
+        post: operations["runs-create_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/outline/{node_id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         get?: never;
         put?: never;
-        /**
-         * Regenerate one node's content, reusing the project's last run
-         * @description Reuses `project.lastRunId`'s work directory and the CLI's `--resume` semantics; does not re-run structural planning. Sets the node `status` to `drafting` immediately.
-         */
-        post: operations["regenerateOutlineNode"];
+        /** Regenerate Node */
+        post: operations["runs-regenerate_node"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{projectId}/runs": {
+    "/api/v1/runs/{run_id}": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
+            path?: never;
             cookie?: never;
         };
-        /** List a project's runs */
-        get: operations["listRuns"];
-        put?: never;
-        /** Start a full generation run */
-        post: operations["createRun"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/runs/{runId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                runId: components["parameters"]["RunId"];
-            };
-            cookie?: never;
-        };
-        /** Get a run */
-        get: operations["getRun"];
+        /** Get Run */
+        get: operations["runs-get_run"];
         put?: never;
         post?: never;
         delete?: never;
@@ -336,110 +289,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{runId}/cancel": {
+    "/api/v1/runs/{run_id}/cancel": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                runId: components["parameters"]["RunId"];
-            };
+            path?: never;
             cookie?: never;
         };
         get?: never;
         put?: never;
-        /**
-         * Cancel a queued or running run
-         * @description A queued run is cancelled immediately; a running one has `cancelRequested` set and its subprocess is terminated by the worker.
-         */
-        post: operations["cancelRun"];
+        /** Cancel Run */
+        post: operations["runs-cancel_run"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{runId}/events": {
+    "/api/v1/runs/{run_id}/exports": {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                runId: components["parameters"]["RunId"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Poll accumulated run events
-         * @description Polling fallback for clients that don't use the SSE stream.
-         */
-        get: operations["listRunEvents"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/runs/{runId}/events/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                runId: components["parameters"]["RunId"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Server-Sent Events stream of run progress
-         * @description SSE chosen over WebSocket because `app/nginx.conf`'s `location /api/` block has no `Upgrade`/`Connection: upgrade` headers, while SSE works over plain HTTP/1.1 unchanged. Event `id:` is the `RunEvent.seq`; the server honours a `Last-Event-ID` request header to resume a dropped connection. Event names: `log` (a `RunEvent` with `level`/`message`), `stage` (pipeline stage change), `section` (a leaf section finished), `done` (terminal, stream closes after). OpenAPI has no way to type per-event-name payloads; each event's `data:` is JSON shaped like `RunEvent` (see `RunEvent` below and `docs/WEB_API_REFERENCE.md` for the full per-event field list). The server polls `run_events` every second.
-         */
-        get: operations["streamRunEvents"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/runs/{runId}/artifacts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                runId: components["parameters"]["RunId"];
-            };
-            cookie?: never;
-        };
-        /**
-         * List files produced by a run
-         * @description Download each artifact via `GET /api/v1/files/{fileId}/content`.
-         */
-        get: operations["listRunArtifacts"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/runs/{runId}/exports": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                runId: components["parameters"]["RunId"];
-            };
+            path?: never;
             cookie?: never;
         };
         get?: never;
         put?: never;
-        /**
-         * Build a LaTeX/PDF export from a finished run, without regenerating content
-         * @description Reuses the base run's work directory with `--resume --export-tex`; produces `tex`/`pdf` artifacts (issue #10) without touching any section content.
-         */
-        post: operations["exportRun"];
+        /** Export Run */
+        post: operations["runs-export_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Run Events */
+        get: operations["runs-list_run_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Run Artifacts */
+        get: operations["runs-list_run_artifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream Run Events */
+        get: operations["runs-stream_run_events"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -450,420 +378,872 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description RFC 9457 problem details, `Content-Type: application/problem+json` (`api/core/errors.py`). */
-        Problem: {
-            /** @description Always `"about:blank"` today (no per-error-type documentation URIs yet). */
-            type: string;
+        /**
+         * ArtifactKind
+         * @enum {string}
+         */
+        ArtifactKind: "markdown" | "tex" | "pdf" | "structure_graph" | "book_structure" | "section" | "section_review" | "kb_sources" | "run_meta" | "llm_usage" | "audit_report" | "log" | "bib" | "other";
+        /** Body_files-upload_file */
+        "Body_files-upload_file": {
+            /** File */
+            file: string;
+        };
+        /** BookStructure */
+        BookStructure: {
+            /** Title */
             title: string;
-            status: number;
-            detail?: string | null;
-            /** @description The request path that produced the error. */
-            instance: string;
+            /** Summary */
+            summary: string;
+            /** N Pages */
+            n_pages: number;
+            /** Target Readers */
+            target_readers: string;
+            /** Equation Frequency Level */
+            equation_frequency_level: number;
+            /** Do Consider Outline */
+            do_consider_outline: boolean;
+            /** Do Consider Previous Sections */
+            do_consider_previous_sections: boolean;
+            /** Additional Requirements */
+            additional_requirements: string;
+            /** Max Depth */
+            max_depth: number;
+            /** Max Output Pages */
+            max_output_pages: number;
+            /** Childs */
+            childs?: components["schemas"]["BookStructureNode"][];
         };
-        /** @description Response of the implemented `GET /api/v1/health`. */
-        HealthStatus: {
-            /** @enum {string} */
-            status: "ok";
+        /** BookStructureNode */
+        BookStructureNode: {
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** N Pages */
+            n_pages: number;
+            /** Needssubdivision */
+            needsSubdivision: boolean;
+            /** Childs */
+            childs?: components["schemas"]["BookStructureNode"][];
+            /** Structure Locked */
+            structure_locked?: boolean | null;
         };
-        /** @description Response of the implemented `GET /api/v1/ready` on success. */
-        ReadyStatus: {
-            /** @enum {string} */
-            status: "ready";
+        /**
+         * ExportRequestIn
+         * @description Request body of `POST /runs/{id}/exports`.
+         */
+        ExportRequestIn: {
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "latex" | "pdf";
         };
-        PageOfFile: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["File"][];
-        };
-        PageOfProjectSummary: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["ProjectSummary"][];
-        };
-        PageOfSource: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["Source"][];
-        };
-        PageOfOutlineNode: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["OutlineNode"][];
-        };
-        PageOfOutlineNodeTree: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["OutlineNodeTree"][];
-        };
-        PageOfRun: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["Run"][];
-        };
-        PageOfRunEvent: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["RunEvent"][];
-        };
-        PageOfRunArtifact: components["schemas"]["PageBase"] & {
-            items: components["schemas"]["RunArtifact"][];
-        };
-        /** @description Common envelope fields (`api/presentation/schemas/common.py:Page`); each `PageOf*` schema adds a typed `items`. */
-        PageBase: {
-            total: number;
-            limit: number;
-            offset: number;
-        };
-        /** @enum {string} */
-        FileKind: "upload" | "artifact";
+        /** File */
         File: {
-            /** Format: uuid */
+            /**
+             * Id
+             * Format: uuid
+             */
             id: string;
+            /** Filename */
             filename: string;
+            /** Contenttype */
             contentType: string;
+            /** Sizebytes */
             sizeBytes: number;
+            /** Sha256 */
             sha256: string;
             kind: components["schemas"]["FileKind"];
-            /** @description True when the extension is one the CLI's knowledge base indexes (`.pdf .docx .pptx .md .txt` - `rag_kb.py:SUPPORTED_EXTS`). */
+            /** Kbeligible */
             kbEligible: boolean;
-            /** Format: date-time */
+            /**
+             * Createdat
+             * Format: date-time
+             */
             createdAt: string;
         };
-        /** @enum {string} */
-        AudienceLevel: "undergraduate" | "graduate" | "phd_researcher" | "industry_practitioner";
-        /** @enum {string} */
-        OutputFormat: "markdown" | "latex" | "pdf";
-        Project: {
-            /** Format: uuid */
+        /**
+         * FileKind
+         * @enum {string}
+         */
+        FileKind: "upload" | "artifact";
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * MathLevel
+         * @enum {string}
+         */
+        MathLevel: "introductory" | "rigorous" | "formal_proof" | "applied";
+        /**
+         * NodeStatus
+         * @enum {string}
+         */
+        NodeStatus: "not_started" | "drafting" | "review_ready" | "compiled";
+        /**
+         * OutlineNode
+         * @description Flat shape - one row, addressed by `parentId` + `orderIndex`.
+         *
+         *     `level`, `sectionNumber` and `cliKey` returned here are always the
+         *     current tree shape's derived value (`api.domain.outline.
+         *     assign_positions`), never a client-supplied one - a client can't set any
+         *     of the three (`OutlineNodeCreate`/`OutlineNodeUpdate` don't accept them).
+         *     The `cli_key` *column*, unlike `level`/`section_number`, is genuinely
+         *     persisted for a node a run has imported/regenerated (`graph_import.py`'s
+         *     `_new_node`) - `RunService.regenerate_node` reads that stored value back
+         *     to detect outline drift since the node's base run. See `graph_import.
+         *     py`'s module docstring for the full read/write story.
+         */
+        OutlineNode: {
+            /**
+             * Id
+             * Format: uuid
+             */
             id: string;
+            /** Parentid */
+            parentId: string | null;
+            /** Orderindex */
+            orderIndex: number;
+            /** Clikey */
+            cliKey?: string | null;
+            /** Title */
             title: string;
+            /** Summary */
+            summary: string;
+            /** Level */
+            level: number;
+            /** Sectionnumber */
+            sectionNumber: string;
+            status: components["schemas"]["NodeStatus"];
+            /** Targetpages */
+            targetPages: number;
+            /** Wordbudget */
+            wordBudget: number;
+            /** Actualwords */
+            actualWords: number;
+            /** Equationdensitylevel */
+            equationDensityLevel: number;
+            mathLevel: components["schemas"]["MathLevel"];
+            /** Subprompt */
+            subPrompt?: string | null;
+            /** Contentmarkdown */
+            contentMarkdown: string;
+            /** Contentlatex */
+            contentLatex: string;
+            /** Ragcitations */
+            ragCitations?: {
+                [key: string]: unknown;
+            }[];
+            /** Reviewerscore */
+            reviewerScore?: number | null;
+            /** Reviewernotes */
+            reviewerNotes?: string | null;
+            /** Structurelocked */
+            structureLocked: boolean;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** OutlineNodeCreate */
+        OutlineNodeCreate: {
+            /** Parentid */
+            parentId?: string | null;
+            /** Title */
+            title: string;
+            /** Orderindex */
+            orderIndex?: number | null;
+            /**
+             * Summary
+             * @default
+             */
+            summary?: string;
+            /** Targetpages */
+            targetPages?: number | null;
+            /** Subprompt */
+            subPrompt?: string | null;
+            /** @default rigorous */
+            mathLevel?: components["schemas"]["MathLevel"];
+            /** Equationdensitylevel */
+            equationDensityLevel?: number | null;
+        };
+        /**
+         * OutlineNodeTree
+         * @description `OutlineNode` with nested `children` instead of `parentId`/`orderIndex`.
+         */
+        OutlineNodeTree: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parentid */
+            parentId: string | null;
+            /** Orderindex */
+            orderIndex: number;
+            /** Clikey */
+            cliKey?: string | null;
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** Level */
+            level: number;
+            /** Sectionnumber */
+            sectionNumber: string;
+            status: components["schemas"]["NodeStatus"];
+            /** Targetpages */
+            targetPages: number;
+            /** Wordbudget */
+            wordBudget: number;
+            /** Actualwords */
+            actualWords: number;
+            /** Equationdensitylevel */
+            equationDensityLevel: number;
+            mathLevel: components["schemas"]["MathLevel"];
+            /** Subprompt */
+            subPrompt?: string | null;
+            /** Contentmarkdown */
+            contentMarkdown: string;
+            /** Contentlatex */
+            contentLatex: string;
+            /** Ragcitations */
+            ragCitations?: {
+                [key: string]: unknown;
+            }[];
+            /** Reviewerscore */
+            reviewerScore?: number | null;
+            /** Reviewernotes */
+            reviewerNotes?: string | null;
+            /** Structurelocked */
+            structureLocked: boolean;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Children */
+            children?: components["schemas"]["OutlineNodeTree"][];
+        };
+        /**
+         * OutlineNodeUpdate
+         * @description Partial update of mutable fields. `level`, `sectionNumber`, `cliKey`
+         *     and `actualWords` are server-derived - sending any of them (or any other
+         *     unknown key) is rejected with 422.
+         */
+        OutlineNodeUpdate: {
+            /** Parentid */
+            parentId?: string | null;
+            /** Orderindex */
+            orderIndex?: number | null;
+            /** Title */
+            title?: string | null;
+            /** Summary */
+            summary?: string | null;
+            status?: components["schemas"]["NodeStatus"] | null;
+            /** Targetpages */
+            targetPages?: number | null;
+            /** Wordbudget */
+            wordBudget?: number | null;
+            /** Equationdensitylevel */
+            equationDensityLevel?: number | null;
+            mathLevel?: components["schemas"]["MathLevel"] | null;
+            /** Subprompt */
+            subPrompt?: string | null;
+            /** Contentmarkdown */
+            contentMarkdown?: string | null;
+            /** Contentlatex */
+            contentLatex?: string | null;
+            /** Reviewerscore */
+            reviewerScore?: number | null;
+            /** Reviewernotes */
+            reviewerNotes?: string | null;
+            /** Structurelocked */
+            structureLocked?: boolean | null;
+        };
+        /**
+         * OutlineTreeReplaceNode
+         * @description One node of a full outline replacement, nested, without ids (ids are
+         *     assigned on write).
+         */
+        OutlineTreeReplaceNode: {
+            /** Title */
+            title: string;
+            /**
+             * Summary
+             * @default
+             */
+            summary?: string;
+            /** Targetpages */
+            targetPages?: number | null;
+            /** Subprompt */
+            subPrompt?: string | null;
+            /** @default rigorous */
+            mathLevel?: components["schemas"]["MathLevel"];
+            /** Equationdensitylevel */
+            equationDensityLevel?: number | null;
+            /** Children */
+            children?: components["schemas"]["OutlineTreeReplaceNode"][];
+        };
+        /**
+         * OutputFormat
+         * @enum {string}
+         */
+        OutputFormat: "markdown" | "latex" | "pdf";
+        /** Page[File] */
+        Page_File_: {
+            /** Items */
+            items: components["schemas"]["File"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** Page[OutlineNodeTree] */
+        Page_OutlineNodeTree_: {
+            /** Items */
+            items: components["schemas"]["OutlineNodeTree"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** Page[OutlineNode] */
+        Page_OutlineNode_: {
+            /** Items */
+            items: components["schemas"]["OutlineNode"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** Page[ProjectSummary] */
+        Page_ProjectSummary_: {
+            /** Items */
+            items: components["schemas"]["ProjectSummary"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** Page[RunArtifact] */
+        Page_RunArtifact_: {
+            /** Items */
+            items: components["schemas"]["RunArtifact"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** Page[Run] */
+        Page_Run_: {
+            /** Items */
+            items: components["schemas"]["Run"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** Page[Source] */
+        Page_Source_: {
+            /** Items */
+            items: components["schemas"]["Source"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** Project */
+        Project: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Title */
+            title: string;
+            /** Subtitle */
             subtitle: string;
+            /** Authors */
             authors: string[];
+            /** Topic */
             topic: string;
-            targetAudience: components["schemas"]["AudienceLevel"];
+            targetAudience: components["schemas"]["TargetAudience"];
+            /** Totalpagesbudget */
             totalPagesBudget: number;
+            /** Equationfrequencylevel */
             equationFrequencyLevel: number;
+            /** Doconsideroutline */
             doConsiderOutline: boolean;
+            /** Doconsiderprevioussections */
             doConsiderPreviousSections: boolean;
             outputFormat: components["schemas"]["OutputFormat"];
+            /** Maxoutlinelevels */
             maxOutlineLevels: number;
-            /** @description CLI field with no frontend-mock equivalent (`additional_requirements`). */
+            /** Additionalrequirements */
             additionalRequirements?: string | null;
-            sources: components["schemas"]["Source"][];
-            /** @description Root-level outline nodes, nested. */
-            outline: components["schemas"]["OutlineNodeTree"][];
-            /** Format: uuid */
-            lastRunId: string | null;
-            /** Format: date-time */
+            /** Sources */
+            sources?: components["schemas"]["Source"][];
+            /** Outline */
+            outline?: components["schemas"]["OutlineNodeTree"][];
+            /** Lastrunid */
+            lastRunId?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
             createdAt: string;
-            /** Format: date-time */
+            /**
+             * Updatedat
+             * Format: date-time
+             */
             updatedAt: string;
         };
-        /** @description Lighter shape for `GET /api/v1/projects` - not a subset type of `Project` in the frontend. */
-        ProjectSummary: {
-            /** Format: uuid */
-            id: string;
-            title: string;
-            subtitle: string;
-            authors: string[];
-            topic: string;
-            targetAudience: components["schemas"]["AudienceLevel"];
-            totalPagesBudget: number;
-            sourcesCount: number;
-            outlineNodeCount: number;
-            /** Format: uuid */
-            lastRunId: string | null;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        /** @description `Project` fields minus server-assigned ones; optional `sources`/`outline` let the creation wizard attach files and author an outline atomically (issues #5, #6). */
+        /** ProjectCreate */
         ProjectCreate: {
+            /** Title */
             title: string;
+            /** Subtitle */
             subtitle: string;
+            /** Authors */
             authors: string[];
+            /** Topic */
             topic: string;
             /** @default graduate */
-            targetAudience?: components["schemas"]["AudienceLevel"];
-            /** @default 350 */
+            targetAudience?: components["schemas"]["TargetAudience"];
+            /**
+             * Totalpagesbudget
+             * @default 350
+             */
             totalPagesBudget?: number;
-            /** @default 4 */
+            /**
+             * Equationfrequencylevel
+             * @default 4
+             */
             equationFrequencyLevel?: number;
-            /** @default true */
+            /**
+             * Doconsideroutline
+             * @default true
+             */
             doConsiderOutline?: boolean;
-            /** @default true */
+            /**
+             * Doconsiderprevioussections
+             * @default true
+             */
             doConsiderPreviousSections?: boolean;
             /** @default markdown */
             outputFormat?: components["schemas"]["OutputFormat"];
-            /** @default 3 */
-            maxOutlineLevels?: number;
-            additionalRequirements?: string;
-            sources?: components["schemas"]["SourceCreate"][];
-            outline?: components["schemas"]["OutlineTreeReplace"];
-        };
-        /** @description Partial update of project metadata only. A `sources` or `outline` key in the body is rejected with 422 (they have their own endpoints). */
-        ProjectUpdate: {
-            title?: string;
-            subtitle?: string;
-            authors?: string[];
-            topic?: string;
-            targetAudience?: components["schemas"]["AudienceLevel"];
-            totalPagesBudget?: number;
-            equationFrequencyLevel?: number;
-            doConsiderOutline?: boolean;
-            doConsiderPreviousSections?: boolean;
-            outputFormat?: components["schemas"]["OutputFormat"];
-            maxOutlineLevels?: number;
-            additionalRequirements?: string;
-        };
-        /** @enum {string} */
-        SourceType: "pdf" | "doc" | "ppt" | "md" | "txt" | "slides" | "arxiv" | "notes" | "bibtex" | "latex" | "url" | "book" | "dataset";
-        /**
-         * @description `ready` until a run indexes it (`chunksCount` still `null`); `indexed`/ `error` are set from that run's `kb_sources.json` (issue #10).
-         * @enum {string}
-         */
-        SourceStatus: "ready" | "indexed" | "error";
-        RAGCitation: {
-            id: string;
-            sourceDoc: string;
-            pageNumber?: number | null;
-            sectionSnippet: string;
-            relevanceScore: number;
-            authorYear?: string | null;
-        };
-        /** @description A file attached to a project as a RAG source. */
-        Source: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            fileId: string;
-            /** @description The file's `filename`. */
-            name: string;
-            sizeBytes: number;
-            type: components["schemas"]["SourceType"];
-            chunksCount: number | null;
-            status: components["schemas"]["SourceStatus"];
             /**
-             * Format: date-time
-             * @description The file's `createdAt`.
+             * Maxoutlinelevels
+             * @default 3
              */
-            uploadDate: string;
-            authors?: string | null;
-            year?: string | null;
-            doi?: string | null;
-            url?: string | null;
-            description?: string | null;
+            maxOutlineLevels?: number;
+            /** Additionalrequirements */
+            additionalRequirements?: string | null;
+            /** Sources */
+            sources?: components["schemas"]["SourceCreate"][] | null;
+            /** Outline */
+            outline?: components["schemas"]["OutlineTreeReplaceNode"][] | null;
         };
-        SourceCreate: {
-            /** Format: uuid */
-            fileId: string;
-            type?: components["schemas"]["SourceType"];
-            authors?: string;
-            year?: string;
-            doi?: string;
-            url?: string;
-            description?: string;
-        };
-        /** @description Bibliographic metadata only. */
-        SourceUpdate: {
-            authors?: string;
-            year?: string;
-            doi?: string;
-            url?: string;
-            description?: string;
-        };
-        /** @enum {string} */
-        NodeStatus: "not_started" | "drafting" | "review_ready" | "compiled";
-        /** @enum {string} */
-        MathLevel: "introductory" | "rigorous" | "formal_proof" | "applied";
-        /** @description Flat shape - one row, addressed by `parentId` + `orderIndex`. */
-        OutlineNode: {
-            /** Format: uuid */
+        /** ProjectSummary */
+        ProjectSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
             id: string;
-            /** Format: uuid */
-            parentId: string | null;
-            orderIndex: number;
-            /** @description Positional key matching the CLI graph (`"1"`, `"1-2"`, `"1-2-3"` - `autogenbook/graph/doc_graph.py`), assigned once a run has processed this node. */
-            readonly cliKey?: string | null;
+            /** Title */
             title: string;
-            summary: string;
-            /** @description 1 = Chapter, 2 = Section, 3 = Subsection - derived from the tree. */
-            readonly level: number;
-            /** @description e.g. "1.2.1" - derived from the tree. */
-            readonly sectionNumber: string;
-            status: components["schemas"]["NodeStatus"];
-            targetPages: number;
-            wordBudget: number;
-            readonly actualWords: number;
-            equationDensityLevel: number;
-            mathLevel: components["schemas"]["MathLevel"];
-            subPrompt?: string | null;
-            contentMarkdown: string;
-            contentLatex: string;
-            ragCitations: components["schemas"]["RAGCitation"][];
-            reviewerScore?: number | null;
-            reviewerNotes?: string | null;
-            /** @description False on nodes the CLI subdivided itself (`subdivide_graph`), which re-running a full generation may restructure further. */
-            structureLocked: boolean;
-            /** Format: date-time */
+            /** Subtitle */
+            subtitle: string;
+            /** Authors */
+            authors: string[];
+            /** Topic */
+            topic: string;
+            targetAudience: components["schemas"]["TargetAudience"];
+            /** Totalpagesbudget */
+            totalPagesBudget: number;
+            /** Sourcescount */
+            sourcesCount: number;
+            /** Outlinenodecount */
+            outlineNodeCount: number;
+            /** Lastrunid */
+            lastRunId?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
             createdAt: string;
-            /** Format: date-time */
+            /**
+             * Updatedat
+             * Format: date-time
+             */
             updatedAt: string;
         };
-        /** @description `OutlineNode` with nested `children` instead of `parentId`/`orderIndex`. */
-        OutlineNodeTree: components["schemas"]["OutlineNode"] & {
-            children: components["schemas"]["OutlineNodeTree"][];
+        /** ProjectUpdate */
+        ProjectUpdate: {
+            /** Title */
+            title?: string | null;
+            /** Subtitle */
+            subtitle?: string | null;
+            /** Authors */
+            authors?: string[] | null;
+            /** Topic */
+            topic?: string | null;
+            targetAudience?: components["schemas"]["TargetAudience"] | null;
+            /** Totalpagesbudget */
+            totalPagesBudget?: number | null;
+            /** Equationfrequencylevel */
+            equationFrequencyLevel?: number | null;
+            /** Doconsideroutline */
+            doConsiderOutline?: boolean | null;
+            /** Doconsiderprevioussections */
+            doConsiderPreviousSections?: boolean | null;
+            outputFormat?: components["schemas"]["OutputFormat"] | null;
+            /** Maxoutlinelevels */
+            maxOutlineLevels?: number | null;
+            /** Additionalrequirements */
+            additionalRequirements?: string | null;
         };
-        OutlineNodeCreate: {
-            /** Format: uuid */
-            parentId: string | null;
-            title: string;
-            /** @description Defaults to append (last sibling). */
-            orderIndex?: number;
-            summary?: string;
-            /** @description Default 1. */
-            targetPages?: number;
-            subPrompt?: string;
-            /** @default rigorous */
-            mathLevel?: components["schemas"]["MathLevel"];
-            /** @description Defaults to the project's `equationFrequencyLevel`. */
-            equationDensityLevel?: number;
-        };
-        /** @description Partial update of mutable fields. `level`, `sectionNumber`, `cliKey` and `actualWords` are server-derived - sending any of them is rejected with 422. */
-        OutlineNodeUpdate: {
-            /** Format: uuid */
-            parentId?: string | null;
-            orderIndex?: number;
-            title?: string;
-            summary?: string;
-            status?: components["schemas"]["NodeStatus"];
-            targetPages?: number;
-            wordBudget?: number;
-            equationDensityLevel?: number;
-            mathLevel?: components["schemas"]["MathLevel"];
-            subPrompt?: string;
-            contentMarkdown?: string;
-            contentLatex?: string;
-            reviewerScore?: number;
-            reviewerNotes?: string;
-            structureLocked?: boolean;
-        };
-        /** @description One node of a full outline replacement, nested, without ids (ids are assigned on write). Named separately from `OutlineTreeReplace` (rather than an inline array `items` schema) so `children` can `$ref` it recursively - a `$ref` into another schema's own `items` keyword isn't a resolvable named schema for codegen. */
-        OutlineTreeReplaceNode: {
-            title: string;
-            summary?: string;
-            targetPages?: number;
-            subPrompt?: string;
-            mathLevel?: components["schemas"]["MathLevel"];
-            equationDensityLevel?: number;
-            children?: components["schemas"]["OutlineTreeReplaceNode"][];
-        };
-        /** @description Root-level nodes of a full outline replacement, nested, without ids (ids are assigned on write). */
-        OutlineTreeReplace: components["schemas"]["OutlineTreeReplaceNode"][];
-        /** @enum {string} */
-        RunKind: "full" | "regenerate_section" | "export";
-        /** @enum {string} */
-        RunStatus: "queued" | "running" | "succeeded" | "failed" | "cancelled";
         /**
-         * @description Maps to the CLI's `--audit-mode` (`autogenbook/audit/latex_auditor.py`).
-         * @enum {string}
+         * RegenerateRequestIn
+         * @description Request body of `POST /projects/{id}/outline/{nodeId}/regenerate`.
          */
-        AuditMode: "off" | "warn" | "strict";
-        /** @description Body of `POST /api/v1/projects/{projectId}/runs`. */
-        RunOptions: {
-            /**
-             * @description Only value today: build from the project's current outline rows. A literal spec input may be added later.
-             * @default project
-             * @enum {string}
-             */
-            outline?: "project";
-            /** @description Defaults to the project's `outputFormat`. */
-            outputFormat?: components["schemas"]["OutputFormat"];
-            /**
-             * @description Lets the CLI split oversized leaf sections further.
-             * @default false
-             */
-            allowSubdivision?: boolean;
-            /** @default warn */
-            auditBookMode?: components["schemas"]["AuditMode"];
+        RegenerateRequestIn: {
+            /** Promptmodifier */
+            promptModifier?: string | null;
         };
+        /** Run */
         Run: {
-            /** Format: uuid */
+            /**
+             * Id
+             * Format: uuid
+             */
             id: string;
-            /** Format: uuid */
+            /**
+             * Projectid
+             * Format: uuid
+             */
             projectId: string;
             kind: components["schemas"]["RunKind"];
             status: components["schemas"]["RunStatus"];
-            /** @description The `RunOptions` this run was created with; for `regenerate_section` and `export` runs also carries internal fields (`resume`, `exportTexOnly`) set by the server, not by the client. */
-            options: {
-                [key: string]: unknown;
-            };
-            /**
-             * Format: uuid
-             * @description Set on `regenerate_section`/`export` runs - the run whose work dir is reused.
-             */
+            options: components["schemas"]["RunOptionsOut"];
+            /** Baserunid */
             baseRunId: string | null;
-            /**
-             * Format: uuid
-             * @description Set on `regenerate_section` runs.
-             */
+            /** Targetnodeid */
             targetNodeId: string | null;
+            /** Exitcode */
             exitCode: number | null;
+            /** Error */
             error: string | null;
+            /** Totaltokens */
             totalTokens: number | null;
+            /** Totalcostusd */
             totalCostUsd: number | null;
-            /** @description False once this run's work directory has been reaped by retention cleanup. */
-            resumable: boolean;
-            /** Format: date-time */
+            /**
+             * Queuedat
+             * Format: date-time
+             */
             queuedAt: string;
-            /** Format: date-time */
+            /** Startedat */
             startedAt: string | null;
-            /** Format: date-time */
+            /** Finishedat */
             finishedAt: string | null;
+            /** Resumable */
+            resumable: boolean;
         };
-        /** @description One row of `run_events`; also the JSON payload of the SSE `log` event. */
+        /** RunArtifact */
+        RunArtifact: {
+            kind: components["schemas"]["ArtifactKind"];
+            /** Relativepath */
+            relativePath: string;
+            /**
+             * Fileid
+             * Format: uuid
+             */
+            fileId: string;
+            /** Filename */
+            filename: string;
+            /** Sizebytes */
+            sizeBytes: number;
+            /** Contenttype */
+            contentType: string;
+        };
+        /** RunEvent */
         RunEvent: {
+            /** Seq */
             seq: number;
-            /** Format: date-time */
+            /**
+             * Ts
+             * Format: date-time
+             */
             ts: string;
-            /** @description e.g. `"info"`, `"warn"`, `"error"`. */
+            /** Level */
             level: string;
-            /** @description Pipeline stage name, when applicable. */
-            stage?: string | null;
+            /** Stage */
+            stage: string;
+            /** Message */
             message: string;
-            /** @description Event-specific extra data (e.g. `nodeId`/`cliKey` on a `section` event). */
+            /** Payload */
             payload?: {
                 [key: string]: unknown;
             } | null;
         };
-        /** @enum {string} */
-        ArtifactKind: "markdown" | "tex" | "pdf" | "structure_graph" | "book_structure" | "section" | "section_review" | "kb_sources" | "run_meta" | "llm_usage" | "audit_report" | "log" | "bib" | "other";
-        RunArtifact: {
-            kind: components["schemas"]["ArtifactKind"];
-            /** @description Path within the run's work directory, e.g. `sections/1-2.md`. */
-            relativePath: string;
-            /** Format: uuid */
+        /**
+         * RunEventPage
+         * @description `GET /runs/{id}/events`'s response envelope. Deliberately not `Page`:
+         *     this endpoint pages by `seq` (a monotonically increasing cursor), not by
+         *     row position, so `Page.offset` echoing `afterSeq` misrepresented a
+         *     sequence cursor as a row offset (issue #61).
+         */
+        RunEventPage: {
+            /** Items */
+            items: components["schemas"]["RunEvent"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Afterseq */
+            afterSeq: number;
+        };
+        /**
+         * RunKind
+         * @enum {string}
+         */
+        RunKind: "full" | "regenerate_section" | "export";
+        /**
+         * RunOptionsIn
+         * @description Request body of `POST /projects/{id}/runs`. `output_format` defaults
+         *     to the project's own `output_format` when omitted (resolved by
+         *     `RunService.create`'s caller, not here).
+         *
+         *     `resume`, `exportTexOnly` and `rebuildKb` are deliberately not exposed
+         *     here (issue #60): they only have meaningful semantics on a
+         *     `regenerate_section`/`export` run resuming an existing work directory,
+         *     which `RunService.regenerate_node`/`export` already set on the run's
+         *     `RunOptions` themselves via `dataclasses.replace(base_run.options, ...)`.
+         *     A fresh `full` run always starts a brand-new work directory, so
+         *     `resume=True` would resume nothing, `exportTexOnly=True` has no base
+         *     Markdown to skip regenerating, and `rebuildKb` has no pre-existing index
+         *     to force a rebuild of.
+         */
+        RunOptionsIn: {
+            /**
+             * Outline
+             * @default project
+             * @enum {string}
+             */
+            outline?: "project" | "generate";
+            /** Outputformat */
+            outputFormat?: ("markdown" | "latex" | "pdf") | null;
+            /**
+             * Allowsubdivision
+             * @default true
+             */
+            allowSubdivision?: boolean;
+            /**
+             * Enablewebrag
+             * @default false
+             */
+            enableWebRag?: boolean;
+            /**
+             * Auditbook
+             * @default false
+             */
+            auditBook?: boolean;
+            /**
+             * Auditbookmode
+             * @default warn
+             * @enum {string}
+             */
+            auditBookMode?: "off" | "warn" | "strict";
+            /**
+             * Legacytex
+             * @default false
+             */
+            legacyTex?: boolean;
+            /**
+             * Failfastschema
+             * @default false
+             */
+            failFastSchema?: boolean;
+        };
+        /** RunOptionsOut */
+        RunOptionsOut: {
+            /**
+             * Outline
+             * @enum {string}
+             */
+            outline: "project" | "generate";
+            /**
+             * Outputformat
+             * @enum {string}
+             */
+            outputFormat: "markdown" | "latex" | "pdf";
+            /** Allowsubdivision */
+            allowSubdivision: boolean;
+            /** Enablewebrag */
+            enableWebRag: boolean;
+            /** Auditbook */
+            auditBook: boolean;
+            /**
+             * Auditbookmode
+             * @enum {string}
+             */
+            auditBookMode: "off" | "warn" | "strict";
+            /** Legacytex */
+            legacyTex: boolean;
+            /** Rebuildkb */
+            rebuildKb: boolean;
+            /** Failfastschema */
+            failFastSchema: boolean;
+            /** Resume */
+            resume: boolean;
+            /** Exporttexonly */
+            exportTexOnly: boolean;
+            /** Promptmodifier */
+            promptModifier?: string | null;
+        };
+        /**
+         * RunStatus
+         * @enum {string}
+         */
+        RunStatus: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+        /** Source */
+        Source: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Fileid
+             * Format: uuid
+             */
             fileId: string;
-            filename: string;
+            /** Name */
+            name: string;
+            /** Sizebytes */
             sizeBytes: number;
-            contentType: string;
+            type: components["schemas"]["SourceType"];
+            /** Chunkscount */
+            chunksCount?: number | null;
+            status: components["schemas"]["SourceStatus"];
+            /**
+             * Uploaddate
+             * Format: date-time
+             */
+            uploadDate: string;
+            /** Authors */
+            authors?: string | null;
+            /** Year */
+            year?: string | null;
+            /** Doi */
+            doi?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Description */
+            description?: string | null;
         };
-        RegenerateRequest: {
-            /** @description Appended to the node's `summary` in the reused `structure_graph.json` before the CLI resumes. */
-            promptModifier?: string;
+        /** SourceCreate */
+        SourceCreate: {
+            /**
+             * Fileid
+             * Format: uuid
+             */
+            fileId: string;
+            type?: components["schemas"]["SourceType"] | null;
+            /** Authors */
+            authors?: string | null;
+            /** Year */
+            year?: string | null;
+            /** Doi */
+            doi?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Description */
+            description?: string | null;
         };
-        /** @enum {string} */
-        ExportFormat: "latex" | "pdf";
-        ExportRequest: {
-            format: components["schemas"]["ExportFormat"];
+        /**
+         * SourceStatus
+         * @enum {string}
+         */
+        SourceStatus: "ready" | "indexed" | "error";
+        /**
+         * SourceType
+         * @enum {string}
+         */
+        SourceType: "pdf" | "doc" | "ppt" | "md" | "txt" | "slides" | "arxiv" | "notes" | "bibtex" | "latex" | "url" | "book" | "dataset";
+        /** SourceUpdate */
+        SourceUpdate: {
+            type?: components["schemas"]["SourceType"] | null;
+            /** Authors */
+            authors?: string | null;
+            /** Year */
+            year?: string | null;
+            /** Doi */
+            doi?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Description */
+            description?: string | null;
+        };
+        /**
+         * TargetAudience
+         * @enum {string}
+         */
+        TargetAudience: "undergraduate" | "graduate" | "phd_researcher" | "industry_practitioner";
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
     };
     responses: never;
-    parameters: {
-        /** @description Page size, 1-200 (default 50). */
-        Limit: number;
-        Offset: number;
-        ProjectId: string;
-        FileId: string;
-        SourceId: string;
-        NodeId: string;
-        RunId: string;
-        OutlineFormat: "flat" | "tree";
-    };
+    parameters: never;
     requestBodies: never;
     headers: never;
     pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    getHealth: {
+    "system-health": {
         parameters: {
             query?: never;
             header?: never;
@@ -872,18 +1252,20 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Service is up. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HealthStatus"];
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };
     };
-    getReady: {
+    "system-ready": {
         parameters: {
             query?: never;
             header?: never;
@@ -892,32 +1274,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Database and object storage checks both succeeded. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReadyStatus"];
-                };
-            };
-            /** @description A dependency (database or object storage) is unreachable. `api/core/errors.py:StorageError`. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };
     };
-    listFiles: {
+    "files-list_files": {
         parameters: {
             query?: {
-                /** @description Page size, 1-200 (default 50). */
-                limit?: components["parameters"]["Limit"];
-                offset?: components["parameters"]["Offset"];
+                limit?: number;
+                offset?: number;
+                kind?: components["schemas"]["FileKind"] | null;
             };
             header?: never;
             path?: never;
@@ -925,18 +1300,27 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Page of files. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PageOfFile"];
+                    "application/json": components["schemas"]["Page_File_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    uploadFile: {
+    "files-upload_file": {
         parameters: {
             query?: never;
             header?: never;
@@ -945,14 +1329,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": {
-                    /** Format: binary */
-                    file: string;
-                };
+                "multipart/form-data": components["schemas"]["Body_files-upload_file"];
             };
         };
         responses: {
-            /** @description File stored (key `uploads/{fileId}/{filename}`), `kind=upload`. */
+            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -961,29 +1342,29 @@ export interface operations {
                     "application/json": components["schemas"]["File"];
                 };
             };
-            /** @description Upload exceeds `MAX_UPLOAD_MB`. The partial object is deleted; no `File` row is created. */
-            413: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    getFile: {
+    "files-get_file": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                fileId: components["parameters"]["FileId"];
+                file_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description File metadata. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -992,92 +1373,82 @@ export interface operations {
                     "application/json": components["schemas"]["File"];
                 };
             };
-            /** @description File not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    deleteFile: {
+    "files-delete_file": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                fileId: components["parameters"]["FileId"];
+                file_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description File deleted. */
+            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description File not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description File is still referenced by a project source (issue #5) or a run artifact (issue #10). */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    getFileContent: {
+    "files-get_file_content": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                fileId: components["parameters"]["FileId"];
+                file_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description File bytes. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/octet-stream": string;
+                    "application/json": unknown;
                 };
             };
-            /** @description File not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    listProjects: {
+    "projects-list_projects": {
         parameters: {
             query?: {
-                /** @description Page size, 1-200 (default 50). */
-                limit?: components["parameters"]["Limit"];
-                offset?: components["parameters"]["Offset"];
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -1085,18 +1456,27 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Page of project summaries. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PageOfProjectSummary"];
+                    "application/json": components["schemas"]["Page_ProjectSummary_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    createProject: {
+    "projects-create_project": {
         parameters: {
             query?: never;
             header?: never;
@@ -1109,7 +1489,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Project created. */
+            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1118,29 +1498,29 @@ export interface operations {
                     "application/json": components["schemas"]["Project"];
                 };
             };
-            /** @description Validation failed (e.g. `totalPagesBudget` outside 5-2000, `maxOutlineLevels`/`equationFrequencyLevel` outside 1-5). */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    getProject: {
+    "projects-get_project": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Full project, including embedded `sources` and `outline` (tree). */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1149,52 +1529,52 @@ export interface operations {
                     "application/json": components["schemas"]["Project"];
                 };
             };
-            /** @description Project not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    deleteProject: {
+    "projects-delete_project": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Project deleted. */
+            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Project not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    updateProject: {
+    "projects-update_project": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
             };
             cookie?: never;
         };
@@ -1204,7 +1584,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated project. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1213,38 +1593,29 @@ export interface operations {
                     "application/json": components["schemas"]["Project"];
                 };
             };
-            /** @description Project not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Validation failed, or `sources`/`outline` present in the body. */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    duplicateProject: {
+    "projects-duplicate_project": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description New, duplicated project. */
+            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1253,58 +1624,92 @@ export interface operations {
                     "application/json": components["schemas"]["Project"];
                 };
             };
-            /** @description Source project not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    listSources: {
+    "projects-get_project_spec": {
         parameters: {
             query?: {
-                /** @description Page size, 1-200 (default 50). */
-                limit?: components["parameters"]["Limit"];
-                offset?: components["parameters"]["Offset"];
+                format?: string;
+                includeOutline?: boolean;
             };
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Page of sources. */
+            /** @description The project's spec, as plain text (`?format=txt`) or the CLI's `book_structure.json`-shaped JSON (`?format=json`). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PageOfSource"];
+                    "application/json": components["schemas"]["BookStructure"];
+                    "text/plain": string;
                 };
             };
-            /** @description Project not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    addSource: {
+    "sources-list_sources": {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Source_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "sources-add_source": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
             };
             cookie?: never;
         };
@@ -1314,7 +1719,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Source attached. */
+            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1323,48 +1728,30 @@ export interface operations {
                     "application/json": components["schemas"]["Source"];
                 };
             };
-            /** @description Project or file not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description This file is already attached to the project. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description File is not KB-eligible (`kbEligible: false` - extension outside `.pdf .docx .pptx .md .txt`). */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    getSource: {
+    "sources-get_source": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
-                sourceId: components["parameters"]["SourceId"];
+                project_id: string;
+                source_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Source, including `chunksCount`/`status` once indexed by a run. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1373,54 +1760,54 @@ export interface operations {
                     "application/json": components["schemas"]["Source"];
                 };
             };
-            /** @description Project or source not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    removeSource: {
+    "sources-remove_source": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
-                sourceId: components["parameters"]["SourceId"];
+                project_id: string;
+                source_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Source detached. */
+            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Project or source not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    updateSource: {
+    "sources-update_source": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
-                sourceId: components["parameters"]["SourceId"];
+                project_id: string;
+                source_id: string;
             };
             cookie?: never;
         };
@@ -1430,7 +1817,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated source. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1439,103 +1826,93 @@ export interface operations {
                     "application/json": components["schemas"]["Source"];
                 };
             };
-            /** @description Project or source not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    listOutlineNodes: {
-        parameters: {
-            query?: {
-                format?: components["parameters"]["OutlineFormat"];
-                /** @description Page size, 1-200 (default 50). */
-                limit?: components["parameters"]["Limit"];
-                offset?: components["parameters"]["Offset"];
-            };
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description `items` is the flat node list (default `format=flat`) or the root-level nested nodes (`format=tree`, each with `children`); `total` is always the flat node count. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageOfOutlineNode"] | components["schemas"]["PageOfOutlineNodeTree"];
-                };
-            };
-            /** @description Project not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    replaceOutline: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OutlineTreeReplace"];
-            };
-        };
-        responses: {
-            /** @description New outline, flat. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageOfOutlineNode"];
-                };
-            };
-            /** @description Project not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A node's depth exceeds `project.maxOutlineLevels`. */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    createOutlineNode: {
+    "outline-list_outline_nodes": {
+        parameters: {
+            query?: {
+                format?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_OutlineNode_"] | components["schemas"]["Page_OutlineNodeTree_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "outline-replace_outline": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutlineTreeReplaceNode"][];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_OutlineNode_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "outline-create_outline_node": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
             };
             cookie?: never;
         };
@@ -1545,7 +1922,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description New outline node. */
+            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1554,39 +1931,30 @@ export interface operations {
                     "application/json": components["schemas"]["OutlineNode"];
                 };
             };
-            /** @description Project (or parent node) not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Depth would exceed `project.maxOutlineLevels`. */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    getOutlineNode: {
+    "outline-get_outline_node": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
-                nodeId: components["parameters"]["NodeId"];
+                project_id: string;
+                node_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Outline node. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1595,54 +1963,54 @@ export interface operations {
                     "application/json": components["schemas"]["OutlineNode"];
                 };
             };
-            /** @description Project or node not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    deleteOutlineNode: {
+    "outline-delete_outline_node": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
-                nodeId: components["parameters"]["NodeId"];
+                project_id: string;
+                node_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Node and its subtree deleted. */
+            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Project or node not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    updateOutlineNode: {
+    "outline-update_outline_node": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
-                nodeId: components["parameters"]["NodeId"];
+                project_id: string;
+                node_id: string;
             };
             cookie?: never;
         };
@@ -1652,7 +2020,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated outline node. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1661,43 +2029,67 @@ export interface operations {
                     "application/json": components["schemas"]["OutlineNode"];
                 };
             };
-            /** @description Project or node not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A server-derived field (`level`, `sectionNumber`, `cliKey`, `actualWords`) was present in the body, or the requested `parentId` move would exceed `project.maxOutlineLevels`. */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    regenerateOutlineNode: {
+    "runs-list_runs": {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Run_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "runs-create_run": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
-                nodeId: components["parameters"]["NodeId"];
+                project_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RegenerateRequest"];
+                "application/json": components["schemas"]["RunOptionsIn"];
             };
         };
         responses: {
-            /** @description Regeneration run queued, kind `regenerate_section`. */
+            /** @description Successful Response */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -1706,77 +2098,34 @@ export interface operations {
                     "application/json": components["schemas"]["Run"];
                 };
             };
-            /** @description Project or node not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No successful prior run to resume from, its work directory is gone, or the project already has an active run. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    listRuns: {
-        parameters: {
-            query?: {
-                /** @description Page size, 1-200 (default 50). */
-                limit?: components["parameters"]["Limit"];
-                offset?: components["parameters"]["Offset"];
-            };
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Page of runs. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PageOfRun"];
-                };
-            };
-            /** @description Project not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    createRun: {
+    "runs-regenerate_node": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                projectId: components["parameters"]["ProjectId"];
+                project_id: string;
+                node_id: string;
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": components["schemas"]["RunOptions"];
+                "application/json": components["schemas"]["RegenerateRequestIn"];
             };
         };
         responses: {
-            /** @description Run queued, kind `full`. Picked up by a worker within one poll interval. */
+            /** @description Successful Response */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -1785,38 +2134,29 @@ export interface operations {
                     "application/json": components["schemas"]["Run"];
                 };
             };
-            /** @description Project not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The project already has a queued or running run. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    getRun: {
+    "runs-get_run": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                runId: components["parameters"]["RunId"];
+                run_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Run, including `resumable` (false once its work dir has been reaped). */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1825,29 +2165,29 @@ export interface operations {
                     "application/json": components["schemas"]["Run"];
                 };
             };
-            /** @description Run not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    cancelRun: {
+    "runs-cancel_run": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                runId: components["parameters"]["RunId"];
+                run_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Cancellation accepted. */
+            /** @description Successful Response */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -1856,168 +2196,147 @@ export interface operations {
                     "application/json": components["schemas"]["Run"];
                 };
             };
-            /** @description Run not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Run is already in a terminal state (`succeeded`/`failed`/`cancelled`). */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    listRunEvents: {
+    "runs-export_run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequestIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "runs-list_run_events": {
         parameters: {
             query?: {
-                /** @description Only return events with `seq` greater than this value. */
                 afterSeq?: number;
-                /** @description Page size, 1-200 (default 50). */
-                limit?: components["parameters"]["Limit"];
+                limit?: number;
             };
             header?: never;
             path: {
-                runId: components["parameters"]["RunId"];
+                run_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Page of run events, ordered by `seq` ascending. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PageOfRunEvent"];
+                    "application/json": components["schemas"]["RunEventPage"];
                 };
             };
-            /** @description Run not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    streamRunEvents: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                runId: components["parameters"]["RunId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Event stream, open until the run reaches a terminal state. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/event-stream": string;
-                };
-            };
-            /** @description Run not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    listRunArtifacts: {
+    "runs-list_run_artifacts": {
         parameters: {
             query?: {
-                /** @description Page size, 1-200 (default 50). */
-                limit?: components["parameters"]["Limit"];
-                offset?: components["parameters"]["Offset"];
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path: {
-                runId: components["parameters"]["RunId"];
+                run_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Page of run artifacts. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PageOfRunArtifact"];
+                    "application/json": components["schemas"]["Page_RunArtifact_"];
                 };
             };
-            /** @description Run not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    exportRun: {
+    "runs-stream_run_events": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                runId: components["parameters"]["RunId"];
+                run_id: string;
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExportRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Export run queued, kind `export`. */
-            202: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Run"];
+                    "application/json": unknown;
                 };
             };
-            /** @description Run not found. */
-            404: {
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Base run is not `succeeded`, its work dir is gone, or the project has an active run. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

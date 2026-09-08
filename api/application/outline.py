@@ -13,12 +13,9 @@ from api.domain.outline import (
     build_tree,
     depth_of,
     subtree_ids,
+    word_budget_for,
 )
 from api.domain.ports import OutlineRepository, ProjectRepository, RunRepository
-
-# Matches the CLI's default page->word ratio used to seed `word_budget`
-# (`autogenbook` sizes sections in words but the wizard/UI think in pages).
-WORDS_PER_PAGE = 350
 
 
 def _word_count(markdown: str) -> int:
@@ -65,7 +62,7 @@ class OutlineService:
                 "can't be changed until it finishes or is cancelled"
             )
 
-    async def _get_node(
+    def _get_node(
         self, project_id: uuid.UUID, node_id: uuid.UUID, flat: Sequence[OutlineNode]
     ) -> OutlineNode:
         for node in flat:
@@ -86,7 +83,7 @@ class OutlineService:
     async def get(self, project_id: uuid.UUID, node_id: uuid.UUID) -> OutlineNode:
         await self._get_project(project_id)
         flat = await self._outline_repository.list(project_id)
-        node = await self._get_node(project_id, node_id, flat)
+        node = self._get_node(project_id, node_id, flat)
         positioned = {n.id: n for n in assign_positions(flat)}
         return positioned[node.id]
 
@@ -163,7 +160,7 @@ class OutlineService:
             summary=summary,
             status=NodeStatus.NOT_STARTED,
             target_pages=resolved_target_pages,
-            word_budget=int(WORDS_PER_PAGE * resolved_target_pages),
+            word_budget=word_budget_for(resolved_target_pages),
             actual_words=0,
             equation_density_level=resolved_equation_density,
             math_level=math_level,
@@ -199,11 +196,17 @@ class OutlineService:
     ) -> OutlineNode:
         project = await self._get_project(project_id)
         flat = await self._outline_repository.list(project_id)
-        node = await self._get_node(project_id, node_id, flat)
+        node = self._get_node(project_id, node_id, flat)
 
         changes = dict(changes)
         if "content_markdown" in changes:
             changes["actual_words"] = _word_count(changes["content_markdown"] or "")
+        if "target_pages" in changes and "word_budget" not in changes:
+            # Keep `word_budget` in sync with `target_pages` unless the
+            # caller explicitly set both in this same request - `word_budget`
+            # was previously only derived at node-creation time and left
+            # stale by every later `target_pages` edit (issue #68).
+            changes["word_budget"] = word_budget_for(changes["target_pages"])
 
         old_parent_id = node.parent_id
         parent_changed = "parent_id" in changes and changes["parent_id"] != old_parent_id
@@ -276,7 +279,7 @@ class OutlineService:
         await self._get_project(project_id)
         await self._reject_if_run_active(project_id)
         flat = await self._outline_repository.list(project_id)
-        await self._get_node(project_id, node_id, flat)
+        self._get_node(project_id, node_id, flat)
         await self._outline_repository.delete_subtree(project_id, node_id)
 
     async def replace(
@@ -311,7 +314,7 @@ class OutlineService:
                     summary=entry.get("summary") or "",
                     status=NodeStatus.NOT_STARTED,
                     target_pages=target_pages,
-                    word_budget=int(WORDS_PER_PAGE * target_pages),
+                    word_budget=word_budget_for(target_pages),
                     actual_words=0,
                     equation_density_level=equation_density,
                     math_level=entry.get("math_level") or MathLevel.RIGOROUS,
@@ -354,6 +357,11 @@ class OutlineService:
                     id=new_id,
                     project_id=target_project_id,
                     parent_id=id_map.get(node.parent_id) if node.parent_id else None,
+                    # Not copied from the source node: `cli_key` records what
+                    # key a node had in some *specific* past run's
+                    # `structure_graph.json` (`graph_import.py`'s docstring),
+                    # and the target project has no run of its own yet to
+                    # have derived one from (issue #62).
                     cli_key=None,
                     created_at=now,
                     updated_at=now,

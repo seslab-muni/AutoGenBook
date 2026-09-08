@@ -400,7 +400,10 @@ const sourceHandlers = [
     if (!source || source.projectId !== params.projectId)
       return notFound('Source', new URL(request.url).pathname);
     const body = (await request.json()) as SourceUpdate;
-    const updated = { ...source, ...body };
+    // `SourceUpdate.type` is `SourceType | null | undefined` on the wire
+    // (only present when the caller actually wants to change it) - fall
+    // back to the existing value so the map never stores a `null` type.
+    const updated = { ...source, ...body, type: body.type ?? source.type };
     db.sources.set(source.id, updated);
     return HttpResponse.json(stripProjectId(updated));
   }),

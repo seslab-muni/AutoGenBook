@@ -8,7 +8,11 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.domain.models import RunStatus
+from api.core.errors import NotFound
+from api.domain.models import ArtifactKind, File, FileKind, RunArtifact, RunStatus
+from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
+from api.infrastructure.db.models import RunRecord
+from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
 from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 
 MINIMAL_PROJECT = {
@@ -43,7 +47,7 @@ async def test_create_run_applies_defaults_from_project(client: AsyncClient) -> 
     assert body["status"] == "queued"
     assert body["options"]["outline"] == "project"
     assert body["options"]["outputFormat"] == "latex"
-    assert body["options"]["allowSubdivision"] is False
+    assert body["options"]["allowSubdivision"] is True
     assert body["options"]["auditBookMode"] == "warn"
     assert body["exitCode"] is None
     assert body["totalTokens"] is None
@@ -341,6 +345,26 @@ async def test_list_run_events_empty_for_freshly_created_run(client: AsyncClient
     assert body["total"] == 0
 
 
+async def test_list_run_events_reports_after_seq_not_a_row_offset(
+    client: AsyncClient,
+) -> None:
+    """Regression for issue #61: this endpoint pages by `seq`, not row
+    position, so the response used to (mis)reuse `Page`'s `offset` field to
+    carry `afterSeq` - it must have its own `afterSeq` field instead, with no
+    misleading `offset` key at all."""
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    response = await client.get(
+        f"/api/v1/runs/{created['id']}/events", params={"afterSeq": 5}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["afterSeq"] == 5
+    assert "offset" not in body
+
+
 async def test_list_run_events_404_for_missing_run(client: AsyncClient) -> None:
     response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/events")
     assert response.status_code == 404
@@ -362,8 +386,97 @@ async def test_list_run_artifacts_404_for_missing_run(client: AsyncClient) -> No
     assert response.status_code == 404
 
 
+async def _add_artifact(
+    session_factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID, relative_path: str
+) -> None:
+    async with session_factory() as session:
+        file = File(
+            id=uuid.uuid4(),
+            storage_key=f"artifacts/{uuid.uuid4()}",
+            filename=relative_path,
+            content_type="text/markdown",
+            size_bytes=10,
+            sha256="0" * 64,
+            kind=FileKind.artifact,
+            kb_eligible=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        await SqlAlchemyFileRepository(session).add(file)
+        await SqlAlchemyRunArtifactRepository(session).add(
+            RunArtifact(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                file_id=file.id,
+                kind=ArtifactKind.section,
+                relative_path=relative_path,
+            )
+        )
+
+
+async def test_list_run_artifacts_query_count_stays_flat_as_artifacts_grow(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    count_statements,
+) -> None:
+    """Regression for issue #51: `RunService.artifacts` used to run one
+    `SELECT files` per artifact (`self._files.get` in a loop) on top of the
+    page's own query - a run produces one artifact per section plus
+    reviews, so 50-200 rows is normal. `FileRepository.get_many` batches
+    that into one `SELECT ... WHERE id IN (...)` instead, so the statement
+    count for one page must stay flat regardless of how many artifacts are
+    on it."""
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+    run_id = uuid.UUID(created["id"])
+
+    await _add_artifact(session_factory, run_id, "sections/1.md")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/runs/{run_id}/artifacts")
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    first_page_statement_count = len(statements)
+
+    for i in range(9):
+        await _add_artifact(session_factory, run_id, f"sections/{i + 2}.md")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/runs/{run_id}/artifacts")
+    assert response.status_code == 200
+    assert response.json()["total"] == 10
+    assert len(statements) == first_page_statement_count
+
+
 async def test_get_run_resumable_false_before_execution(client: AsyncClient) -> None:
     project = await _create_project(client)
     created = await _create_run(client, project["id"])
 
     assert created["resumable"] is False
+
+
+async def test_run_repository_update_raises_not_found_when_row_vanishes(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #62: `SqlAlchemyRunRepository.update` used to
+    `assert record is not None` when the row disappeared between the
+    caller's read and this write (e.g. a concurrent hard delete) - a bare
+    `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
+    entirely and lets the next line raise a confusing `AttributeError`
+    instead). Must raise a proper `NotFound` (404-mapped) error instead."""
+    project = await _create_project(client)
+    run = await _create_run(client, project["id"])
+    run_id = uuid.UUID(run["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemyRunRepository(session).get(run_id)
+    assert baseline is not None
+
+    async with session_factory() as session:
+        record = await session.get(RunRecord, run_id)
+        assert record is not None
+        await session.delete(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(NotFound):
+            await SqlAlchemyRunRepository(session).update(baseline)

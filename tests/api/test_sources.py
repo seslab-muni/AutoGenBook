@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.core.errors import NotFound
 from api.infrastructure.db.models import SourceRecord
+from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
 
 PROJECT_PAYLOAD = {
     "title": "Widgets 101",
@@ -98,6 +101,70 @@ async def test_attach_list_get_update_detach_round_trip(client: AsyncClient) -> 
     assert file_get.status_code == 200
 
 
+async def _attach_source(client: AsyncClient, project_id: str, filename: str) -> dict:
+    file = await _upload_file(client, filename)
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/sources", json={"fileId": file["id"]}
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_list_sources_query_count_stays_flat_as_sources_grow(
+    client: AsyncClient, count_statements
+) -> None:
+    """Regression for issue #51: `SourceService.list` used to run one
+    `SELECT files` per source (`_require_file` in a loop) on top of the
+    page's own query, so `GET /projects/{id}/sources` cost grew linearly
+    with the number of attached sources. `_pair_with_files` batches that
+    into one `SELECT ... WHERE id IN (...)` instead, so the statement count
+    for one page must stay flat regardless of how many sources are on it."""
+    project = await _create_project(client)
+    await _attach_source(client, project["id"], "one.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}/sources")
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    first_page_statement_count = len(statements)
+
+    for i in range(9):
+        await _attach_source(client, project["id"], f"more-{i}.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}/sources")
+    assert response.status_code == 200
+    assert response.json()["total"] == 10
+    assert len(statements) == first_page_statement_count
+
+
+async def test_get_project_query_count_stays_flat_as_sources_grow(
+    client: AsyncClient, count_statements
+) -> None:
+    """Regression for issue #51: `SourceService.list_for_embed` (used to
+    embed the full `sources` array on `GET/POST/PATCH /projects/{id}` and on
+    `duplicate`) has the same per-source `SELECT files` pattern as `list`
+    above - this covers the embed path specifically, since it runs on every
+    project read, not just `GET .../sources`."""
+    project = await _create_project(client)
+    await _attach_source(client, project["id"], "one.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}")
+    assert response.status_code == 200
+    assert len(response.json()["sources"]) == 1
+    first_get_statement_count = len(statements)
+
+    for i in range(9):
+        await _attach_source(client, project["id"], f"more-{i}.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}")
+    assert response.status_code == 200
+    assert len(response.json()["sources"]) == 10
+    assert len(statements) == first_get_statement_count
+
+
 async def test_add_source_defaults_type_from_extension(client: AsyncClient) -> None:
     project = await _create_project(client)
     for filename, expected_type in [
@@ -125,6 +192,68 @@ async def test_add_source_explicit_type_overrides_inference(client: AsyncClient)
 
     assert response.status_code == 201
     assert response.json()["type"] == "book"
+
+
+async def test_add_source_rejects_implausible_year(client: AsyncClient) -> None:
+    """Regression for issue #61: `year="banana"` (and other non-year
+    strings) used to be accepted with no validation at all."""
+    project = await _create_project(client)
+    file = await _upload_file(client, "paper.pdf")
+
+    not_a_year = await client.post(
+        f"/api/v1/projects/{project['id']}/sources",
+        json={"fileId": file["id"], "year": "banana"},
+    )
+    out_of_range = await client.post(
+        f"/api/v1/projects/{project['id']}/sources",
+        json={"fileId": file["id"], "year": "0099"},
+    )
+
+    assert not_a_year.status_code == 422
+    assert out_of_range.status_code == 422
+
+
+async def test_update_source_rejects_implausible_year(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    file = await _upload_file(client, "paper.pdf")
+    source = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/sources/{source['id']}",
+        json={"year": "banana"},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_update_source_type_persists(client: AsyncClient) -> None:
+    """Regression for issue #61: `SourceUpdate` had no `type` field at all,
+    so a source's type could only ever be set at creation time."""
+    project = await _create_project(client)
+    file = await _upload_file(client, "notes.md")
+    source = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+        )
+    ).json()
+    assert source["type"] == "md"
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/sources/{source['id']}",
+        json={"type": "dataset"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["type"] == "dataset"
+
+    get_response = await client.get(
+        f"/api/v1/projects/{project['id']}/sources/{source['id']}"
+    )
+    assert get_response.json()["type"] == "dataset"
 
 
 async def test_add_source_unknown_project_returns_404(client: AsyncClient) -> None:
@@ -410,3 +539,36 @@ async def test_file_with_only_soft_deleted_source_is_no_longer_referenced(
     # No longer referenced once the only source link was soft-deleted.
     delete_response = await client.delete(f"/api/v1/files/{file['id']}")
     assert delete_response.status_code == 204
+
+
+async def test_source_repository_update_raises_not_found_when_row_vanishes(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #62: `SqlAlchemySourceRepository.update` used to
+    `assert record is not None` when the row disappeared between the
+    caller's read and this write (e.g. a concurrent hard delete) - a bare
+    `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
+    entirely and lets the next line raise a confusing `AttributeError`
+    instead). Must raise a proper `NotFound` (404-mapped) error instead."""
+    project = await _create_project(client)
+    file = await _upload_file(client, "paper.pdf")
+    add_response = await client.post(
+        f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+    )
+    assert add_response.status_code == 201, add_response.text
+    source_id = uuid.UUID(add_response.json()["id"])
+    project_id = uuid.UUID(project["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemySourceRepository(session).get(project_id, source_id)
+    assert baseline is not None
+
+    async with session_factory() as session:
+        record = await session.get(SourceRecord, source_id)
+        assert record is not None
+        await session.delete(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(NotFound):
+            await SqlAlchemySourceRepository(session).update(baseline)

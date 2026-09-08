@@ -153,7 +153,13 @@ class SqlAlchemyOutlineRepository:
     ) -> OutlineNode:
         await self._assert_live_parent(node.parent_id)
         record = await self._session.get(OutlineNodeRecord, node.id)
-        assert record is not None
+        if record is None:
+            # The row disappeared between the caller's read and this write
+            # (e.g. a concurrent hard delete) - a proper `NotFound` (404)
+            # instead of a bare `AssertionError` (a 500 that, under
+            # `python -O`, disappears entirely and lets the next line raise
+            # a confusing `AttributeError` instead; issue #62).
+            raise NotFound(f"outline node {node.id} does not exist")
         _apply_domain_to_record(node, record, fields=fields)
         await self._session.commit()
         await self._session.refresh(record)
