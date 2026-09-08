@@ -382,6 +382,44 @@ async def test_patch_rename_and_status(client: AsyncClient) -> None:
     assert body["status"] == "drafting"
 
 
+async def test_patch_target_pages_recomputes_word_budget(client: AsyncClient) -> None:
+    """Regression for issue #68: `wordBudget` was only ever derived from
+    `targetPages` at node-creation time - a later `PATCH .../outline/{id}`
+    changing `targetPages` left `wordBudget` stale relative to it."""
+    project = await _create_project(client)
+    node = await _create_node(client, project["id"], title="Chapter 1", targetPages=2)
+    assert node["wordBudget"] == 700
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/outline/{node['id']}",
+        json={"targetPages": 4},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["targetPages"] == 4
+    assert body["wordBudget"] == 1400
+
+
+async def test_patch_explicit_word_budget_alongside_target_pages_is_kept(
+    client: AsyncClient,
+) -> None:
+    """An explicit `wordBudget` sent in the same `PATCH` as `targetPages`
+    must win over the derived value, not be clobbered by it (issue #68)."""
+    project = await _create_project(client)
+    node = await _create_node(client, project["id"], title="Chapter 1", targetPages=2)
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/outline/{node['id']}",
+        json={"targetPages": 4, "wordBudget": 999},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["targetPages"] == 4
+    assert body["wordBudget"] == 999
+
+
 async def test_patch_toggles_structure_locked(client: AsyncClient) -> None:
     project = await _create_project(client)
     node = await _create_node(client, project["id"], title="Chapter 1")
@@ -965,3 +1003,31 @@ async def test_flat_and_tree_formats_are_equivalent(client: AsyncClient) -> None
     for node in flattened_from_tree:
         assert node["cliKey"] == by_id_flat[node["id"]]["cliKey"]
         assert node["sectionNumber"] == by_id_flat[node["id"]]["sectionNumber"]
+
+
+async def test_outline_repository_update_raises_not_found_when_row_vanishes(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #62: `SqlAlchemyOutlineRepository.update` used
+    to `assert record is not None` when the row disappeared between the
+    caller's read and this write (e.g. a concurrent hard delete) - a bare
+    `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
+    entirely and lets the next line raise a confusing `AttributeError`
+    instead). Must raise a proper `NotFound` (404-mapped) error instead."""
+    project = await _create_project(client)
+    node = await _create_node(client, project["id"], title="Chapter 1")
+    node_id = uuid.UUID(node["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemyOutlineRepository(session).get(node_id)
+    assert baseline is not None
+
+    async with session_factory() as session:
+        record = await session.get(OutlineNodeRecord, node_id)
+        assert record is not None
+        await session.delete(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(NotFound):
+            await SqlAlchemyOutlineRepository(session).update(baseline, fields=("title",))

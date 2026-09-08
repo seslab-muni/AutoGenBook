@@ -14,6 +14,20 @@ from typing import Sequence
 
 from api.domain.models import OutlineNode
 
+# Matches the CLI's default page->word ratio used to seed/recompute
+# `word_budget` (`autogenbook` sizes sections in words but the wizard/UI
+# think in pages).
+WORDS_PER_PAGE = 350
+
+
+def word_budget_for(target_pages: float) -> int:
+    """The `word_budget` a node with `target_pages` pages should carry - the
+    single source of truth for this derivation, called wherever
+    `target_pages` is set or changed (`OutlineService.create`/`replace`/
+    `update`, `graph_import.py`) so it never drifts from the page count
+    shown right next to it (issue #68)."""
+    return int(WORDS_PER_PAGE * target_pages)
+
 
 @dataclass
 class OutlineTree:
@@ -115,6 +129,14 @@ def depth_of(node_id: uuid.UUID, flat: Sequence[OutlineNode]) -> int:
         depth += 1
         current = by_id.get(current.parent_id) if current.parent_id is not None else None
     return depth
+
+
+def max_depth(flat: Sequence[OutlineNode]) -> int:
+    """The deepest live node's 1-based depth; 0 for an empty outline. Used to
+    check a lowered `maxOutlineLevels` against the outline that already
+    exists (`ProjectService.update`, issue #68) - `depth_of` alone only
+    answers the question for one node at a time."""
+    return max((depth_of(node.id, flat) for node in flat), default=0)
 
 
 def subtree_ids(node_id: uuid.UUID, flat: Sequence[OutlineNode]) -> set[uuid.UUID]:

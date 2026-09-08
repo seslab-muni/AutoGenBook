@@ -4,15 +4,22 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from api.core.errors import Conflict, NotFound
+from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.domain.models import OutputFormat, Project, ProjectSummary, TargetAudience
-from api.domain.ports import ProjectRepository, RunRepository
+from api.domain.outline import max_depth
+from api.domain.ports import OutlineRepository, ProjectRepository, RunRepository
 
 
 class ProjectService:
-    def __init__(self, repository: ProjectRepository, run_repository: RunRepository) -> None:
+    def __init__(
+        self,
+        repository: ProjectRepository,
+        run_repository: RunRepository,
+        outline_repository: OutlineRepository,
+    ) -> None:
         self._repository = repository
         self._run_repository = run_repository
+        self._outline_repository = outline_repository
 
     async def create(
         self,
@@ -82,6 +89,20 @@ class ProjectService:
 
     async def update(self, project_id: uuid.UUID, changes: dict[str, Any]) -> Project:
         project = await self.get(project_id)
+        if "max_outline_levels" in changes:
+            new_limit = changes["max_outline_levels"]
+            # A lowered limit that leaves existing nodes deeper than it
+            # would allow makes the project permanently inconsistent with
+            # its own limit - the wizard has no way to repair that short of
+            # deleting nodes. Reject instead of silently pruning anything
+            # (issue #68).
+            flat = await self._outline_repository.list(project_id)
+            current_depth = max_depth(flat)
+            if current_depth > new_limit:
+                raise ValidationFailed(
+                    f"maxOutlineLevels {new_limit} is below the outline's current "
+                    f"depth ({current_depth}); reduce the outline's depth first"
+                )
         for field_name, value in changes.items():
             setattr(project, field_name, value)
         project.updated_at = datetime.now(timezone.utc)

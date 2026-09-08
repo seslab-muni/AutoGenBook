@@ -8,7 +8,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.core.errors import NotFound
 from api.domain.models import RunStatus
+from api.infrastructure.db.models import RunRecord
 from api.infrastructure.db.run_repository import SqlAlchemyRunRepository
 
 MINIMAL_PROJECT = {
@@ -367,3 +369,31 @@ async def test_get_run_resumable_false_before_execution(client: AsyncClient) -> 
     created = await _create_run(client, project["id"])
 
     assert created["resumable"] is False
+
+
+async def test_run_repository_update_raises_not_found_when_row_vanishes(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression for issue #62: `SqlAlchemyRunRepository.update` used to
+    `assert record is not None` when the row disappeared between the
+    caller's read and this write (e.g. a concurrent hard delete) - a bare
+    `AssertionError` (an unhandled 500 that, under `python -O`, vanishes
+    entirely and lets the next line raise a confusing `AttributeError`
+    instead). Must raise a proper `NotFound` (404-mapped) error instead."""
+    project = await _create_project(client)
+    run = await _create_run(client, project["id"])
+    run_id = uuid.UUID(run["id"])
+
+    async with session_factory() as session:
+        baseline = await SqlAlchemyRunRepository(session).get(run_id)
+    assert baseline is not None
+
+    async with session_factory() as session:
+        record = await session.get(RunRecord, run_id)
+        assert record is not None
+        await session.delete(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(NotFound):
+            await SqlAlchemyRunRepository(session).update(baseline)

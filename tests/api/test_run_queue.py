@@ -109,6 +109,33 @@ async def test_claim_returns_oldest_queued_run_and_marks_running(
     assert claimed.heartbeat_at is not None
 
 
+async def test_claim_returns_none_if_the_claimed_row_vanishes_before_reread(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for issue #62: the re-fetch right after a successful
+    claiming `UPDATE` used to `assert record is not None`. That row
+    disappearing there should be unreachable (the `UPDATE` just wrote it in
+    this same transaction), but `claim` runs in the worker loop, not behind
+    an HTTP router with an exception handler to turn an `AssertionError`
+    into a clean response - it must fall back to the same `None` "nothing
+    claimed" sentinel the caller already handles for every other failed
+    claim, not crash the whole worker slot."""
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        await SqlAlchemyRunRepository(session).add(_run(project_id))
+        queue = SqlAlchemyRunQueue(session)
+
+        async def _vanished(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(session, "get", _vanished)
+
+        claimed = await queue.claim("worker-1")
+
+    assert claimed is None
+
+
 async def test_claim_does_not_reclaim_a_running_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

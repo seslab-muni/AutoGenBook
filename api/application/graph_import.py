@@ -3,19 +3,29 @@ outline nodes (issue #10) - so the editor shows real generated content and
 `Page[OutlineNode]` reflects whatever the CLI actually produced, including
 sections it subdivided on its own.
 
-Matching a CLI node key ("1", "1-2", ...) to an outline row is done by
-recomputing `cli_key` for the outline's *current* tree shape
-(`api.domain.outline.assign_positions`) rather than reading a persisted
-column - `OutlineNode.cli_key` is deliberately never written to storage
-(`api/presentation/schemas/outline.py`'s docstring), only derived at read
-time. This is only safe because `OutlineService._reject_if_run_active`
-blocks every structural outline write (create/delete/replace, and any
-`update` that moves a node) for the whole lifetime of a project's active
-run - otherwise an insert/delete/move landing between `StructureBuilder.
-build` rendering the outline for this run and this import running after it
-finished would shift every sibling's recomputed key, and this import would
-silently write one node's generated content and title onto a different,
-unrelated row (issue #74).
+Matching a CLI node key ("1", "1-2", ...) to an *existing* outline row
+(`_merge_cli_graph_into_outline`) is done by recomputing `cli_key` for the
+outline's *current* tree shape (`api.domain.outline.assign_positions`)
+rather than reading the persisted column - this is only safe because
+`OutlineService._reject_if_run_active` blocks every structural outline write
+(create/delete/replace, and any `update` that moves a node) for the whole
+lifetime of a project's active run - otherwise an insert/delete/move landing
+between `StructureBuilder.build` rendering the outline for this run and this
+import running after it finished would shift every sibling's recomputed
+key, and this import would silently write one node's generated content and
+title onto a different, unrelated row (issue #74).
+
+`cli_key` *is* persisted on the row for every node this module creates or
+matches (`_new_node` sets it explicitly; `_merge_cli_graph_into_outline`'s
+`update()` call carries the matched node's already-correct value along with
+everything else) - `RunService.regenerate_node` relies on reading that
+stored value back (via a fresh `OutlineRepository.list`, not the in-memory
+node this module already had) to detect drift between a `generate`-mode
+base run and the outline's current shape (issue #58/#62): a structural edit
+since the base run shifts the *recomputed* key away from the *stored* one,
+which is exactly the mismatch that check looks for. A freshly created node
+that's never been part of an import has no run to derive a key from, so it
+carries `cli_key=None` until one is assigned here.
 
 A CLI key present in `structure_graph.json` but absent from that recomputed
 map is a node the CLI subdivided on its own (`book_pipeline.py`'s
@@ -35,9 +45,8 @@ from typing import Any, Literal
 
 from starlette.concurrency import run_in_threadpool
 
-from api.application.outline import WORDS_PER_PAGE
 from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project, SourceStatus
-from api.domain.outline import assign_positions
+from api.domain.outline import assign_positions, word_budget_for
 from api.domain.ports import OutlineRepository, SourceRepository
 from api.infrastructure.cli.book_command import OUT_DIRNAME
 
@@ -183,7 +192,7 @@ async def _matched_node_changes(
         # when the CLI's own subdivision changed a node's page count -
         # leaving it stale relative to the `target_pages` shown right next
         # to it (issue #65).
-        changes["word_budget"] = int(WORDS_PER_PAGE * float(cli_pages))
+        changes["word_budget"] = word_budget_for(float(cli_pages))
     changes.update(await _leaf_content_changes(out_dir, cli_key, kb_index))
     return changes
 
@@ -206,7 +215,7 @@ async def _new_node(
         summary=summary,
         status=NodeStatus.NOT_STARTED,
         target_pages=target_pages,
-        word_budget=int(WORDS_PER_PAGE * target_pages),
+        word_budget=word_budget_for(target_pages),
         actual_words=0,
         equation_density_level=project.equation_frequency_level,
         math_level=MathLevel.RIGOROUS,
@@ -224,8 +233,8 @@ async def _new_node(
         # (`RunService.regenerate_node`) has a stable record of the key
         # this node actually had in the CLI's own `structure_graph.json` at
         # import time, independent of whatever position it's since moved
-        # to (issue #58; #62 tracks `cli_key` persistence more generally -
-        # this only needs it reliable for nodes created here).
+        # to (issue #58; see this module's docstring for the full
+        # persistence story, issue #62).
         cli_key=cli_key,
     )
     changes = await _leaf_content_changes(out_dir, cli_key, kb_index)

@@ -9,7 +9,7 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.errors import Conflict
+from api.core.errors import Conflict, NotFound
 from api.domain.models import Run, RunEvent, RunOptions, RunStatus
 from api.infrastructure.db.models import RunEventRecord, RunRecord
 
@@ -137,7 +137,13 @@ class SqlAlchemyRunRepository:
 
     async def update(self, run: Run) -> Run:
         record = await self._session.get(RunRecord, run.id)
-        assert record is not None
+        if record is None:
+            # The row disappeared between the caller's read and this write
+            # (e.g. a concurrent hard delete) - a proper `NotFound` (404)
+            # instead of a bare `AssertionError` (a 500 that, under
+            # `python -O`, disappears entirely and lets the next line raise
+            # a confusing `AttributeError` instead; issue #62).
+            raise NotFound(f"run {run.id} does not exist")
         _apply_domain_to_record(run, record)
         await self._session.commit()
         await self._session.refresh(record)
