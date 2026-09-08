@@ -15,6 +15,10 @@ interface SourceCardProps {
 }
 
 export function SourceCard({ source, citationCount, onEdit, onDetach }: SourceCardProps) {
+  const authorsLabel = source.authors
+    ? `${source.authors}${source.year ? ` (${source.year})` : ''}`
+    : 'No authors listed';
+
   return (
     <Card className="gap-3 py-3.5">
       <CardHeader className="px-3.5">
@@ -23,11 +27,7 @@ export function SourceCard({ source, citationCount, onEdit, onDetach }: SourceCa
             <h4 className="truncate text-xs font-semibold text-card-foreground" title={source.name}>
               {source.name}
             </h4>
-            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-              {source.authors
-                ? `${source.authors}${source.year ? ` (${source.year})` : ''}`
-                : 'No authors listed'}
-            </p>
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{authorsLabel}</p>
           </div>
           <SourceActionsMenu source={source} onEdit={onEdit} onDetach={onDetach} />
         </div>

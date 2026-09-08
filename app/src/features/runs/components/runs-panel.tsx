@@ -40,6 +40,55 @@ export function RunsPanel({ projectId }: RunsPanelProps) {
   });
   const items = data?.items ?? [];
 
+  let body: React.ReactNode;
+  if (isPending) {
+    body = (
+      <div className="space-y-2">
+        {['a', 'b', 'c'].map((key) => (
+          <Skeleton key={key} className="h-10 w-full" />
+        ))}
+      </div>
+    );
+  } else if (items.length === 0) {
+    body = (
+      <EmptyState
+        icon={History}
+        title="No runs yet"
+        description="Start a run from the header to see its history here."
+      />
+    );
+  } else {
+    body = (
+      <table className="w-full table-fixed text-left">
+        <colgroup>
+          <col className="w-32" />
+          <col className="w-24" />
+          <col className="w-32" />
+          <col className="w-28" />
+          <col className="w-20" />
+          <col className="w-24" />
+          <col className="w-24" />
+        </colgroup>
+        <thead className="text-[11px] font-semibold text-muted-foreground">
+          <tr className="border-b">
+            <th className="py-1.5 pl-1 font-semibold">Kind</th>
+            <th className="py-1.5 font-semibold">Status</th>
+            <th className="py-1.5 font-semibold">Started</th>
+            <th className="py-1.5 font-semibold">Started by</th>
+            <th className="py-1.5 font-semibold">Duration</th>
+            <th className="py-1.5 font-semibold">Tokens</th>
+            <th className="py-1.5 pr-1 font-semibold">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((run) => (
+            <RunRow key={run.id} projectId={projectId} run={run} onNavigate={closeModal} />
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={(next) => !next && closeModal()}>
       <DialogContent className="flex max-h-[85vh] flex-col gap-4 overflow-hidden sm:max-w-3xl">
@@ -54,49 +103,7 @@ export function RunsPanel({ projectId }: RunsPanelProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto">
-          {isPending ? (
-            <div className="space-y-2">
-              {['a', 'b', 'c'].map((key) => (
-                <Skeleton key={key} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : items.length === 0 ? (
-            <EmptyState
-              icon={History}
-              title="No runs yet"
-              description="Start a run from the header to see its history here."
-            />
-          ) : (
-            <table className="w-full table-fixed text-left">
-              <colgroup>
-                <col className="w-32" />
-                <col className="w-24" />
-                <col className="w-32" />
-                <col className="w-28" />
-                <col className="w-20" />
-                <col className="w-24" />
-                <col className="w-24" />
-              </colgroup>
-              <thead className="text-[11px] font-semibold text-muted-foreground">
-                <tr className="border-b">
-                  <th className="py-1.5 pl-1 font-semibold">Kind</th>
-                  <th className="py-1.5 font-semibold">Status</th>
-                  <th className="py-1.5 font-semibold">Started</th>
-                  <th className="py-1.5 font-semibold">Started by</th>
-                  <th className="py-1.5 font-semibold">Duration</th>
-                  <th className="py-1.5 font-semibold">Tokens</th>
-                  <th className="py-1.5 pr-1 font-semibold">Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((run) => (
-                  <RunRow key={run.id} projectId={projectId} run={run} onNavigate={closeModal} />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        <div className="flex-1 overflow-y-auto">{body}</div>
       </DialogContent>
     </Dialog>
   );

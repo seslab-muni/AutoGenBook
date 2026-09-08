@@ -14,15 +14,17 @@ interface SourceRowProps {
 }
 
 export function SourceRow({ source, citationCount, onEdit, onDetach }: SourceRowProps) {
+  const authorsLabel = source.authors
+    ? `${source.authors}${source.year ? ` (${source.year})` : ''}`
+    : '—';
+
   return (
     <tr className="border-b last:border-0 hover:bg-muted/30">
       <td className="overflow-hidden py-2 pr-3 pl-3">
         <div className="truncate text-xs font-medium text-foreground" title={source.name}>
           {source.name}
         </div>
-        <div className="truncate text-[11px] text-muted-foreground">
-          {source.authors ? `${source.authors}${source.year ? ` (${source.year})` : ''}` : '—'}
-        </div>
+        <div className="truncate text-[11px] text-muted-foreground">{authorsLabel}</div>
       </td>
       <td className="py-2 pr-3">
         <Badge variant="secondary">{SOURCE_TYPE_LABELS[source.type]}</Badge>
