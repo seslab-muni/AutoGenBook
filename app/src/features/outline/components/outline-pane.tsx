@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ListTree, Plus, Sparkles } from 'lucide-react';
+import { ListTree, Lock, Plus, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
@@ -17,7 +17,11 @@ import { Button } from '@/components/ui/button';
 import { DeleteNodeDialog } from '@/features/outline/components/delete-node-dialog';
 import { NodePropertiesSheet } from '@/features/outline/components/node-properties-sheet';
 import { OutlineDraftEditor } from '@/features/outline/components/outline-draft-editor';
-import { OutlineRow, type OutlineRowActions } from '@/features/outline/components/outline-row';
+import {
+  OutlineRow,
+  STRUCTURE_LOCKED_MESSAGE,
+  type OutlineRowActions,
+} from '@/features/outline/components/outline-row';
 import { ancestorIds, buildTree, type OutlineTree } from '@/features/outline/model';
 import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { useOutlineStore } from '@/stores/outline-store';
@@ -53,6 +57,11 @@ export function OutlinePane({
   const deleteMutation = useDeleteOutlineNodeMutation(projectId);
   const openModal = useUiStore((state) => state.openModal);
   const { activeRun, sectionNodeIds } = useActiveRun(projectId);
+  // The backend rejects every structural outline write (create/delete/move) with 409 while the
+  // project has a queued/running run (`OutlineService._reject_if_run_active`, issue #74) — mirror
+  // that here so the controls are disabled instead of silently 409ing. Rename/summary/content
+  // edits stay enabled, matching what the backend still allows.
+  const structuralEditsDisabled = Boolean(activeRun);
 
   const isGenerating = useCallback(
     (node: OutlineNode) => {
@@ -123,6 +132,7 @@ export function OutlinePane({
     (nodeId: string, key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Delete') => {
       if (key === 'Enter') return;
       if (key === 'Delete') {
+        if (structuralEditsDisabled) return;
         const node = flat.find((n) => n.id === nodeId);
         if (node) setDeletingNode(node);
         return;
@@ -133,7 +143,7 @@ export function OutlinePane({
       const nextId = visibleIds[nextIndex];
       if (nextId) onSelectNode(nextId);
     },
-    [flat, visibleIds, onSelectNode],
+    [flat, visibleIds, onSelectNode, structuralEditsDisabled],
   );
 
   const handleToggleCollapse = useCallback(
@@ -168,12 +178,20 @@ export function OutlinePane({
           variant="ghost"
           size="sm"
           onClick={() => handleAddChild(null)}
-          disabled={maxOutlineLevels < 1}
+          disabled={maxOutlineLevels < 1 || structuralEditsDisabled}
+          title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
         >
           <Plus className="size-3.5" />
           Add chapter
         </Button>
       </PaneToolbar>
+
+      {structuralEditsDisabled ? (
+        <div className="flex items-center gap-2 border-b bg-warning/10 px-3 py-2 text-xs font-medium text-warning-foreground">
+          <Lock className="size-3.5 shrink-0" />
+          {STRUCTURE_LOCKED_MESSAGE}
+        </div>
+      ) : null}
 
       <div className="flex-1 overflow-auto p-1.5" role="tree">
         {tree.length === 0 ? (
@@ -188,6 +206,8 @@ export function OutlinePane({
                   variant="outline"
                   size="sm"
                   onClick={() => setDraftEditorOpen(true)}
+                  disabled={structuralEditsDisabled}
+                  title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
                 >
                   Paste or author an outline
                 </Button>
@@ -215,6 +235,7 @@ export function OutlinePane({
               selectedNodeId={selectedNodeId}
               isCollapsed={isCollapsed}
               isGenerating={isGenerating}
+              structuralEditsDisabled={structuralEditsDisabled}
               actions={actions}
             />
           ))
