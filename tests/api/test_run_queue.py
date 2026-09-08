@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -135,12 +136,65 @@ async def test_heartbeat_updates_heartbeat_at(
         first_heartbeat = claimed.heartbeat_at
 
         await asyncio.sleep(0.01)
-        await queue.heartbeat(run.id)
+        ok = await queue.heartbeat(run.id, "worker-1")
         refreshed = await repo.get(run.id)
 
+    assert ok is True
     assert refreshed is not None
     assert refreshed.heartbeat_at is not None
     assert refreshed.heartbeat_at >= first_heartbeat
+
+
+async def test_heartbeat_without_worker_id_is_unconditional_while_running(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Backward-compatible fallback for callers that don't track a lease at
+    all (`GenerationService` driven directly against an unclaimed run, as
+    most of `tests/api/test_generation_service.py` does)."""
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        run = await repo.add(_run(project_id))
+        queue = SqlAlchemyRunQueue(session)
+        await queue.claim("worker-1")
+
+        ok = await queue.heartbeat(run.id)
+
+    assert ok is True
+
+
+async def test_heartbeat_rejects_a_worker_that_lost_its_lease(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Regression for issue #52: once `requeue_stale` reassigns a run to a
+    second worker, the first worker's heartbeat must be rejected (compare-
+    and-set on `locked_by`), not silently accepted - accepting it is
+    exactly what let the first worker keep "renewing" a lease it no longer
+    held while two CLI subprocesses ran against the same work directory."""
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        run = await repo.add(_run(project_id))
+        queue = SqlAlchemyRunQueue(session)
+        await queue.claim("worker-1")
+
+        stale = await repo.get(run.id)
+        assert stale is not None
+        stale.heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=600)
+        await repo.update(stale)
+        requeued = await queue.requeue_stale(older_than_s=300)
+        assert requeued == 1
+        second_claim = await queue.claim("worker-2")
+        assert second_claim is not None
+
+        # worker-1 (the original owner) tries to renew a lease that no
+        # longer belongs to it.
+        ok = await queue.heartbeat(run.id, "worker-1")
+        refreshed = await repo.get(run.id)
+
+    assert ok is False
+    assert refreshed is not None
+    assert refreshed.locked_by == "worker-2"
 
 
 async def test_release_requeues_a_running_run(
@@ -153,13 +207,57 @@ async def test_release_requeues_a_running_run(
         queue = SqlAlchemyRunQueue(session)
         await queue.claim("worker-1")
 
-        await queue.release(run.id)
+        released = await queue.release(run.id, "worker-1")
         refreshed = await repo.get(run.id)
 
+    assert released is True
     assert refreshed is not None
     assert refreshed.status == RunStatus.queued
     assert refreshed.locked_by is None
     assert refreshed.started_at is None
+
+
+async def test_release_is_a_noop_for_the_wrong_worker(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Regression for issue #52: `release` (like `heartbeat`) must be a
+    compare-and-set on `locked_by`, not an unconditional write - a worker
+    that already lost its lease (e.g. `requeue_stale` reassigned the run to
+    someone else while it was still finishing up) must not be able to hand
+    a *different* worker's now-in-progress run back to `queued` out from
+    under it."""
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        run = await repo.add(_run(project_id))
+        queue = SqlAlchemyRunQueue(session)
+        await queue.claim("worker-1")
+
+        released = await queue.release(run.id, "some-other-worker")
+        refreshed = await repo.get(run.id)
+
+    assert released is False
+    assert refreshed is not None
+    assert refreshed.status == RunStatus.running
+    assert refreshed.locked_by == "worker-1"
+
+
+async def test_release_options_flips_resume_for_a_reclaimed_full_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        run = await repo.add(_run(project_id))
+        queue = SqlAlchemyRunQueue(session)
+        await queue.claim("worker-1")
+
+        resumed_options = dataclasses.asdict(dataclasses.replace(run.options, resume=True))
+        await queue.release(run.id, "worker-1", options=resumed_options)
+        refreshed = await repo.get(run.id)
+
+    assert refreshed is not None
+    assert refreshed.options.resume is True
 
 
 async def test_requeue_stale_only_touches_old_heartbeats(
@@ -193,6 +291,69 @@ async def test_requeue_stale_only_touches_old_heartbeats(
     assert requeued_count == 1
     assert stale_after is not None and stale_after.status == RunStatus.queued
     assert fresh_after is not None and fresh_after.status == RunStatus.running
+
+
+async def test_requeue_stale_flips_resume_for_a_full_run_with_a_structure_graph(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path
+) -> None:
+    """Regression for issue #52: a `full` run stale-requeued after the CLI
+    already got far enough to write `out/structure_graph.json` should
+    resume from it on retry, not regenerate (and pay for) every section
+    from scratch."""
+    work_dir = tmp_path / "run"
+    out_dir = work_dir / "out"
+    out_dir.mkdir(parents=True)
+    (out_dir / "structure_graph.json").write_text("{}", encoding="utf-8")
+
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        queue = SqlAlchemyRunQueue(session)
+        run = await repo.add(
+            _run(project_id, queued_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+        )
+        run = await repo.update(dataclasses.replace(run, work_dir=str(work_dir)))
+        await queue.claim("worker-1")
+
+        claimed = await repo.get(run.id)
+        assert claimed is not None
+        claimed.heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=600)
+        await repo.update(claimed)
+
+        requeued = await queue.requeue_stale(older_than_s=300)
+        refreshed = await repo.get(run.id)
+
+    assert requeued == 1
+    assert refreshed is not None
+    assert refreshed.status == RunStatus.queued
+    assert refreshed.options.resume is True
+
+
+async def test_requeue_stale_does_not_flip_resume_without_a_structure_graph(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path
+) -> None:
+    work_dir = tmp_path / "run-without-graph"
+
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        queue = SqlAlchemyRunQueue(session)
+        run = await repo.add(
+            _run(project_id, queued_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+        )
+        run = await repo.update(dataclasses.replace(run, work_dir=str(work_dir)))
+        await queue.claim("worker-1")
+
+        claimed = await repo.get(run.id)
+        assert claimed is not None
+        claimed.heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=600)
+        await repo.update(claimed)
+
+        await queue.requeue_stale(older_than_s=300)
+        refreshed = await repo.get(run.id)
+
+    assert refreshed is not None
+    assert refreshed.options.resume is False
 
 
 @requires_postgres

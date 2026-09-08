@@ -143,6 +143,61 @@ async def test_import_graph_updates_matched_leaf_content_and_status(
     assert refreshed.status == NodeStatus.COMPILED
 
 
+async def test_import_graph_reads_files_off_the_event_loop(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
+) -> None:
+    """Regression for issue #55: `_load_json`/`_leaf_content_changes` used
+    to do a plain sync `read_text`/`json.loads` per file, directly on
+    whatever coroutine called `import_graph` - with `WORKER_CONCURRENCY >
+    1` sharing one event loop, that blocked every other worker slot's
+    drain loop (heartbeat, event flushing, cancellation) for however long
+    the read took. They should now go through `run_in_threadpool`, i.e.
+    run on a different thread than the test itself."""
+    import threading
+
+    from api.application import graph_import as graph_import_module
+
+    main_thread = threading.current_thread()
+    read_threads: list[threading.Thread] = []
+
+    original_load_json_sync = graph_import_module._load_json_sync
+    original_read_section_sync = graph_import_module._read_section_sync
+
+    def spy_load_json_sync(path):
+        read_threads.append(threading.current_thread())
+        return original_load_json_sync(path)
+
+    def spy_read_section_sync(path):
+        read_threads.append(threading.current_thread())
+        return original_read_section_sync(path)
+
+    monkeypatch.setattr(graph_import_module, "_load_json_sync", spy_load_json_sync)
+    monkeypatch.setattr(graph_import_module, "_read_section_sync", spy_read_section_sync)
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        await SqlAlchemyOutlineRepository(session).add(
+            _make_node(project.id, None, 0, title="Old Title")
+        )
+
+        work_dir = tmp_path / "run"
+        out_dir = work_dir / "out"
+        (out_dir / "sections").mkdir(parents=True)
+        (out_dir / "sections" / "1.md").write_text("## New content\n\nBody text.\n", encoding="utf-8")
+        _write_structure_graph(
+            out_dir,
+            nodes={"book": {}, "1": {"title": "New Title"}},
+            edges=[["book", "1"]],
+        )
+
+        await import_graph(
+            project, work_dir, SqlAlchemyOutlineRepository(session), SqlAlchemySourceRepository(session)
+        )
+
+    assert read_threads, "expected at least one file read during import_graph"
+    assert all(t is not main_thread for t in read_threads)
+
+
 async def test_import_graph_inserts_node_the_cli_subdivided(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:

@@ -201,7 +201,13 @@ class OutlineService:
         updated = dataclass_replace(
             node, **changes, updated_at=datetime.now(timezone.utc)
         )
-        await self._outline_repository.update(updated)
+        # Write only the columns this request actually changed (plus
+        # `updated_at`) rather than the whole row - two concurrent `PATCH
+        # /outline/{nodeId}` requests touching different fields (a
+        # debounced content autosave racing a `structureLocked`/`status`
+        # toggle) would otherwise each silently revert the other's change
+        # with their own stale copy of it (issue #56).
+        await self._outline_repository.update(updated, fields=tuple(changes.keys()))
 
         if touches_position:
             if parent_changed:

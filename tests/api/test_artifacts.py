@@ -225,6 +225,79 @@ async def test_upload_artifacts_rewrites_author_line_with_non_utf8_bytes_without
     assert "**Author:** Ada Lovelace" in content
 
 
+async def test_upload_artifacts_hashes_off_the_event_loop(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession], monkeypatch
+) -> None:
+    """Regression for issue #55: hashing/reading a run's artifacts used to
+    happen with a plain `absolute_path.read_bytes()` + `hashlib.sha256(data)`
+    directly on the request/worker coroutine - a large PDF/`.tex`/log held
+    in memory *and* blocking the event loop for however long that took.
+    They should now run via `run_in_threadpool`, i.e. on a different thread
+    than the test itself."""
+    import threading
+
+    from api.infrastructure.cli import artifacts as artifacts_module
+
+    out_dir = _make_out_dir(tmp_path)
+    main_thread = threading.current_thread()
+    hash_threads: list[threading.Thread] = []
+
+    original_hash_file_sync = artifacts_module._hash_file_sync
+
+    def spy_hash_file_sync(path):
+        hash_threads.append(threading.current_thread())
+        return original_hash_file_sync(path)
+
+    monkeypatch.setattr(artifacts_module, "_hash_file_sync", spy_hash_file_sync)
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        created = await upload_artifacts(out_dir, run.id, files, run_artifacts, storage)
+
+    # Every non-markdown-with-authors artifact goes through `_hash_file_sync`
+    # (the markdown-with-authors rewrite path is exercised by the two tests
+    # above and hashes in-process since it already holds the rewritten
+    # bytes) - `authors=None` here, so every artifact takes this path.
+    assert len(hash_threads) == len(created) > 0
+    assert all(t is not main_thread for t in hash_threads)
+
+
+async def test_upload_artifacts_streams_from_a_file_handle_not_bytesio(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession], monkeypatch
+) -> None:
+    """Regression for issue #55: non-markdown artifacts used to be wrapped
+    in `io.BytesIO(data)` for `storage.put` - the whole file held in memory
+    a *second* time (on top of the `data` bytes already read). They should
+    now be uploaded straight from an open file handle on disk instead."""
+    out_dir = _make_out_dir(tmp_path)
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        put_stream_types: list[type] = []
+        original_put = storage.put
+
+        async def spy_put(key, stream, content_type, size_hint=None):
+            put_stream_types.append(type(stream))
+            return await original_put(key, stream, content_type, size_hint)
+
+        monkeypatch.setattr(storage, "put", spy_put)
+
+        await upload_artifacts(out_dir, run.id, files, run_artifacts, storage)
+
+    assert put_stream_types
+    import io as io_module
+
+    assert all(t is not io_module.BytesIO for t in put_stream_types)
+
+
 async def test_upload_artifacts_is_idempotent_on_rerun(
     tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:

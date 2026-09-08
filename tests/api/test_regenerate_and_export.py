@@ -60,8 +60,13 @@ async def _drive_generation(
     run_id: str, session_factory: async_sessionmaker[AsyncSession], storage, settings: Settings
 ):
     async with session_factory() as session:
-        run = await SqlAlchemyRunRepository(session).get(uuid.UUID(run_id))
-        assert run is not None
+        # `claim` (not a plain `get`) so the row is actually `running`/
+        # locked, matching what `execute` sees in production
+        # (`api.worker.__main__._claim_and_execute`) - `heartbeat`/
+        # `finalize`'s compare-and-set (issue #52/#56) is conditional on
+        # that.
+        run = await SqlAlchemyRunQueue(session).claim("test-worker")
+        assert run is not None and str(run.id) == run_id
         service = GenerationService(
             run_repository=SqlAlchemyRunRepository(session),
             run_event_repository=SqlAlchemyRunEventRepository(session),
@@ -74,6 +79,7 @@ async def _drive_generation(
             run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
             settings=settings,
             drain_poll_interval_s=0.05,
+            worker_id="test-worker",
         )
         return await service.execute(run)
 
@@ -288,6 +294,93 @@ async def test_regenerate_409_when_outline_changed_since_base_run(
     assert response.status_code == 409
 
 
+async def test_regenerate_succeeds_for_an_untouched_generate_mode_node(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """Baseline for the drift check below: a `generate`-mode base run whose
+    outline hasn't changed since must still regenerate normally - the
+    node's `cli_key` as persisted at import time should match what the
+    outline's (unchanged) current shape recomputes for it."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/runs", json={"outline": "generate"}
+    )
+    assert response.status_code == 202, response.text
+    finished = await _drive_generation(
+        response.json()["id"], session_factory, file_storage, settings
+    )
+    assert finished.status.value == "succeeded", finished.error
+
+    outline_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    nodes = outline_response.json()["items"]
+    target = next(n for n in nodes if n["title"] == "Chapter One")
+    assert target["cliKey"] == "1"
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{target['id']}/regenerate", json={}
+    )
+    assert response.status_code == 202, response.text
+
+
+async def test_regenerate_409_when_outline_changed_since_a_generate_mode_base_run(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """Regression for issue #58: a base run created with `outline:
+    "generate"` renders a spec TXT with no outline in it at all
+    (`SpecRenderer.render(..., include_outline=False)`), so the
+    project-mode drift check (hashing that TXT) can never detect a
+    structural edit for it - `cli_key` is positional, so inserting a node
+    ahead of the target shifts which CLI section `_prepare_regenerate`
+    would delete/regenerate and `import_single_node` would write back onto
+    it, silently touching the wrong outline row. `RunService.
+    regenerate_node` should instead compare the target node's `cli_key` as
+    persisted at import time against what the outline's *current* shape
+    recomputes for it."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/runs", json={"outline": "generate"}
+    )
+    assert response.status_code == 202, response.text
+    finished = await _drive_generation(
+        response.json()["id"], session_factory, file_storage, settings
+    )
+    assert finished.status.value == "succeeded", finished.error
+
+    outline_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    nodes = outline_response.json()["items"]
+    target = next(n for n in nodes if n["title"] == "Chapter One")
+    assert target["cliKey"] == "1"
+
+    # Structural edit after the base run: insert a new node ahead of the
+    # target, shifting its recomputed `cliKey` - the TXT's outline section
+    # doesn't exist in generate mode, so nothing about this edit is visible
+    # to the project-mode hash check.
+    await _create_node(client, project_id, "Inserted First", orderIndex=0)
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{target['id']}/regenerate", json={}
+    )
+    assert response.status_code == 409
+
+
 async def test_regenerate_409_when_project_has_an_active_run(
     app,
     client: AsyncClient,
@@ -371,6 +464,131 @@ async def test_regenerate_reverts_node_status_when_the_run_fails(
 
     node_after = await _get_node(client, project_id, node["id"])
     assert node_after["status"] == "compiled"
+
+
+async def test_regenerate_failure_after_prepare_restores_the_base_work_dir(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """Regression for issue #58: `_prepare_regenerate` deletes the target
+    section's Markdown (keeping a backup) and appends a "Writing
+    instructions:" trailer to the node's summary in `structure_graph.json`
+    *before* the CLI ever runs. If the CLI subprocess itself then fails
+    (unlike `test_regenerate_reverts_node_status_when_the_run_fails`, whose
+    failure happens *before* `_prepare_regenerate` gets to mutate anything),
+    both of those mutations used to be permanent: the base work dir lost
+    the section forever and carried the leftover modifier into every later
+    `export`/`regenerate` on the same work dir. They should now be rolled
+    back."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+    node = await _create_node(client, project_id, "Chapter A")
+    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+
+    node_before = await _get_node(client, project_id, node["id"])
+    cli_key = node_before["cliKey"]
+    work_dir = Path(settings.runs_dir) / base_run["id"]
+    out_dir = work_dir / "out"
+    graph_before = (out_dir / "structure_graph.json").read_text(encoding="utf-8")
+    section_before = (out_dir / "sections" / f"{cli_key}.md").read_text(encoding="utf-8")
+
+    regen_response = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate",
+        json={"promptModifier": "add worked examples"},
+    )
+    assert regen_response.status_code == 202, regen_response.text
+    regen_run = regen_response.json()
+
+    # Points the CLI subprocess at a script that doesn't exist, so it exits
+    # non-zero *after* `_prepare_regenerate` has already run (unlike
+    # `test_regenerate_reverts_node_status_when_the_run_fails`, which
+    # sabotages the work dir itself before `_prepare_regenerate` even gets
+    # a chance to touch it).
+    broken_settings = _settings(tmp_path, cli_entrypoint=str(tmp_path / "does_not_exist.py"))
+    finished = await _drive_generation(
+        regen_run["id"], session_factory, file_storage, broken_settings
+    )
+    assert finished.status.value == "failed"
+
+    # The base work dir must be exactly as it was before the regenerate
+    # attempt touched it.
+    assert (out_dir / "structure_graph.json").read_text(encoding="utf-8") == graph_before
+    assert (out_dir / "sections" / f"{cli_key}.md").read_text(encoding="utf-8") == section_before
+    assert not (out_dir / "regen_history" / "structure_graph.json.prev").exists()
+    assert not (out_dir / "regen_history" / f"{cli_key}.md.prev").exists()
+
+    node_after = await _get_node(client, project_id, node["id"])
+    assert node_after["status"] == "compiled"
+    assert node_after["contentMarkdown"] == node_before["contentMarkdown"]
+
+    # A later export from the same base run should just rebuild TeX/PDF -
+    # not silently regenerate the section the failed attempt deleted, with
+    # a modifier the user's regenerate request never actually completed.
+    export_response = await client.post(
+        f"/api/v1/runs/{base_run['id']}/exports", json={"format": "pdf"}
+    )
+    assert export_response.status_code == 202, export_response.text
+    export_run = export_response.json()
+    export_finished = await _drive_generation(
+        export_run["id"], session_factory, file_storage, settings
+    )
+    assert export_finished.status.value == "succeeded", export_finished.error
+
+    events_response = await client.get(f"/api/v1/runs/{export_run['id']}/events?limit=1000")
+    section_events = [e for e in events_response.json()["items"] if e["stage"] == "section"]
+    assert section_events == []
+
+
+async def test_regenerate_does_not_stack_writing_instructions_across_attempts(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """Regression for issue #58: every regenerate on the same node used to
+    append another "Writing instructions: ..." line to the graph's copy of
+    the node's summary without ever stripping the previous one, so a
+    second regenerate's fabricated content (`fake_cli.py` echoes the node
+    summary into the generated section) would carry *both* modifiers
+    stacked together."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+    node = await _create_node(client, project_id, "Chapter A")
+    await _run_full(client, project_id, session_factory, file_storage, settings)
+
+    first = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate",
+        json={"promptModifier": "first modifier"},
+    )
+    assert first.status_code == 202, first.text
+    finished_first = await _drive_generation(
+        first.json()["id"], session_factory, file_storage, settings
+    )
+    assert finished_first.status.value == "succeeded", finished_first.error
+
+    second = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate",
+        json={"promptModifier": "second modifier"},
+    )
+    assert second.status_code == 202, second.text
+    finished_second = await _drive_generation(
+        second.json()["id"], session_factory, file_storage, settings
+    )
+    assert finished_second.status.value == "succeeded", finished_second.error
+
+    node_after = await _get_node(client, project_id, node["id"])
+    assert "Writing instructions: second modifier" in node_after["contentMarkdown"]
+    assert "first modifier" not in node_after["contentMarkdown"]
 
 
 async def test_cancelling_a_queued_regenerate_run_reverts_the_node_status(

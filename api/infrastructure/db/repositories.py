@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -8,6 +9,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.domain.models import Project
 from api.infrastructure.db.models import OutlineNodeRecord, ProjectRecord, SourceRecord
+
+_ALL_MUTABLE_FIELDS = (
+    "title",
+    "subtitle",
+    "authors",
+    "topic",
+    "target_audience",
+    "total_pages_budget",
+    "equation_frequency_level",
+    "do_consider_outline",
+    "do_consider_previous_sections",
+    "output_format",
+    "max_outline_levels",
+    "additional_requirements",
+    "last_run_id",
+)
 
 
 def _as_aware_utc(value: datetime) -> datetime:
@@ -81,22 +98,19 @@ class SqlAlchemyProjectRepository:
         await self._session.commit()
         return _to_domain(record)
 
-    async def update(self, project: Project) -> Project:
+    async def update(
+        self, project: Project, *, fields: Sequence[str] | None = None
+    ) -> Project:
+        """`fields`, when given, writes only those columns (plus
+        `updated_at`, always) instead of the whole row - `RunService.
+        create`/`GenerationService._import_graph` bumping `last_run_id`
+        only, for instance, so it can't silently revert a concurrent
+        `PATCH /projects/{id}` that read the project in between (issue
+        #56)."""
         record = await self._session.get(ProjectRecord, project.id)
         assert record is not None
-        record.title = project.title
-        record.subtitle = project.subtitle
-        record.authors = project.authors
-        record.topic = project.topic
-        record.target_audience = project.target_audience
-        record.total_pages_budget = project.total_pages_budget
-        record.equation_frequency_level = project.equation_frequency_level
-        record.do_consider_outline = project.do_consider_outline
-        record.do_consider_previous_sections = project.do_consider_previous_sections
-        record.output_format = project.output_format
-        record.max_outline_levels = project.max_outline_levels
-        record.additional_requirements = project.additional_requirements
-        record.last_run_id = project.last_run_id
+        for name in _ALL_MUTABLE_FIELDS if fields is None else fields:
+            setattr(record, name, getattr(project, name))
         record.updated_at = project.updated_at
         await self._session.commit()
         return _to_domain(record)

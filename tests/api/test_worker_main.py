@@ -101,9 +101,11 @@ class _FakeGenerationService:
         self.execute_result = execute_result
         self.execute_exception = execute_exception
         self.executed_runs: list[Run] = []
+        self.shutdown_events: list = []
 
-    async def execute(self, run: Run) -> Run:
+    async def execute(self, run: Run, *, shutdown_event=None) -> Run:
         self.executed_runs.append(run)
+        self.shutdown_events.append(shutdown_event)
         if self.execute_exception is not None:
             raise self.execute_exception
         return self.execute_result if self.execute_result is not None else run
@@ -154,6 +156,30 @@ async def test_claim_and_execute_runs_service_and_returns_true(
 
     assert claimed is True
     assert fake_service.executed_runs == [run]
+
+
+async def test_claim_and_execute_passes_stop_event_through_as_shutdown_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for issue #52: `execute` needs the slot's `stop_event` to
+    tear an in-flight CLI subprocess down promptly on SIGTERM instead of
+    blocking the whole slot until the run finishes on its own - which
+    means `_claim_and_execute` must actually forward it."""
+    run = _make_run()
+    fake_queue = _FakeRunQueue(claim_return=run)
+    fake_service = _FakeGenerationService(execute_result=_make_run(status=RunStatus.succeeded))
+    _patch_queue(monkeypatch, fake_queue)
+    _patch_service(monkeypatch, fake_service)
+
+    stop_event = asyncio.Event()
+
+    claimed = await worker_main._claim_and_execute(
+        _fake_session_factory, storage=None, settings=_settings(), worker_id="w:0",
+        stop_event=stop_event,
+    )
+
+    assert claimed is True
+    assert fake_service.shutdown_events == [stop_event]
 
 
 async def test_claim_and_execute_swallows_service_exception_but_still_returns_true(

@@ -72,6 +72,13 @@ services:
     build:
       context: .
     command: python -m api.worker
+    # Long enough for `GenerationService`'s SIGTERM -> (CLI_CANCEL_GRACE_S)
+    # -> SIGKILL teardown of an in-flight CLI subprocess plus the DB write
+    # that releases the run back to the queue to actually finish before
+    # compose gives up and SIGKILLs this container itself (issue #52) -
+    # SIGKILLing the worker mid-teardown is exactly what used to leave a
+    # run stuck `running` until `WORKER_STALE_S`.
+    stop_grace_period: 30s
     environment:
       <<: *app-env
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}

@@ -59,7 +59,7 @@ async def create_run(
         resume=body.resume,
         export_tex_only=body.export_tex_only,
     )
-    return run_to_schema(run)
+    return await run_to_schema(run)
 
 
 @router.get("/projects/{project_id}/runs", response_model=Page[Run])
@@ -70,7 +70,7 @@ async def list_runs(
 ) -> Page[Run]:
     runs, total = await service.list(project_id, limit=params.limit, offset=params.offset)
     return Page[Run](
-        items=[run_to_schema(run) for run in runs],
+        items=[await run_to_schema(run) for run in runs],
         total=total,
         limit=params.limit,
         offset=params.offset,
@@ -91,7 +91,7 @@ async def regenerate_node(
     run = await service.regenerate_node(
         project_id, node_id, prompt_modifier=body.prompt_modifier
     )
-    return run_to_schema(run)
+    return await run_to_schema(run)
 
 
 @router.get("/runs/{run_id}", response_model=Run)
@@ -99,7 +99,7 @@ async def get_run(
     run_id: uuid.UUID, service: RunService = Depends(get_run_service)
 ) -> Run:
     run = await service.get(run_id)
-    return run_to_schema(run)
+    return await run_to_schema(run)
 
 
 @router.post(
@@ -109,7 +109,7 @@ async def cancel_run(
     run_id: uuid.UUID, service: RunService = Depends(get_run_service)
 ) -> Run:
     run = await service.cancel(run_id)
-    return run_to_schema(run)
+    return await run_to_schema(run)
 
 
 @router.post(
@@ -121,7 +121,7 @@ async def export_run(
     service: RunService = Depends(get_run_service),
 ) -> Run:
     run = await service.export(run_id, output_format=body.format)
-    return run_to_schema(run)
+    return await run_to_schema(run)
 
 
 @router.get("/runs/{run_id}/events", response_model=Page[RunEvent])

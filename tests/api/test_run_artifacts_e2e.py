@@ -62,8 +62,16 @@ async def _drive_generation(
     run_id: str, session_factory: async_sessionmaker[AsyncSession], storage, settings: Settings
 ):
     async with session_factory() as session:
-        run = await SqlAlchemyRunRepository(session).get(uuid.UUID(run_id))
-        assert run is not None
+        # `claim` (not a plain `get`) so the row is actually `running`/
+        # locked, matching what `execute` sees in production
+        # (`api.worker.__main__._claim_and_execute`) - `heartbeat`/
+        # `finalize`'s compare-and-set (issue #52/#56) is conditional on
+        # that, and a run this helper only ever `get`-then-`execute`s
+        # against would still read back `queued` from `queue.claim`'s own
+        # `WHERE status='queued'` guard, never getting heartbeated/
+        # finalized at all.
+        run = await SqlAlchemyRunQueue(session).claim("test-worker")
+        assert run is not None and str(run.id) == run_id
         service = GenerationService(
             run_repository=SqlAlchemyRunRepository(session),
             run_event_repository=SqlAlchemyRunEventRepository(session),
@@ -76,6 +84,7 @@ async def _drive_generation(
             run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
             settings=settings,
             drain_poll_interval_s=0.05,
+            worker_id="test-worker",
         )
         return await service.execute(run)
 
