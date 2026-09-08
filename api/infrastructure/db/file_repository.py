@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.domain.models import File
+from api.domain.models import File, FileKind
 from api.infrastructure.db.models import RunArtifactRecord, SourceRecord
 
 
@@ -35,11 +35,20 @@ class SqlAlchemyFileRepository:
         rows = await self._session.scalars(select(File).where(File.id.in_(ids)))
         return {file.id: file for file in rows.all()}
 
-    async def list(self, limit: int, offset: int) -> tuple[Sequence[File], int]:
-        total = await self._session.scalar(select(func.count()).select_from(File))
-        rows = await self._session.scalars(
-            select(File).order_by(File.created_at.desc()).limit(limit).offset(offset)
-        )
+    async def list(
+        self, limit: int, offset: int, *, kind: FileKind | None = None
+    ) -> tuple[Sequence[File], int]:
+        # `kind` lets the upload picker (`GET /files?kind=upload`) exclude
+        # run artifacts from the same listing without a separate endpoint
+        # (issue #61) - `None` (the default) keeps the previous unfiltered
+        # behavior.
+        count_query = select(func.count()).select_from(File)
+        list_query = select(File).order_by(File.created_at.desc()).limit(limit).offset(offset)
+        if kind is not None:
+            count_query = count_query.where(File.kind == kind)
+            list_query = list_query.where(File.kind == kind)
+        total = await self._session.scalar(count_query)
+        rows = await self._session.scalars(list_query)
         return rows.all(), total or 0
 
     async def delete(self, file: File) -> None:

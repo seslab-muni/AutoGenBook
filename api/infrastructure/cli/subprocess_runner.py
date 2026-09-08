@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -34,6 +35,40 @@ _WAIT_POLL_INTERVAL_S = 0.2
 
 STRUCTURE_GRAPH_FILENAME = "structure_graph.json"
 OUT_DIRNAME = "out"
+
+# Where the CLI subprocess's raw, unredacted stdout/stderr is written for
+# download - the API's own "log" events stream a redacted/classified version
+# of the same lines (issue #82), so the full detail (paths, driver messages,
+# tracebacks) is never lost, just not sent verbatim over the API.
+LOG_DIRNAME = "logs"
+LOG_FILENAME = "cli_stdout.log"
+
+# A Python traceback's own lines never carry one of `stdout_parser`'s `[TAG]`
+# prefixes, so they'd otherwise stream as ordinary `level=info` "log" events
+# - reclassified to `error` here so clients (and anyone scanning events for
+# failures) don't have to guess from the text.
+_TRACEBACK_HEADER_RE = re.compile(r"^Traceback \(most recent call last\):\s*$")
+_TRACEBACK_FRAME_RE = re.compile(r'^\s*File "')
+_EXCEPTION_LINE_RE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Warning)\b[:\s]")
+
+# Absolute filesystem paths (`/app/runs/<uuid>/out/...`, a temp dir, ...)
+# stripped from streamed log messages - two or more path segments after the
+# leading `/`, so short, harmless things like a bare `/health` aren't touched.
+_ABS_PATH_RE = re.compile(r"/(?:[\w.\-]+/)+[\w.\-]*")
+_PATH_REDACTED = "<path>"
+
+
+def _looks_like_traceback_line(message: str) -> bool:
+    return bool(
+        _TRACEBACK_HEADER_RE.match(message)
+        or _TRACEBACK_FRAME_RE.match(message)
+        or _EXCEPTION_LINE_RE.match(message.strip())
+    )
+
+
+def _redact_paths(message: str) -> str:
+    return _ABS_PATH_RE.sub(_PATH_REDACTED, message)
+
 
 OnEvent = Callable[[RunEvent], None]
 ShouldCancel = Callable[[], bool]
@@ -102,11 +137,17 @@ def _watch_structure_graph(
                 continue
             seen_keys.add(key)
             title = attrs.get("title") or key
+            # `content_file_path` (an absolute path under the run's work
+            # directory on the worker container's own filesystem) is
+            # deliberately not included here - it's internal to the worker,
+            # meaningless to an API client, and exactly the kind of detail
+            # issue #82 flags as leaking through run events. `node_key` is
+            # all a client needs to correlate this event with the outline.
             emit(
                 "info",
                 "section",
                 f"Section '{title}' generated",
-                {"node_key": key, "content_file_path": content_path},
+                {"nodeKey": key},
             )
 
     while not stop_event.is_set():
@@ -197,12 +238,34 @@ def run(
     stop_event = threading.Event()
     reader_failed = threading.Event()
 
+    # The unredacted transcript (every raw line, including whatever absolute
+    # paths/tracebacks it contains) is preserved on disk as a downloadable
+    # artifact (`artifacts.py` already classifies anything under `out/logs/`
+    # as `ArtifactKind.log`) - only the version streamed as "log" events
+    # below is sanitized. Best-effort: a failure to open this file must never
+    # stop the run itself.
+    log_handle = None
+    try:
+        log_path = work_dir / OUT_DIRNAME / LOG_DIRNAME / LOG_FILENAME
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_path.open("a", encoding="utf-8")
+    except OSError:
+        log_handle = None
+
     def read_stdout() -> None:
         assert proc.stdout is not None
         try:
             for raw_line in proc.stdout:
+                if log_handle is not None:
+                    try:
+                        log_handle.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+                        log_handle.flush()
+                    except OSError:
+                        pass
                 stage, level, message = parse_line(raw_line)
-                emit(level, stage, message)
+                if level != "error" and _looks_like_traceback_line(message):
+                    level = "error"
+                emit(level, stage, _redact_paths(message))
         except Exception as exc:  # noqa: BLE001 - any decode/read error must not
             # silently kill this thread: with `errors="replace"` above a bad
             # byte no longer raises here, but this is the last line of
@@ -268,5 +331,7 @@ def run(
         stop_event.set()
         reader_thread.join(timeout=5)
         watcher_thread.join(timeout=poll_interval_s + 5)
+        if log_handle is not None:
+            log_handle.close()
 
     return exit_code if exit_code is not None else (proc.returncode or -1)

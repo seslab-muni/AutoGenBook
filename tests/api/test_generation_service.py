@@ -12,6 +12,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.application.runs import _DRAIN_MAX_CONSECUTIVE_FAILURES, GenerationService
+from api.core.errors import StorageError
 from api.core.settings import Settings
 from api.domain.models import (
     File,
@@ -202,6 +203,73 @@ async def test_execute_downloads_sources_into_kb_dir(
     assert finished.status == RunStatus.succeeded
     downloaded = tmp_path / "run" / "kb" / str(source.id) / "notes.md"
     assert downloaded.read_bytes() == content
+
+
+class _LeakyStorage(InMemoryFileStorage):
+    """A `FileStorage` fake whose `open()` fails the way a real MinIO/S3
+    connection failure would - a `botocore.exceptions.EndpointConnectionError`
+    (a `StorageError` here, matching `S3FileStorage.open`'s own mapping)
+    whose message embeds the object-store endpoint URL and key."""
+
+    async def open(self, key: str):
+        raise StorageError(
+            f'Could not connect to the endpoint URL: "http://minio:9000/autogenbook/{key}"'
+        )
+
+
+async def test_execute_sanitizes_a_leaky_storage_failure_in_run_error(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Regression for issue #82: a raw boto3/`StorageError` message (or an
+    `OSError` naming an absolute path) used to land verbatim in `run.error`
+    - exposing the object store's internal endpoint URL and bucket/key to
+    API clients - instead of a short, generic message."""
+    storage = _LeakyStorage()
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+
+        file = File(
+            id=uuid.uuid4(),
+            storage_key="uploads/notes.md",
+            filename="notes.md",
+            content_type="text/markdown",
+            size_bytes=10,
+            sha256="0" * 64,
+            kind=FileKind.upload,
+            kb_eligible=True,
+        )
+        await SqlAlchemyFileRepository(session).add(file)
+
+        source = Source(
+            id=uuid.uuid4(),
+            project_id=project.id,
+            file_id=file.id,
+            source_type=SourceType.md,
+            authors=None,
+            year=None,
+            doi=None,
+            url=None,
+            description=None,
+            chunks_count=None,
+            status=SourceStatus.ready,
+            created_at=datetime.now(timezone.utc),
+            deleted_at=None,
+        )
+        await SqlAlchemySourceRepository(session).add(source)
+
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+        service = _make_service(session, storage, _settings())
+
+        finished = await service.execute(run)
+
+    assert finished.status == RunStatus.failed
+    assert finished.error is not None
+    assert "minio" not in finished.error
+    assert "http://" not in finished.error
+    assert "uploads/notes.md" not in finished.error
 
 
 async def test_write_source_sync_streams_chunks_incrementally(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -8,6 +9,31 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 PROBLEM_JSON = "application/problem+json"
+
+# `RequestValidationError.errors()` echoes back the offending `input` value
+# verbatim, unbounded - a client that (accidentally or otherwise) posts a
+# multi-MB body with one invalid field gets that whole body echoed straight
+# back in the 422 response (issue #82). Capped to a small prefix, just
+# enough to help a caller spot what they sent wrong.
+_MAX_ECHOED_INPUT_LEN = 200
+
+
+def _cap_echoed_input(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > _MAX_ECHOED_INPUT_LEN:
+        return value[:_MAX_ECHOED_INPUT_LEN] + "...(truncated)"
+    encoded = jsonable_encoder(value)
+    if isinstance(encoded, (dict, list)) and len(json.dumps(encoded)) > _MAX_ECHOED_INPUT_LEN:
+        return "(input omitted: too large)"
+    return value
+
+
+def _cap_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    capped = []
+    for error in errors:
+        if "input" in error:
+            error = {**error, "input": _cap_echoed_input(error["input"])}
+        capped.append(error)
+    return capped
 
 
 class ApiError(Exception):
@@ -74,7 +100,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return _problem_response(
             422,
             "Validation Failed",
-            jsonable_encoder(exc.errors()),
+            jsonable_encoder(_cap_validation_errors(exc.errors())),
             request.url.path,
         )
 

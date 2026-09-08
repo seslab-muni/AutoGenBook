@@ -90,6 +90,27 @@ async def test_request_validation_error_returns_422_problem_json(
     assert isinstance(body["detail"], list)
 
 
+async def test_request_validation_error_caps_an_oversized_echoed_input(
+    error_client: AsyncClient,
+) -> None:
+    """Regression for issue #82: `RequestValidationError.errors()` echoes
+    the offending `input` value back verbatim and unbounded - a client
+    sending a field of the wrong type, padded with a large payload, used to
+    get that whole value reflected straight back in the 422 response."""
+    oversized_marker = "x" * 10_000
+    # `name` expects a `str` - a dict is rejected outright (no int/bool-like
+    # coercion), and its `input` is the whole padded dict verbatim.
+    response = await error_client.post(
+        "/items", json={"name": {"padding": oversized_marker}}
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    echoed_input = body["detail"][0]["input"]
+    assert echoed_input == "(input omitted: too large)"
+    assert oversized_marker not in response.text
+
+
 async def test_unhandled_exception_returns_500_problem_json_without_stack_trace(
     error_client: AsyncClient,
 ) -> None:

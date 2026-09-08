@@ -133,11 +133,11 @@ class ProjectService:
     async def duplicate(self, project_id: uuid.UUID) -> Project:
         source = await self.get(project_id)
         now = datetime.now(timezone.utc)
-        # `sources` don't exist yet (issue #5); once they do, this is where
-        # the duplicate should copy them by reference alongside the metadata
-        # below. Outline nodes are deep-copied by the router
-        # (`OutlineService.duplicate_from`, issue #6) right after this
-        # returns, since `ProjectService` only knows project metadata.
+        # Sources are copied by the router right after this returns
+        # (`duplicate_project`'s own loop over `SourceService.add`), and
+        # outline nodes by `OutlineService.duplicate_from` - both by
+        # reference/deep-copy, since `ProjectService` only knows project
+        # metadata.
         duplicate = Project(
             id=uuid.uuid4(),
             owner_id=source.owner_id,

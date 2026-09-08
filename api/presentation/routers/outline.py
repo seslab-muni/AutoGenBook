@@ -62,7 +62,7 @@ def tree_to_schema(tree: OutlineTree) -> OutlineNodeTree:
     )
 
 
-@router.get("", response_model=None)
+@router.get("", response_model=Page[OutlineNode] | Page[OutlineNodeTree])
 async def list_outline_nodes(
     project_id: uuid.UUID,
     format: str = Query(default="flat", pattern="^(flat|tree)$"),
@@ -88,7 +88,11 @@ async def replace_outline(
     tree = [entry.model_dump() for entry in body]
     nodes = await service.replace(project_id, tree)
     items = [to_schema(node) for node in nodes]
-    return Page[OutlineNode](items=items, total=len(items), limit=len(items), offset=0)
+    # This response returns the whole (just-replaced) outline in one shot,
+    # not a real page of it - `limit` echoing `len(items)` used to fall to 0
+    # for an empty outline even though `PageParams.limit`'s documented
+    # minimum everywhere else is 1 (issue #61).
+    return Page[OutlineNode](items=items, total=len(items), limit=max(len(items), 1), offset=0)
 
 
 @router.post("", response_model=OutlineNode, status_code=status.HTTP_201_CREATED)

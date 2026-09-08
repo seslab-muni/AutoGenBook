@@ -194,6 +194,68 @@ async def test_add_source_explicit_type_overrides_inference(client: AsyncClient)
     assert response.json()["type"] == "book"
 
 
+async def test_add_source_rejects_implausible_year(client: AsyncClient) -> None:
+    """Regression for issue #61: `year="banana"` (and other non-year
+    strings) used to be accepted with no validation at all."""
+    project = await _create_project(client)
+    file = await _upload_file(client, "paper.pdf")
+
+    not_a_year = await client.post(
+        f"/api/v1/projects/{project['id']}/sources",
+        json={"fileId": file["id"], "year": "banana"},
+    )
+    out_of_range = await client.post(
+        f"/api/v1/projects/{project['id']}/sources",
+        json={"fileId": file["id"], "year": "0099"},
+    )
+
+    assert not_a_year.status_code == 422
+    assert out_of_range.status_code == 422
+
+
+async def test_update_source_rejects_implausible_year(client: AsyncClient) -> None:
+    project = await _create_project(client)
+    file = await _upload_file(client, "paper.pdf")
+    source = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/sources/{source['id']}",
+        json={"year": "banana"},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_update_source_type_persists(client: AsyncClient) -> None:
+    """Regression for issue #61: `SourceUpdate` had no `type` field at all,
+    so a source's type could only ever be set at creation time."""
+    project = await _create_project(client)
+    file = await _upload_file(client, "notes.md")
+    source = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/sources", json={"fileId": file["id"]}
+        )
+    ).json()
+    assert source["type"] == "md"
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/sources/{source['id']}",
+        json={"type": "dataset"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["type"] == "dataset"
+
+    get_response = await client.get(
+        f"/api/v1/projects/{project['id']}/sources/{source['id']}"
+    )
+    assert get_response.json()["type"] == "dataset"
+
+
 async def test_add_source_unknown_project_returns_404(client: AsyncClient) -> None:
     file = await _upload_file(client, "notes.txt")
 

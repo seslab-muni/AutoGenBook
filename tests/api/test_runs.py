@@ -345,6 +345,26 @@ async def test_list_run_events_empty_for_freshly_created_run(client: AsyncClient
     assert body["total"] == 0
 
 
+async def test_list_run_events_reports_after_seq_not_a_row_offset(
+    client: AsyncClient,
+) -> None:
+    """Regression for issue #61: this endpoint pages by `seq`, not row
+    position, so the response used to (mis)reuse `Page`'s `offset` field to
+    carry `afterSeq` - it must have its own `afterSeq` field instead, with no
+    misleading `offset` key at all."""
+    project = await _create_project(client)
+    created = await _create_run(client, project["id"])
+
+    response = await client.get(
+        f"/api/v1/runs/{created['id']}/events", params={"afterSeq": 5}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["afterSeq"] == 5
+    assert "offset" not in body
+
+
 async def test_list_run_events_404_for_missing_run(client: AsyncClient) -> None:
     response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/events")
     assert response.status_code == 404
