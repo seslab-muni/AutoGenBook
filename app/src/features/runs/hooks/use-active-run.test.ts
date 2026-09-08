@@ -40,7 +40,7 @@ describe('useActiveRun', () => {
     }));
     await waitFor(() => expect(result.current.active.isLoading).toBe(false));
 
-    result.current.create.mutate(undefined);
+    result.current.create.mutate({});
     await waitFor(() => expect(result.current.create.isSuccess).toBe(true));
     const runId = result.current.create.data!.id;
 
@@ -55,7 +55,7 @@ describe('useActiveRun', () => {
     }));
     await waitFor(() => expect(result.current.active.isLoading).toBe(false));
 
-    result.current.create.mutate(undefined);
+    result.current.create.mutate({});
     await waitFor(() => expect(result.current.create.isSuccess).toBe(true));
     await waitFor(() => expect(result.current.active.activeRun).toBeDefined());
 
@@ -65,6 +65,7 @@ describe('useActiveRun', () => {
         seq: 1,
         ts: '2026-09-07T00:00:00Z',
         level: 'info',
+        stage: 'drafting',
         message: 'x',
         payload: { nodeId: 'n-1' },
       },

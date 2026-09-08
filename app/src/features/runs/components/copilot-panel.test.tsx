@@ -156,6 +156,7 @@ describe('CopilotPanel', () => {
         seq: 1,
         ts: '2026-09-07T00:00:00Z',
         level: 'info',
+        stage: 'drafting',
         message: 'Section regenerated.',
         payload: { nodeId: 'sec-1-2' },
       },
@@ -178,7 +179,13 @@ describe('CopilotPanel', () => {
       totalTokens: 4200,
       totalCostUsd: 0.08,
     });
-    onDone!({ seq: 2, ts: '2026-09-07T00:00:01Z', level: 'info', message: 'Run succeeded.' });
+    onDone!({
+      seq: 2,
+      ts: '2026-09-07T00:00:01Z',
+      level: 'info',
+      stage: 'assembly',
+      message: 'Run succeeded.',
+    });
 
     expect(await screen.findByText('Succeeded')).toBeInTheDocument();
     expect(await screen.findByText(/4,200 tokens/)).toBeInTheDocument();

@@ -17,6 +17,7 @@ import { SectionEditor } from '@/features/editor/components/section-editor';
 import { SectionJumpSelect } from '@/features/editor/components/section-jump-select';
 import { useDebouncedMutation } from '@/features/editor/hooks/use-debounced-mutation';
 import { countDisplayEquations } from '@/features/editor/lib/count-equations';
+import { parseRagCitations } from '@/features/editor/lib/rag-citation';
 import { isUnsavedStatus } from '@/features/editor/lib/save-status';
 import { wordCount } from '@/features/editor/lib/word-count';
 import { findSectionArtifact } from '@/features/exports/lib/artifacts';
@@ -192,7 +193,7 @@ export function ManuscriptSheet({
                   generate it.
                 </p>
               ) : (
-                <LazyMarkdownView markdown={draft} citations={node.ragCitations} />
+                <LazyMarkdownView markdown={draft} citations={parseRagCitations(node.ragCitations)} />
               )}
 
               <div className="mt-16 flex items-center justify-between border-t pt-6 font-sans text-xs text-muted-foreground">

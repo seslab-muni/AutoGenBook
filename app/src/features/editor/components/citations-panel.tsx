@@ -1,11 +1,11 @@
 import { FileText, Sparkles } from 'lucide-react';
 
-import type { RAGCitation } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Badge } from '@/components/ui/badge';
+import type { RagCitation } from '@/features/editor/lib/rag-citation';
 
 interface CitationsPanelProps {
-  citations: readonly RAGCitation[] | undefined;
+  citations: readonly RagCitation[] | undefined;
   /** Jumps to the source card for `sourceDoc` (#18's Sources pane) — omit to render non-interactive rows. */
   onOpenSource?: (sourceDoc: string) => void;
 }

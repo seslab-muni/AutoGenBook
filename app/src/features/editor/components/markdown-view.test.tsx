@@ -1,12 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RAGCitation } from '@/api/types';
-
 import sampleSection from '@/features/editor/__fixtures__/sample-section.md?raw';
+import type { RagCitation } from '@/features/editor/lib/rag-citation';
 import { MarkdownView } from './markdown-view';
 
-const CITATIONS: RAGCitation[] = [
+const CITATIONS: RagCitation[] = [
   {
     id: 'castro_liskov_1999',
     sourceDoc: 'Castro_Liskov_PBFT_TOCS.pdf',

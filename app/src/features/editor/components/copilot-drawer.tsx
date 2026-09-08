@@ -5,6 +5,7 @@ import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CitationsPanel } from '@/features/editor/components/citations-panel';
 import { ReviewPanel } from '@/features/editor/components/review-panel';
+import { parseRagCitations } from '@/features/editor/lib/rag-citation';
 import { CopilotPanel } from '@/features/runs/components/copilot-panel';
 
 export type CopilotTab = 'copilot' | 'citations' | 'review';
@@ -52,7 +53,7 @@ export function CopilotDrawer({
       <TabsContent value="citations" className="min-h-0 overflow-auto">
         {node ? (
           <CitationsPanel
-            citations={node.ragCitations}
+            citations={parseRagCitations(node.ragCitations)}
             {...(onOpenSource ? { onOpenSource } : {})}
           />
         ) : (

@@ -6,6 +6,7 @@ import { subscribeRunEvents } from '@/api/sse';
 import { db } from '@/mocks/db';
 import { MOCK_USER } from '@/mocks/fixtures';
 import { renderRouterApp } from '@/test/router-test-utils';
+import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
 // See `use-run-stream.test.ts` for why SSE is mocked wherever `useRunStream` mounts (this route
 // always mounts one, for whichever run is being viewed).
@@ -46,7 +47,7 @@ describe('run detail page', () => {
       projectId: PROJECT_ID,
       kind: 'full',
       status: 'succeeded',
-      options: {},
+      options: DEFAULT_RUN_OPTIONS,
       baseRunId: null,
       targetNodeId: null,
       exitCode: 0,
@@ -73,7 +74,7 @@ describe('run detail page', () => {
       projectId: PROJECT_ID,
       kind: 'full',
       status: 'running',
-      options: {},
+      options: DEFAULT_RUN_OPTIONS,
       baseRunId: null,
       targetNodeId: null,
       exitCode: null,
@@ -103,7 +104,7 @@ describe('run detail page', () => {
       projectId: PROJECT_ID,
       kind: 'regenerate_section',
       status: 'succeeded',
-      options: {},
+      options: DEFAULT_RUN_OPTIONS,
       baseRunId: RUN_ID,
       targetNodeId: 'sec-1-2',
       exitCode: 0,
@@ -127,7 +128,7 @@ describe('run detail page', () => {
       projectId: PROJECT_ID,
       kind: 'full',
       status: 'failed',
-      options: {},
+      options: DEFAULT_RUN_OPTIONS,
       baseRunId: null,
       targetNodeId: null,
       exitCode: 1,

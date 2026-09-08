@@ -62,7 +62,7 @@ function StudioPage() {
           projectId={projectId}
           nodeId={node ?? null}
           projectTitle={project.title}
-          lastRunId={project.lastRunId}
+          lastRunId={project.lastRunId ?? null}
           flatNodes={flatNodes}
           outlineOpen={outlineOpen}
           onSelectNode={handleSelectNode}

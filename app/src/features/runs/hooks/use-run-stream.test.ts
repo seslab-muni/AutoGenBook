@@ -5,6 +5,7 @@ import { subscribeRunEvents } from '@/api/sse';
 import type { RunEvent } from '@/api/types';
 import { db } from '@/mocks/db';
 import { renderWithQueryClient, waitFor } from '@/test/query-test-utils';
+import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
 import { useRunStream } from './use-run-stream';
 
@@ -31,7 +32,7 @@ function seedRun(runId: string, projectId: string, status: 'queued' | 'running' 
     projectId,
     kind: 'full',
     status,
-    options: {},
+    options: DEFAULT_RUN_OPTIONS,
     baseRunId: null,
     targetNodeId: null,
     exitCode: null,
@@ -46,7 +47,14 @@ function seedRun(runId: string, projectId: string, status: 'queued' | 'running' 
 }
 
 function makeEvent(seq: number, extra: Partial<RunEvent> = {}): RunEvent {
-  return { seq, ts: '2026-09-07T00:00:00Z', level: 'info', message: `event ${seq}`, ...extra };
+  return {
+    seq,
+    ts: '2026-09-07T00:00:00Z',
+    level: 'info',
+    message: `event ${seq}`,
+    ...extra,
+    stage: extra.stage ?? 'drafting',
+  };
 }
 
 describe('useRunStream', () => {

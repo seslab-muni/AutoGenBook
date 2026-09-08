@@ -48,7 +48,7 @@ describe('sources queries', () => {
       expect(result.current.list.data?.items.some((s) => s.name === 'extra-notes.md')).toBe(true),
     );
     await waitFor(() =>
-      expect(result.current.detail.data?.sources.some((s) => s.name === 'extra-notes.md')).toBe(
+      expect(result.current.detail.data?.sources?.some((s) => s.name === 'extra-notes.md')).toBe(
         true,
       ),
     );

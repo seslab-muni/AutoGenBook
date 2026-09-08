@@ -2,11 +2,11 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RAGCitation } from '@/api/types';
+import type { RagCitation } from '@/features/editor/lib/rag-citation';
 
 import { CitationsPanel } from './citations-panel';
 
-const CITATIONS: RAGCitation[] = [
+const CITATIONS: RagCitation[] = [
   {
     id: 'c-1',
     sourceDoc: 'Low_Relevance.pdf',

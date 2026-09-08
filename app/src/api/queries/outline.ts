@@ -55,8 +55,8 @@ export const outline = {
       queryKey: [...projectKeys.outlineList(projectId, 'flat'), params],
       queryFn: async () => {
         const page = await unwrap(
-          apiClient.GET('/api/v1/projects/{projectId}/outline', {
-            params: { path: { projectId }, query: { ...params, format: 'flat' } },
+          apiClient.GET('/api/v1/projects/{project_id}/outline', {
+            params: { path: { project_id: projectId }, query: { ...params, format: 'flat' } },
           }),
         );
         // The spec types this endpoint's response as a `PageOfOutlineNode | PageOfOutlineNodeTree`
@@ -71,8 +71,8 @@ export const outline = {
       queryKey: [...projectKeys.outlineList(projectId, 'tree'), params],
       queryFn: async () => {
         const page = await unwrap(
-          apiClient.GET('/api/v1/projects/{projectId}/outline', {
-            params: { path: { projectId }, query: { ...params, format: 'tree' } },
+          apiClient.GET('/api/v1/projects/{project_id}/outline', {
+            params: { path: { project_id: projectId }, query: { ...params, format: 'tree' } },
           }),
         );
         return page as Page<OutlineNodeTree>;
@@ -84,8 +84,8 @@ export const outline = {
       queryKey: projectKeys.outlineNode(projectId, nodeId),
       queryFn: () =>
         unwrap(
-          apiClient.GET('/api/v1/projects/{projectId}/outline/{nodeId}', {
-            params: { path: { projectId, nodeId } },
+          apiClient.GET('/api/v1/projects/{project_id}/outline/{node_id}', {
+            params: { path: { project_id: projectId, node_id: nodeId } },
           }),
         ),
     }),
@@ -97,8 +97,8 @@ export function useReplaceOutlineMutation(projectId: string) {
   return useMutation({
     mutationFn: (body: OutlineTreeReplace) =>
       unwrap(
-        apiClient.PUT('/api/v1/projects/{projectId}/outline', {
-          params: { path: { projectId } },
+        apiClient.PUT('/api/v1/projects/{project_id}/outline', {
+          params: { path: { project_id: projectId } },
           body,
         }),
       ),
@@ -120,8 +120,8 @@ export function useCreateOutlineNodeMutation(projectId: string) {
   return useMutation({
     mutationFn: (body: OutlineNodeCreate) =>
       unwrap(
-        apiClient.POST('/api/v1/projects/{projectId}/outline', {
-          params: { path: { projectId } },
+        apiClient.POST('/api/v1/projects/{project_id}/outline', {
+          params: { path: { project_id: projectId } },
           body,
         }),
       ),
@@ -132,8 +132,8 @@ export function useCreateOutlineNodeMutation(projectId: string) {
         const targetPages = body.targetPages ?? 1;
         const optimistic: OutlineNode = {
           id: `optimistic-${crypto.randomUUID()}`,
-          parentId: body.parentId,
-          orderIndex: body.orderIndex ?? nextOrderIndex(body.parentId, items),
+          parentId: body.parentId ?? null,
+          orderIndex: body.orderIndex ?? nextOrderIndex(body.parentId ?? null, items),
           cliKey: null,
           title: body.title,
           summary: body.summary ?? '',
@@ -181,8 +181,8 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
   return useMutation({
     mutationFn: (body: OutlineNodeUpdate) =>
       unwrap(
-        apiClient.PATCH('/api/v1/projects/{projectId}/outline/{nodeId}', {
-          params: { path: { projectId, nodeId } },
+        apiClient.PATCH('/api/v1/projects/{project_id}/outline/{node_id}', {
+          params: { path: { project_id: projectId, node_id: nodeId } },
           body,
         }),
       ),
@@ -193,13 +193,24 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
         const current = items.find((item) => item.id === nodeId);
         if (!current) return items;
 
+        const contentMarkdown = body.contentMarkdown ?? current.contentMarkdown;
         const merged: OutlineNode = {
           ...current,
           ...body,
+          parentId: body.parentId ?? current.parentId,
+          orderIndex: body.orderIndex ?? current.orderIndex,
+          title: body.title ?? current.title,
+          summary: body.summary ?? current.summary,
+          status: body.status ?? current.status,
+          targetPages: body.targetPages ?? current.targetPages,
+          wordBudget: body.wordBudget ?? current.wordBudget,
+          equationDensityLevel: body.equationDensityLevel ?? current.equationDensityLevel,
+          mathLevel: body.mathLevel ?? current.mathLevel,
+          contentMarkdown,
+          contentLatex: body.contentLatex ?? current.contentLatex,
+          structureLocked: body.structureLocked ?? current.structureLocked,
           actualWords:
-            body.contentMarkdown !== undefined
-              ? wordCount(body.contentMarkdown)
-              : current.actualWords,
+            body.contentMarkdown !== undefined ? wordCount(contentMarkdown) : current.actualWords,
           updatedAt: new Date().toISOString(),
         };
 
@@ -214,7 +225,7 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
           .sort((a, b) => a.orderIndex - b.orderIndex);
         const insertAt =
           body.orderIndex !== undefined
-            ? Math.max(0, Math.min(body.orderIndex, newSiblings.length))
+            ? Math.max(0, Math.min(body.orderIndex ?? merged.orderIndex, newSiblings.length))
             : newSiblings.length;
         newSiblings.splice(insertAt, 0, merged);
         const renumbered = new Map(newSiblings.map((item, index) => [item.id, index]));
@@ -248,8 +259,8 @@ export function useDeleteOutlineNodeMutation(projectId: string) {
   return useMutation({
     mutationFn: (nodeId: string) =>
       unwrap(
-        apiClient.DELETE('/api/v1/projects/{projectId}/outline/{nodeId}', {
-          params: { path: { projectId, nodeId } },
+        apiClient.DELETE('/api/v1/projects/{project_id}/outline/{node_id}', {
+          params: { path: { project_id: projectId, node_id: nodeId } },
         }),
       ),
     onMutate: async (nodeId) => {
@@ -277,8 +288,8 @@ export function useRegenerateOutlineNodeMutation(projectId: string, nodeId: stri
   return useMutation({
     mutationFn: (promptModifier?: string) =>
       unwrap(
-        apiClient.POST('/api/v1/projects/{projectId}/outline/{nodeId}/regenerate', {
-          params: { path: { projectId, nodeId } },
+        apiClient.POST('/api/v1/projects/{project_id}/outline/{node_id}/regenerate', {
+          params: { path: { project_id: projectId, node_id: nodeId } },
           body: promptModifier !== undefined ? { promptModifier } : {},
         }),
       ),

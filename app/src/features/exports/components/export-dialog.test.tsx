@@ -6,6 +6,7 @@ import { subscribeRunEvents } from '@/api/sse';
 import { db } from '@/mocks/db';
 import { useUiStore } from '@/stores/ui-store';
 import { renderRouterApp } from '@/test/router-test-utils';
+import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
 // Every route in this suite mounts `ExportDialog`, which (via `RunCostSummary`'s sibling
 // `useRunStream` call) opens an SSE subscription for any in-flight export run — mocked per the
@@ -121,7 +122,7 @@ describe('ExportDialog', () => {
       projectId: PROJECT_ID,
       kind: 'full',
       status: 'running',
-      options: {},
+      options: DEFAULT_RUN_OPTIONS,
       baseRunId: null,
       targetNodeId: null,
       exitCode: null,

@@ -30,7 +30,7 @@ describe('runs queries', () => {
     }));
     await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
 
-    result.current.create.mutate(undefined);
+    result.current.create.mutate({});
     await waitFor(() => expect(result.current.create.isSuccess).toBe(true));
 
     expect(result.current.create.data?.kind).toBe('full');
@@ -41,13 +41,13 @@ describe('runs queries', () => {
     );
 
     // A second run while the first is still queued/running must be rejected.
-    result.current.create.mutate(undefined);
+    result.current.create.mutate({});
     await waitFor(() => expect(result.current.create.isError).toBe(true));
   });
 
   it('cancelling a run updates its own cache entry', async () => {
     const { result: createResult } = renderWithQueryClient(() => useCreateRunMutation(PROJECT_ID));
-    createResult.current.mutate(undefined);
+    createResult.current.mutate({});
     await waitFor(() => expect(createResult.current.isSuccess).toBe(true));
     const runId = createResult.current.data!.id;
 

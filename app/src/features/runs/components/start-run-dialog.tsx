@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { ApiError } from '@/api/client';
 import { outline } from '@/api/queries/outline';
 import { useCreateRunMutation } from '@/api/queries/runs';
-import type { AuditMode, OutputFormat, Project, RunOptions } from '@/api/types';
+import type { AuditMode, OutputFormat, Project, RunOptionsIn } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -40,10 +40,10 @@ interface StartRunDialogProps {
 }
 
 /**
- * Form over `RunOptions` (`docs/openapi.yaml`'s `POST /projects/{id}/runs`
+ * Form over `RunOptionsIn` (`docs/openapi.yaml`'s `POST /projects/{id}/runs`
  * body) — opened from `AppHeader`'s Run action and the outline pane's
  * empty state. `outline` only ever sends `"project"`: the generated schema
- * (`src/api/schema.gen.ts`'s `RunOptions.outline`) has no other member yet,
+ * (`src/api/schema.gen.ts`'s `RunOptionsIn.outline`) has no other member yet,
  * so a planner-authored outline source (mentioned in issue #21) isn't a
  * real option until the API adds one — shown here as a fixed, disabled
  * choice rather than invented.
@@ -78,7 +78,12 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
   }
 
   function handleSubmit() {
-    const body: RunOptions = { outline: 'project', outputFormat, allowSubdivision, auditBookMode };
+    const body: RunOptionsIn = {
+      outline: 'project',
+      outputFormat,
+      allowSubdivision,
+      auditBookMode,
+    };
     createMutation.mutate(body, {
       onSuccess: (run) => {
         toast.success('Run queued');

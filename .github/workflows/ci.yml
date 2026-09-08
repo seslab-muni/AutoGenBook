@@ -68,3 +68,38 @@ jobs:
         run: |
           python scripts/export_openapi.py --out /tmp/openapi.yaml
           diff -u docs/openapi.yaml /tmp/openapi.yaml
+
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (eslint + tsc --noEmit)
+        run: pnpm lint
+
+      - name: Run test suite (vitest)
+        run: pnpm test:ci
+
+      # `pnpm lint`'s `tsc --noEmit` runs outside project-reference/build mode (the root
+      # tsconfig.json's `files: []` isn't invoked the way `tsc -b` is) and has been shown to miss
+      # real type errors `pnpm build`'s `tsc -b` catches (issue #98) - kept as its own step rather
+      # than assumed covered by lint.
+      - name: Build (tsc -b + vite build)
+        run: pnpm build

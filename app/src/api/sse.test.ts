@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents, type EventSourceLike } from './sse';
-import type { Page, Run, RunEvent } from './types';
+import type { Run, RunEvent, RunEventPage } from './types';
 
 class FakeEventSource implements EventSourceLike {
   static instances: FakeEventSource[] = [];
@@ -38,7 +38,7 @@ class FakeEventSource implements EventSourceLike {
 }
 
 function makeEvent(seq: number, message = 'log'): RunEvent {
-  return { seq, ts: '2026-09-07T00:00:00Z', level: 'info', message };
+  return { seq, ts: '2026-09-07T00:00:00Z', level: 'info', stage: 'drafting', message };
 }
 
 beforeEach(() => {
@@ -94,8 +94,8 @@ describe('subscribeRunEvents', () => {
   it('falls back to polling after two consecutive errors', async () => {
     const onEvent = vi.fn();
     const fetchEventsPage = vi.fn<
-      (runId: string, afterSeq: number | undefined) => Promise<Page<RunEvent>>
-    >(() => Promise.resolve({ items: [makeEvent(9)], total: 1, limit: 50, offset: 0 }));
+      (runId: string, afterSeq: number | undefined) => Promise<RunEventPage>
+    >(() => Promise.resolve({ items: [makeEvent(9)], total: 1, limit: 50, afterSeq: 9 }));
     const fetchRun = vi.fn<(runId: string) => Promise<Run>>(() =>
       Promise.resolve({ status: 'running' } as Run),
     );
@@ -120,8 +120,8 @@ describe('subscribeRunEvents', () => {
   it('stops polling and calls onDone once the polled run reaches a terminal state', async () => {
     const onDone = vi.fn();
     const fetchEventsPage = vi.fn<
-      (runId: string, afterSeq: number | undefined) => Promise<Page<RunEvent>>
-    >(() => Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 }));
+      (runId: string, afterSeq: number | undefined) => Promise<RunEventPage>
+    >(() => Promise.resolve({ items: [], total: 0, limit: 50, afterSeq: 0 }));
     const fetchRun = vi.fn<(runId: string) => Promise<Run>>(() =>
       Promise.resolve({
         status: 'succeeded',

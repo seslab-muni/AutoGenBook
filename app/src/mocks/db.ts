@@ -103,7 +103,7 @@ class MockDatabase {
       totalPagesBudget: row.totalPagesBudget,
       sourcesCount: this.sourcesForProject(id).length,
       outlineNodeCount: this.outlineFlatForProject(id).length,
-      lastRunId: row.lastRunId,
+      lastRunId: row.lastRunId ?? null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

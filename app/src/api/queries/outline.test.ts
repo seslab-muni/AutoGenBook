@@ -26,7 +26,7 @@ describe('outline queries', () => {
       expect(result.current.flat.isSuccess && result.current.tree.isSuccess).toBe(true),
     );
     expect(result.current.flat.data?.total).toBe(result.current.tree.data?.total);
-    expect(result.current.tree.data?.items[0]?.children.length).toBeGreaterThan(0);
+    expect(result.current.tree.data?.items[0]?.children?.length).toBeGreaterThan(0);
     expect(result.current.flat.data?.items.every((node) => !('children' in node))).toBe(true);
   });
 

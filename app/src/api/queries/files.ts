@@ -16,7 +16,7 @@ export const files = {
     queryOptions({
       queryKey: fileKeys.detail(fileId),
       queryFn: () =>
-        unwrap(apiClient.GET('/api/v1/files/{fileId}', { params: { path: { fileId } } })),
+        unwrap(apiClient.GET('/api/v1/files/{file_id}', { params: { path: { file_id: fileId } } })),
     }),
 };
 
@@ -37,7 +37,9 @@ export function useDeleteFileMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (fileId: string) =>
-      unwrap(apiClient.DELETE('/api/v1/files/{fileId}', { params: { path: { fileId } } })),
+      unwrap(
+        apiClient.DELETE('/api/v1/files/{file_id}', { params: { path: { file_id: fileId } } }),
+      ),
     onSuccess: (_data, fileId) => {
       queryClient.removeQueries({ queryKey: fileKeys.detail(fileId) });
       void queryClient.invalidateQueries({ queryKey: fileKeys.all });
