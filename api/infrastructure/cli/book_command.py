@@ -156,12 +156,19 @@ def build_command(
     if options.fail_fast_schema:
         argv.append("--fail-fast-schema")
 
-    # `options.allow_subdivision` and `options.export_tex_only` have no CLI
-    # equivalent today: book mode always subdivides oversized outline nodes
-    # (`book_pipeline.py` calls `subdivide_graph` unconditionally), and
-    # export-tex-only re-runs are issue #11. Both fields are modeled on
-    # `RunOptions` for forward compatibility only and are intentionally
-    # no-ops here.
+    # `options.export_tex_only` has no CLI equivalent: an export-tex-only
+    # re-run (issue #11) gets its effect entirely from `resume=True` plus
+    # `GenerationService` not deleting any `sections/<key>.md` before
+    # invoking the CLI, so it's a no-op *here*.
+    #
+    # `options.allow_subdivision` likewise has no flag in this argv, but it
+    # is NOT a no-op overall: `GenerationService._prepare_work_dir` reads it
+    # before the CLI ever runs, to decide `lock_nodes` when writing
+    # `structure_graph.json` (`lock_nodes=not options.allow_subdivision`) -
+    # book mode always calls `subdivide_graph` unconditionally
+    # (`book_pipeline.py`), but a locked node is skipped by it. So this
+    # field's effect is already baked into the graph this command's `-j`
+    # flag points at by the time `build_command` runs.
 
     env: dict[str, str] = {}
     for key in ENV_ALLOWLIST:

@@ -43,7 +43,7 @@ async def test_create_run_applies_defaults_from_project(client: AsyncClient) -> 
     assert body["status"] == "queued"
     assert body["options"]["outline"] == "project"
     assert body["options"]["outputFormat"] == "latex"
-    assert body["options"]["allowSubdivision"] is False
+    assert body["options"]["allowSubdivision"] is True
     assert body["options"]["auditBookMode"] == "warn"
     assert body["exitCode"] is None
     assert body["totalTokens"] is None
