@@ -43,7 +43,7 @@ Configuration for `api`/`worker` (`api/core/settings.py:Settings`) comes entirel
 
 ### ⚠️ No authentication - do not expose beyond localhost
 
-`/api/v1` has no authentication and no CORS middleware (`api/main.py`'s module docstring); `ProjectRepository.list`/`.get` have no owner filter, so any client that can reach the API can read/write every project, upload arbitrary files up to `MAX_UPLOAD_MB` with no per-client quota, and start CLI runs that spend `OPENROUTER_API_KEY` budget (issue #50). This is a deliberate, tracked gap (auth is a stub pending its own design, issue #16), not a bug to work around.
+`/api/v1` has no authentication and no CORS middleware (`api/main.py`'s module docstring); `ProjectRepository.list_with_counts`/`.get` have no owner filter, so any client that can reach the API can read/write every project, upload arbitrary files up to `MAX_UPLOAD_MB` with no per-client quota, and start CLI runs that spend `OPENROUTER_API_KEY` budget (issue #50). This is a deliberate, tracked gap (auth is a stub pending its own design, issue #16), not a bug to work around.
 
 Until real auth exists:
 

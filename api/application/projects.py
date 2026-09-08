@@ -60,7 +60,7 @@ class ProjectService:
         return project
 
     async def list(self, *, limit: int, offset: int) -> tuple[list[ProjectSummary], int]:
-        projects, total = await self._repository.list(limit=limit, offset=offset)
+        rows, total = await self._repository.list_with_counts(limit=limit, offset=offset)
         summaries = [
             ProjectSummary(
                 id=project.id,
@@ -70,13 +70,13 @@ class ProjectService:
                 topic=project.topic,
                 target_audience=project.target_audience,
                 total_pages_budget=project.total_pages_budget,
-                sources_count=await self._repository.sources_count(project.id),
-                outline_node_count=await self._repository.outline_node_count(project.id),
+                sources_count=sources_count,
+                outline_node_count=outline_node_count,
                 last_run_id=project.last_run_id,
                 created_at=project.created_at,
                 updated_at=project.updated_at,
             )
-            for project in projects
+            for project, sources_count, outline_node_count in rows
         ]
         return summaries, total
 

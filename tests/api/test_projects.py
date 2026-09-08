@@ -4,9 +4,12 @@ import dataclasses
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.infrastructure.db.models import ProjectRecord
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 
 MINIMAL_PAYLOAD = {
@@ -274,6 +277,60 @@ async def test_duplicate_project_404(client: AsyncClient) -> None:
 
     assert response.status_code == 404
     assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_list_projects_query_count_stays_flat_as_projects_grow(
+    client: AsyncClient, count_statements
+) -> None:
+    """Regression for issue #51: `ProjectService.list` used to run two
+    `count(*)` queries per project (`sources_count`, `outline_node_count`)
+    on top of the page's own query, so `GET /projects` cost grew linearly
+    with the number of projects returned. `list_with_counts` folds both
+    counts into the page query via a grouped-count subquery join instead,
+    so the statement count for one page must stay flat regardless of how
+    many projects are on it."""
+    await _create_project(client, title="First")
+
+    with count_statements() as statements:
+        response = await client.get("/api/v1/projects")
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    first_page_statement_count = len(statements)
+
+    for i in range(9):
+        await _create_project(client, title=f"Project {i}")
+
+    with count_statements() as statements:
+        response = await client.get("/api/v1/projects")
+    assert response.status_code == 200
+    assert response.json()["total"] == 10
+    assert len(statements) == first_page_statement_count
+
+
+async def test_get_project_record_does_not_eagerly_load_sources_relationship(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    count_statements,
+) -> None:
+    """Regression for issue #51: `ProjectRecord.sources` was `lazy="selectin"`,
+    so every `session.get(ProjectRecord, ...)` - which `_require_project` in
+    the sources/outline/runs services calls on every request - issued an
+    extra `SELECT ... FROM project_sources` to eagerly load a relationship
+    nothing reads as an ORM attribute. `lazy="raise"` means a plain `get`
+    costs exactly one statement, and any accidental future access raises
+    loudly instead of silently costing a query."""
+    created = await _create_project(client)
+    project_id = uuid.UUID(created["id"])
+
+    async with session_factory() as session:
+        with count_statements() as statements:
+            record = await session.get(ProjectRecord, project_id)
+        assert record is not None
+        assert len(statements) == 1
+        assert all("project_sources" not in statement for statement in statements)
+
+        with pytest.raises(InvalidRequestError):
+            _ = record.sources
 
 
 async def test_create_project_rejects_total_pages_budget_out_of_bounds(

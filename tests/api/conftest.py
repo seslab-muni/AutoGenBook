@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -83,3 +84,29 @@ async def client(app) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+def count_statements(session_factory: async_sessionmaker[AsyncSession]):
+    """Returns a context manager that counts every SQL statement actually
+    sent to the database while it's open, by hooking `before_cursor_execute`
+    on the engine `session_factory` is bound to - used by N+1 regression
+    tests (issue #51) to assert a query count stays flat as the number of
+    rows involved grows, rather than only asserting the *result* is
+    correct."""
+    engine = session_factory.kw["bind"].sync_engine
+
+    @contextmanager
+    def _count_statements() -> Iterator[list[str]]:
+        statements: list[str] = []
+
+        def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _before_cursor_execute)
+        try:
+            yield statements
+        finally:
+            event.remove(engine, "before_cursor_execute", _before_cursor_execute)
+
+    return _count_statements
