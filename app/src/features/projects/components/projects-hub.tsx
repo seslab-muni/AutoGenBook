@@ -32,6 +32,47 @@ export function ProjectsHub() {
   const items = data?.items ?? [];
   const filtered = items.filter((project) => matchesSearch(project, search));
 
+  let hubBody: React.ReactNode;
+  if (isPending) {
+    hubBody = (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {['a', 'b', 'c'].map((key) => (
+          <Skeleton key={key} className="h-36 w-full rounded-xl" />
+        ))}
+      </div>
+    );
+  } else if (filtered.length === 0 && items.length === 0) {
+    hubBody = (
+      <EmptyState
+        icon={BookOpen}
+        title="No projects yet"
+        description="Create your first AutoGenBook project to get started."
+        action={
+          <Button size="sm" onClick={() => openModal('new-project')}>
+            <Plus />
+            New project
+          </Button>
+        }
+      />
+    );
+  } else if (filtered.length === 0) {
+    hubBody = (
+      <EmptyState
+        icon={Search}
+        title="No matching projects"
+        description={`Nothing matches "${search}".`}
+      />
+    );
+  } else {
+    hubBody = (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {filtered.map((project) => (
+          <ProjectCard key={project.id} project={project} />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b bg-background px-4 sm:px-6">
@@ -67,39 +108,7 @@ export function ProjectsHub() {
           </p>
         </div>
 
-        {isPending ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {['a', 'b', 'c'].map((key) => (
-              <Skeleton key={key} className="h-36 w-full rounded-xl" />
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          items.length === 0 ? (
-            <EmptyState
-              icon={BookOpen}
-              title="No projects yet"
-              description="Create your first AutoGenBook project to get started."
-              action={
-                <Button size="sm" onClick={() => openModal('new-project')}>
-                  <Plus />
-                  New project
-                </Button>
-              }
-            />
-          ) : (
-            <EmptyState
-              icon={Search}
-              title="No matching projects"
-              description={`Nothing matches "${search}".`}
-            />
-          )
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((project) => (
-              <ProjectCard key={project.id} project={project} />
-            ))}
-          </div>
-        )}
+        {hubBody}
       </main>
     </div>
   );
