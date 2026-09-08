@@ -79,7 +79,10 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
 
   const allSources = data?.items ?? [];
   const availableTypes = useMemo(
-    () => [...new Set((data?.items ?? []).map((source) => source.type))].sort(),
+    () =>
+      [...new Set((data?.items ?? []).map((source) => source.type))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
     [data],
   );
 
@@ -119,6 +122,79 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
         setDetachingSource(null);
       },
     });
+  }
+
+  let sourcesBody: React.ReactNode;
+  if (isPending) {
+    sourcesBody = (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {['a', 'b', 'c'].map((key) => (
+          <Skeleton key={key} className="h-28 w-full rounded-xl" />
+        ))}
+      </div>
+    );
+  } else if (filtered.length === 0) {
+    sourcesBody = (
+      <EmptyState
+        icon={Database}
+        title={allSources.length === 0 ? 'No sources yet' : 'No matching sources'}
+        description={
+          allSources.length === 0
+            ? "Upload PDFs, DOCX, PPTX, Markdown, or text files above to build this project's knowledge base."
+            : `Nothing matches "${search}".`
+        }
+      />
+    );
+  } else if (viewMode === 'grid') {
+    sourcesBody = (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {filtered.map((source) => (
+          <SourceCard
+            key={source.id}
+            source={source}
+            citationCount={citationCounts[source.name] ?? 0}
+            onEdit={() => setEditingSource(source)}
+            onDetach={() => setDetachingSource(source)}
+          />
+        ))}
+      </div>
+    );
+  } else {
+    sourcesBody = (
+      <table className="w-full table-fixed text-left">
+        <colgroup>
+          <col className="w-auto" />
+          <col className="w-24" />
+          <col className="w-20" />
+          <col className="w-24" />
+          <col className="w-36" />
+          <col className="w-16" />
+          <col className="w-12" />
+        </colgroup>
+        <thead className="text-[11px] font-semibold text-muted-foreground">
+          <tr className="border-b">
+            <th className="py-1.5 pl-3 font-semibold">Source</th>
+            <th className="py-1.5 font-semibold">Type</th>
+            <th className="py-1.5 font-semibold">Size</th>
+            <th className="py-1.5 font-semibold">Uploaded</th>
+            <th className="py-1.5 font-semibold">Status</th>
+            <th className="py-1.5 font-semibold">Cites</th>
+            <th className="py-1.5 pr-3 text-right font-semibold">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filtered.map((source) => (
+            <SourceRow
+              key={source.id}
+              source={source}
+              citationCount={citationCounts[source.name] ?? 0}
+              onEdit={() => setEditingSource(source)}
+              onDetach={() => setDetachingSource(source)}
+            />
+          ))}
+        </tbody>
+      </table>
+    );
   }
 
   return (
@@ -205,71 +281,7 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
-            {isPending ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {['a', 'b', 'c'].map((key) => (
-                  <Skeleton key={key} className="h-28 w-full rounded-xl" />
-                ))}
-              </div>
-            ) : filtered.length === 0 ? (
-              <EmptyState
-                icon={Database}
-                title={allSources.length === 0 ? 'No sources yet' : 'No matching sources'}
-                description={
-                  allSources.length === 0
-                    ? "Upload PDFs, DOCX, PPTX, Markdown, or text files above to build this project's knowledge base."
-                    : `Nothing matches "${search}".`
-                }
-              />
-            ) : viewMode === 'grid' ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {filtered.map((source) => (
-                  <SourceCard
-                    key={source.id}
-                    source={source}
-                    citationCount={citationCounts[source.name] ?? 0}
-                    onEdit={() => setEditingSource(source)}
-                    onDetach={() => setDetachingSource(source)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <table className="w-full table-fixed text-left">
-                <colgroup>
-                  <col className="w-auto" />
-                  <col className="w-24" />
-                  <col className="w-20" />
-                  <col className="w-24" />
-                  <col className="w-36" />
-                  <col className="w-16" />
-                  <col className="w-12" />
-                </colgroup>
-                <thead className="text-[11px] font-semibold text-muted-foreground">
-                  <tr className="border-b">
-                    <th className="py-1.5 pl-3 font-semibold">Source</th>
-                    <th className="py-1.5 font-semibold">Type</th>
-                    <th className="py-1.5 font-semibold">Size</th>
-                    <th className="py-1.5 font-semibold">Uploaded</th>
-                    <th className="py-1.5 font-semibold">Status</th>
-                    <th className="py-1.5 font-semibold">Cites</th>
-                    <th className="py-1.5 pr-3 text-right font-semibold">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((source) => (
-                    <SourceRow
-                      key={source.id}
-                      source={source}
-                      citationCount={citationCounts[source.name] ?? 0}
-                      onEdit={() => setEditingSource(source)}
-                      onDetach={() => setDetachingSource(source)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          <div className="flex-1 overflow-y-auto">{sourcesBody}</div>
         </DialogContent>
       </Dialog>
 

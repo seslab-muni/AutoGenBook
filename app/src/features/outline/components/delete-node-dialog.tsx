@@ -13,6 +13,7 @@ interface DeleteNodeDialogProps {
 export function DeleteNodeDialog({ node, flat, onOpenChange, onConfirm }: DeleteNodeDialogProps) {
   const descendantCount = node ? descendantIds(node.id, flat).size : 0;
   const kind = node && node.level <= 1 ? 'chapter' : 'section';
+  const sectionPlural = descendantCount === 1 ? '' : 's';
 
   return (
     <ConfirmDialog
@@ -21,7 +22,7 @@ export function DeleteNodeDialog({ node, flat, onOpenChange, onConfirm }: Delete
       title={node ? `Delete "${node.title}"?` : 'Delete section?'}
       description={
         descendantCount > 0
-          ? `This ${kind} includes ${descendantCount} nested section${descendantCount === 1 ? '' : 's'}. Deleting it removes the entire branch, including all drafted content. This cannot be undone.`
+          ? `This ${kind} includes ${descendantCount} nested section${sectionPlural}. Deleting it removes the entire branch, including all drafted content. This cannot be undone.`
           : `All drafted content for this ${kind} will be permanently deleted. This cannot be undone.`
       }
       confirmLabel="Delete"

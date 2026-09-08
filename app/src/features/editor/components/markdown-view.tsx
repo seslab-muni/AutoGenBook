@@ -42,6 +42,183 @@ function withoutNode<P extends ExtraProps>(props: P): Omit<P, 'node'> {
   return rest;
 }
 
+/**
+ * `remarkCitations` annotates `[@key]`/`\cite{key}` spans with a `citekey`
+ * hast property that isn't part of the DOM `span` type, hence the extra
+ * field here alongside the render-time data (`citationsById`/`onCitationClick`)
+ * that `MarkdownView` injects via `buildMarkdownComponents`.
+ */
+type CitationSpanProps = React.ComponentProps<'span'> &
+  ExtraProps & {
+    citekey?: string;
+    citationsById: Map<string, RagCitation>;
+    onCitationClick?: (citeKey: string) => void;
+  };
+
+function CitationSpan({ citationsById, onCitationClick, ...spanProps }: CitationSpanProps) {
+  const { citekey, children, ...rest } = withoutNode(spanProps);
+  if (typeof citekey !== 'string') return <span {...rest}>{children}</span>;
+  return (
+    <CitationChip citeKey={citekey} citation={citationsById.get(citekey)} onClick={onCitationClick} />
+  );
+}
+
+const Blockquote: Components['blockquote'] = (props) => {
+  const { calloutkind, calloutlabel, children, ...rest } = withoutNode(props) as ReturnType<
+    typeof withoutNode<typeof props>
+  > & { calloutkind?: string; calloutlabel?: string };
+  if (typeof calloutkind !== 'string') {
+    return (
+      <blockquote
+        {...rest}
+        className="my-3 border-l-2 border-muted-foreground/30 pl-4 text-sm text-muted-foreground italic"
+      >
+        {children}
+      </blockquote>
+    );
+  }
+  return <Callout label={calloutlabel ?? calloutkind}>{children}</Callout>;
+};
+
+const H1: Components['h1'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return (
+    <h1 className={cn('mt-6 mb-3 font-serif text-2xl font-bold tracking-tight', c)} {...rest} />
+  );
+};
+
+const H2: Components['h2'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return (
+    <h2 className={cn('mt-5 mb-2 font-serif text-xl font-semibold tracking-tight', c)} {...rest} />
+  );
+};
+
+const H3: Components['h3'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return <h3 className={cn('mt-4 mb-2 font-serif text-lg font-medium', c)} {...rest} />;
+};
+
+const P: Components['p'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return <p className={cn('my-2.5 leading-relaxed', c)} {...rest} />;
+};
+
+const Ul: Components['ul'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return <ul className={cn('my-2 ml-5 list-disc space-y-1', c)} {...rest} />;
+};
+
+const Ol: Components['ol'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return <ol className={cn('my-2 ml-5 list-decimal space-y-1', c)} {...rest} />;
+};
+
+const A: Components['a'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return <a className={cn('text-primary underline underline-offset-2', c)} {...rest} />;
+};
+
+const Hr: Components['hr'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return <hr className={cn('my-6 border-border', c)} {...rest} />;
+};
+
+const Table: Components['table'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return (
+    <div className="my-3 overflow-x-auto rounded-md border">
+      <table className={cn('w-full border-collapse text-sm', c)} {...rest} />
+    </div>
+  );
+};
+
+const Th: Components['th'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return (
+    <th className={cn('border-b bg-muted/50 px-3 py-1.5 text-left font-semibold', c)} {...rest} />
+  );
+};
+
+const Td: Components['td'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return <td className={cn('border-b px-3 py-1.5 align-top', c)} {...rest} />;
+};
+
+const Pre: Components['pre'] = (props) => {
+  const { className: c, ...rest } = withoutNode(props);
+  return (
+    <pre
+      className={cn(
+        'my-3 overflow-x-auto rounded-lg border bg-muted p-3 font-mono text-xs leading-relaxed',
+        c,
+      )}
+      {...rest}
+    />
+  );
+};
+
+const Code: Components['code'] = (props) => {
+  const { className: c, children, ...rest } = withoutNode(props);
+  const isBlock = typeof c === 'string' && c.startsWith('language-');
+  if (isBlock) {
+    return (
+      <code className={cn('font-mono text-xs', c)} {...rest}>
+        {children}
+      </code>
+    );
+  }
+  return (
+    <code className={cn('rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]', c)} {...rest}>
+      {children}
+    </code>
+  );
+};
+
+const Img: Components['img'] = (props) => {
+  const { src, alt, className: c, ...rest } = withoutNode(props);
+  return (
+    <img
+      src={typeof src === 'string' ? resolveImageSrc(src) : src}
+      alt={alt ?? ''}
+      className={cn('my-3 max-w-full rounded-md border', c)}
+      {...rest}
+    />
+  );
+};
+
+/**
+ * Builds the `react-markdown` component override map. Kept at module scope
+ * (rather than inline in `MarkdownView`) so the overrides are stable
+ * component identities across renders; only `span` needs render-time data
+ * (`citationsById`/`onCitationClick`), injected here via a thin wrapper.
+ */
+function buildMarkdownComponents(
+  citationsById: Map<string, RagCitation>,
+  onCitationClick: ((citeKey: string) => void) | undefined,
+): Components {
+  return {
+    span: (props) => (
+      <CitationSpan {...props} citationsById={citationsById} onCitationClick={onCitationClick} />
+    ),
+    blockquote: Blockquote,
+    h1: H1,
+    h2: H2,
+    h3: H3,
+    p: P,
+    ul: Ul,
+    ol: Ol,
+    a: A,
+    hr: Hr,
+    table: Table,
+    th: Th,
+    td: Td,
+    pre: Pre,
+    code: Code,
+    img: Img,
+  };
+}
+
 interface MarkdownViewProps {
   /** Pandoc-style Markdown, as written by the CLI's Markdown-first path (`book_builder.py`). */
   markdown: string;
@@ -72,139 +249,7 @@ export function MarkdownView({
   }, [citations]);
 
   const components = useMemo<Components>(
-    () => ({
-      span(props) {
-        const { citekey, children, ...rest } = withoutNode(props) as ReturnType<
-          typeof withoutNode<typeof props>
-        > & { citekey?: string };
-        if (typeof citekey !== 'string') return <span {...rest}>{children}</span>;
-        return (
-          <CitationChip
-            citeKey={citekey}
-            citation={citationsById.get(citekey)}
-            onClick={onCitationClick}
-          />
-        );
-      },
-      blockquote(props) {
-        const { calloutkind, calloutlabel, children, ...rest } = withoutNode(props) as ReturnType<
-          typeof withoutNode<typeof props>
-        > & { calloutkind?: string; calloutlabel?: string };
-        if (typeof calloutkind !== 'string') {
-          return (
-            <blockquote
-              {...rest}
-              className="my-3 border-l-2 border-muted-foreground/30 pl-4 text-sm text-muted-foreground italic"
-            >
-              {children}
-            </blockquote>
-          );
-        }
-        return <Callout label={calloutlabel ?? calloutkind}>{children}</Callout>;
-      },
-      h1(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return (
-          <h1
-            className={cn('mt-6 mb-3 font-serif text-2xl font-bold tracking-tight', c)}
-            {...rest}
-          />
-        );
-      },
-      h2(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return (
-          <h2
-            className={cn('mt-5 mb-2 font-serif text-xl font-semibold tracking-tight', c)}
-            {...rest}
-          />
-        );
-      },
-      h3(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return <h3 className={cn('mt-4 mb-2 font-serif text-lg font-medium', c)} {...rest} />;
-      },
-      p(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return <p className={cn('my-2.5 leading-relaxed', c)} {...rest} />;
-      },
-      ul(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return <ul className={cn('my-2 ml-5 list-disc space-y-1', c)} {...rest} />;
-      },
-      ol(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return <ol className={cn('my-2 ml-5 list-decimal space-y-1', c)} {...rest} />;
-      },
-      a(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return <a className={cn('text-primary underline underline-offset-2', c)} {...rest} />;
-      },
-      hr(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return <hr className={cn('my-6 border-border', c)} {...rest} />;
-      },
-      table(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return (
-          <div className="my-3 overflow-x-auto rounded-md border">
-            <table className={cn('w-full border-collapse text-sm', c)} {...rest} />
-          </div>
-        );
-      },
-      th(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return (
-          <th
-            className={cn('border-b bg-muted/50 px-3 py-1.5 text-left font-semibold', c)}
-            {...rest}
-          />
-        );
-      },
-      td(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return <td className={cn('border-b px-3 py-1.5 align-top', c)} {...rest} />;
-      },
-      pre(props) {
-        const { className: c, ...rest } = withoutNode(props);
-        return (
-          <pre
-            className={cn(
-              'my-3 overflow-x-auto rounded-lg border bg-muted p-3 font-mono text-xs leading-relaxed',
-              c,
-            )}
-            {...rest}
-          />
-        );
-      },
-      code(props) {
-        const { className: c, children, ...rest } = withoutNode(props);
-        const isBlock = typeof c === 'string' && c.startsWith('language-');
-        if (isBlock) {
-          return (
-            <code className={cn('font-mono text-xs', c)} {...rest}>
-              {children}
-            </code>
-          );
-        }
-        return (
-          <code className={cn('rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]', c)} {...rest}>
-            {children}
-          </code>
-        );
-      },
-      img(props) {
-        const { src, alt, className: c, ...rest } = withoutNode(props);
-        return (
-          <img
-            src={typeof src === 'string' ? resolveImageSrc(src) : src}
-            alt={alt ?? ''}
-            className={cn('my-3 max-w-full rounded-md border', c)}
-            {...rest}
-          />
-        );
-      },
-    }),
+    () => buildMarkdownComponents(citationsById, onCitationClick),
     [citationsById, onCitationClick],
   );
 

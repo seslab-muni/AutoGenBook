@@ -96,6 +96,15 @@ function AuditReportPreview({ artifact }: { artifact: RunArtifact }) {
     }
   }
 
+  let preview: React.ReactNode;
+  if (textQuery.isPending) {
+    preview = <p className="text-muted-foreground">Loading…</p>;
+  } else if (parseError) {
+    preview = <p className="text-destructive">Could not parse this report as JSON.</p>;
+  } else {
+    preview = <JsonTree value={parsed} />;
+  }
+
   return (
     <div className="mt-2">
       <button
@@ -108,13 +117,7 @@ function AuditReportPreview({ artifact }: { artifact: RunArtifact }) {
       </button>
       {open ? (
         <div className="mt-1.5 max-h-64 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px]">
-          {textQuery.isPending ? (
-            <p className="text-muted-foreground">Loading…</p>
-          ) : parseError ? (
-            <p className="text-destructive">Could not parse this report as JSON.</p>
-          ) : (
-            <JsonTree value={parsed} />
-          )}
+          {preview}
         </div>
       ) : null}
     </div>

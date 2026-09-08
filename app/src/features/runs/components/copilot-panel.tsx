@@ -118,15 +118,16 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
   const hasResumableBaseRun = project.lastRunId != null;
   const canRegenerate = Boolean(node) && hasCliKey && hasResumableBaseRun && !isBusy;
 
-  const disabledReason = !node
-    ? null
-    : !hasCliKey
-      ? 'This section has no CLI key yet — it appears after the next full run.'
-      : !hasResumableBaseRun
-        ? 'No successful prior run to resume from — start a full run first.'
-        : isBusy
-          ? 'A run is already active for this project.'
-          : null;
+  let disabledReason: string | null = null;
+  if (node) {
+    if (!hasCliKey) {
+      disabledReason = 'This section has no CLI key yet — it appears after the next full run.';
+    } else if (!hasResumableBaseRun) {
+      disabledReason = 'No successful prior run to resume from — start a full run first.';
+    } else if (isBusy) {
+      disabledReason = 'A run is already active for this project.';
+    }
+  }
 
   function send(prompt: string) {
     if (!node || !canRegenerate) return;
@@ -179,6 +180,19 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
 
   const footerStatus = trackedRun ? RUN_STATUS_LABELS[trackedRun.status] : node.status;
   const isRunTerminal = trackedRun ? TERMINAL_STATUSES.has(trackedRun.status) : false;
+
+  let footerTiming: string | null = null;
+  if (trackedRun && !isRunTerminal) {
+    footerTiming = formatElapsed(trackedRun);
+  } else if (trackedRun && isRunTerminal) {
+    footerTiming = [
+      formatDuration(trackedRun.startedAt, trackedRun.finishedAt),
+      formatTokens(trackedRun.totalTokens),
+      formatCost(trackedRun.totalCostUsd),
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -323,19 +337,7 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
             {String(footerStatus).replace('_', ' ')}
           </span>
         </span>
-        <span className="font-mono">
-          {trackedRun && !isRunTerminal
-            ? formatElapsed(trackedRun)
-            : trackedRun && isRunTerminal
-              ? [
-                  formatDuration(trackedRun.startedAt, trackedRun.finishedAt),
-                  formatTokens(trackedRun.totalTokens),
-                  formatCost(trackedRun.totalCostUsd),
-                ]
-                  .filter(Boolean)
-                  .join(' · ')
-              : null}
-        </span>
+        <span className="font-mono">{footerTiming}</span>
       </div>
     </div>
   );

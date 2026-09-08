@@ -1,15 +1,51 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { AlertTriangle, Loader2, Upload, X } from 'lucide-react';
 
 import type { FileDto } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useUploadQueue } from '@/features/sources/hooks/use-upload-queue';
+import { useUploadQueue, type UploadQueueItem } from '@/features/sources/hooks/use-upload-queue';
 import { formatBytes, KB_ELIGIBLE_EXTENSIONS } from '@/features/sources/lib/source-format';
 import { cn } from '@/lib/utils';
 
 const DISABLED_INGEST_TABS = ['arXiv import', 'BibTeX', 'Web URL'];
 const ELIGIBLE_EXTENSIONS_LABEL = [...KB_ELIGIBLE_EXTENSIONS].map((ext) => `.${ext}`).join(' ');
+
+function uploadItemStatusMessage(item: UploadQueueItem): ReactNode {
+  if (item.status === 'uploading') {
+    return (
+      <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full bg-primary transition-[width]"
+          style={{ width: `${Math.round(item.progress * 100)}%` }}
+        />
+      </div>
+    );
+  }
+  if (item.status === 'error') {
+    return (
+      <p className="mt-0.5 flex items-center gap-1 text-[11px] text-destructive">
+        <AlertTriangle className="size-3" />
+        {item.error}
+      </p>
+    );
+  }
+  if (item.status === 'done' && !item.eligible) {
+    return (
+      <p className="mt-0.5 flex items-center gap-1 text-[11px] text-warning">
+        <AlertTriangle className="size-3" />
+        Uploaded, but not eligible for RAG indexing — can&apos;t be attached as a source.
+      </p>
+    );
+  }
+  if (item.status === 'done') {
+    return <p className="mt-0.5 text-[11px] text-success">Attached.</p>;
+  }
+  if (item.status === 'canceled') {
+    return <p className="mt-0.5 text-[11px] text-muted-foreground">Canceled.</p>;
+  }
+  return null;
+}
 
 interface UploadDropzoneProps {
   /** Called once per file that finished uploading *and* is KB-eligible. */
@@ -120,29 +156,7 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
                     {formatBytes(item.file.size)}
                   </span>
                 </div>
-                {item.status === 'uploading' ? (
-                  <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full bg-primary transition-[width]"
-                      style={{ width: `${Math.round(item.progress * 100)}%` }}
-                    />
-                  </div>
-                ) : item.status === 'error' ? (
-                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-destructive">
-                    <AlertTriangle className="size-3" />
-                    {item.error}
-                  </p>
-                ) : item.status === 'done' && !item.eligible ? (
-                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-warning">
-                    <AlertTriangle className="size-3" />
-                    Uploaded, but not eligible for RAG indexing — can&apos;t be attached as a
-                    source.
-                  </p>
-                ) : item.status === 'done' ? (
-                  <p className="mt-0.5 text-[11px] text-success">Attached.</p>
-                ) : item.status === 'canceled' ? (
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">Canceled.</p>
-                ) : null}
+                {uploadItemStatusMessage(item)}
               </div>
               {item.status === 'uploading' ? (
                 <>

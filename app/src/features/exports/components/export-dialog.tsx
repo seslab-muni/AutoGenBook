@@ -91,12 +91,14 @@ export function ExportDialog({ project }: ExportDialogProps) {
     }
   }
 
-  const effectiveBaseRunId =
-    baseRunId && succeededRuns.some((run) => run.id === baseRunId)
-      ? baseRunId
-      : project.lastRunId && succeededRuns.some((run) => run.id === project.lastRunId)
-        ? project.lastRunId
-        : (succeededRuns[0]?.id ?? null);
+  let effectiveBaseRunId: string | null;
+  if (baseRunId && succeededRuns.some((run) => run.id === baseRunId)) {
+    effectiveBaseRunId = baseRunId;
+  } else if (project.lastRunId && succeededRuns.some((run) => run.id === project.lastRunId)) {
+    effectiveBaseRunId = project.lastRunId;
+  } else {
+    effectiveBaseRunId = succeededRuns[0]?.id ?? null;
+  }
   const baseRun = succeededRuns.find((run) => run.id === effectiveBaseRunId);
 
   const { data: baseArtifactsPage } = useQuery({
@@ -174,6 +176,110 @@ export function ExportDialog({ project }: ExportDialogProps) {
   const markdownArtifact = findArtifact(baseArtifacts, 'markdown');
   const bibArtifact = findArtifact(baseArtifacts, 'bib');
 
+  let dialogBody: React.ReactNode;
+  if (runsPending) {
+    dialogBody = (
+      <div className="space-y-2">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    );
+  } else if (succeededRuns.length === 0 || !baseRun) {
+    dialogBody = (
+      <EmptyState
+        icon={FileText}
+        title="No succeeded run yet"
+        description="Start a full run first — exports build from a run's finished output."
+        action={
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              closeModal();
+              openModal('start-run');
+            }}
+          >
+            Start a run
+          </Button>
+        }
+      />
+    );
+  } else {
+    dialogBody = (
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        <div className="space-y-1.5">
+          <label className="text-xs font-semibold text-foreground" htmlFor="export-base-run">
+            Base run
+          </label>
+          <Select value={baseRun.id} onValueChange={(value) => setBaseRunId(value)}>
+            <SelectTrigger id="export-base-run" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {succeededRuns.map((run) => (
+                <SelectItem key={run.id} value={run.id}>
+                  {RUN_KIND_LABELS[run.kind]} · {new Date(run.queuedAt).toLocaleString()}
+                  {!run.resumable ? ' (not resumable)' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <RunCostSummary run={baseRun} className="rounded-lg border bg-muted/30 p-2" />
+          {!baseRun.resumable ? (
+            <p className="flex items-center gap-1.5 text-[11px] text-warning">
+              <AlertTriangle className="size-3" />
+              This run's work directory is gone — building from it will fail; start a new run.
+            </p>
+          ) : null}
+        </div>
+
+        {conflict ? (
+          <div className="flex items-start justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              <span>{conflict}</span>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                closeModal();
+                openModal('start-run');
+              }}
+            >
+              Start a full run
+            </Button>
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <MarkdownCard artifact={markdownArtifact} />
+          <BibCard artifact={bibArtifact} />
+          <BuildableFormatCard
+            format="latex"
+            artifact={builtArtifact('latex')}
+            buildState={buildStateFor('latex')}
+            disabled={!baseRun.resumable || exportMutation.isPending || pendingBuild !== null}
+            onBuild={() => handleBuild('latex')}
+          />
+          <BuildableFormatCard
+            format="pdf"
+            artifact={builtArtifact('pdf')}
+            buildState={buildStateFor('pdf')}
+            disabled={!baseRun.resumable || exportMutation.isPending || pendingBuild !== null}
+            onBuild={() => handleBuild('pdf')}
+          />
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-xs font-semibold text-foreground">All files</h3>
+          <ArtifactsList artifacts={baseArtifacts} emptyMessage="This run has no artifacts yet." />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={(next) => !next && closeModal()}>
       <DialogContent className="flex max-h-[85vh] flex-col gap-4 overflow-hidden sm:max-w-2xl">
@@ -185,105 +291,7 @@ export function ExportDialog({ project }: ExportDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        {runsPending ? (
-          <div className="space-y-2">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-32 w-full" />
-          </div>
-        ) : succeededRuns.length === 0 || !baseRun ? (
-          <EmptyState
-            icon={FileText}
-            title="No succeeded run yet"
-            description="Start a full run first — exports build from a run's finished output."
-            action={
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  closeModal();
-                  openModal('start-run');
-                }}
-              >
-                Start a run
-              </Button>
-            }
-          />
-        ) : (
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-foreground" htmlFor="export-base-run">
-                Base run
-              </label>
-              <Select value={baseRun.id} onValueChange={(value) => setBaseRunId(value)}>
-                <SelectTrigger id="export-base-run" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {succeededRuns.map((run) => (
-                    <SelectItem key={run.id} value={run.id}>
-                      {RUN_KIND_LABELS[run.kind]} · {new Date(run.queuedAt).toLocaleString()}
-                      {!run.resumable ? ' (not resumable)' : ''}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <RunCostSummary run={baseRun} className="rounded-lg border bg-muted/30 p-2" />
-              {!baseRun.resumable ? (
-                <p className="flex items-center gap-1.5 text-[11px] text-warning">
-                  <AlertTriangle className="size-3" />
-                  This run's work directory is gone — building from it will fail; start a new run.
-                </p>
-              ) : null}
-            </div>
-
-            {conflict ? (
-              <div className="flex items-start justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                  <span>{conflict}</span>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    closeModal();
-                    openModal('start-run');
-                  }}
-                >
-                  Start a full run
-                </Button>
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <MarkdownCard artifact={markdownArtifact} />
-              <BibCard artifact={bibArtifact} />
-              <BuildableFormatCard
-                format="latex"
-                artifact={builtArtifact('latex')}
-                buildState={buildStateFor('latex')}
-                disabled={!baseRun.resumable || exportMutation.isPending || pendingBuild !== null}
-                onBuild={() => handleBuild('latex')}
-              />
-              <BuildableFormatCard
-                format="pdf"
-                artifact={builtArtifact('pdf')}
-                buildState={buildStateFor('pdf')}
-                disabled={!baseRun.resumable || exportMutation.isPending || pendingBuild !== null}
-                onBuild={() => handleBuild('pdf')}
-              />
-            </div>
-
-            <div>
-              <h3 className="mb-2 text-xs font-semibold text-foreground">All files</h3>
-              <ArtifactsList
-                artifacts={baseArtifacts}
-                emptyMessage="This run has no artifacts yet."
-              />
-            </div>
-          </div>
-        )}
+        {dialogBody}
       </DialogContent>
     </Dialog>
   );
