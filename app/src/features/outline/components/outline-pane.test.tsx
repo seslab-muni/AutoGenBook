@@ -5,6 +5,7 @@ import { subscribeRunEvents } from '@/api/sse';
 import type { Run } from '@/api/types';
 import { db } from '@/mocks/db';
 import { renderWithProviders } from '@/test/component-test-utils';
+import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
 import { OutlinePane } from './outline-pane';
 import { STRUCTURE_LOCKED_MESSAGE } from './outline-row';
@@ -29,7 +30,7 @@ function seedActiveRun(projectId: string): Run {
     projectId,
     kind: 'full',
     status: 'running',
-    options: { outline: 'project', outputFormat: 'markdown', allowSubdivision: false },
+    options: { ...DEFAULT_RUN_OPTIONS, allowSubdivision: false },
     baseRunId: null,
     targetNodeId: null,
     exitCode: null,

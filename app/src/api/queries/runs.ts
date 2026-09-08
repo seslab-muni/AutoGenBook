@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiClient, unwrap } from '@/api/client';
-import type { ExportRequest, Run, RunOptions } from '@/api/types';
+import type { ExportRequest, Run, RunOptionsIn } from '@/api/types';
 
 import { projectKeys, runKeys } from './keys';
 
@@ -11,8 +11,8 @@ export const runs = {
       queryKey: [...projectKeys.runs(projectId), params],
       queryFn: () =>
         unwrap(
-          apiClient.GET('/api/v1/projects/{projectId}/runs', {
-            params: { path: { projectId }, query: params },
+          apiClient.GET('/api/v1/projects/{project_id}/runs', {
+            params: { path: { project_id: projectId }, query: params },
           }),
         ),
     }),
@@ -20,7 +20,10 @@ export const runs = {
   detail: (runId: string) =>
     queryOptions({
       queryKey: runKeys.detail(runId),
-      queryFn: () => unwrap(apiClient.GET('/api/v1/runs/{runId}', { params: { path: { runId } } })),
+      queryFn: () =>
+        unwrap(
+          apiClient.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }),
+        ),
     }),
 
   events: (runId: string, params: { afterSeq?: number; limit?: number } = {}) =>
@@ -28,8 +31,8 @@ export const runs = {
       queryKey: [...runKeys.events(runId), params],
       queryFn: () =>
         unwrap(
-          apiClient.GET('/api/v1/runs/{runId}/events', {
-            params: { path: { runId }, query: params },
+          apiClient.GET('/api/v1/runs/{run_id}/events', {
+            params: { path: { run_id: runId }, query: params },
           }),
         ),
     }),
@@ -39,8 +42,8 @@ export const runs = {
       queryKey: [...runKeys.artifacts(runId), params],
       queryFn: () =>
         unwrap(
-          apiClient.GET('/api/v1/runs/{runId}/artifacts', {
-            params: { path: { runId }, query: params },
+          apiClient.GET('/api/v1/runs/{run_id}/artifacts', {
+            params: { path: { run_id: runId }, query: params },
           }),
         ),
     }),
@@ -50,10 +53,10 @@ export const runs = {
 export function useCreateRunMutation(projectId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body?: RunOptions) =>
+    mutationFn: (body: RunOptionsIn) =>
       unwrap(
-        apiClient.POST('/api/v1/projects/{projectId}/runs', {
-          params: { path: { projectId } },
+        apiClient.POST('/api/v1/projects/{project_id}/runs', {
+          params: { path: { project_id: projectId } },
           body,
         }),
       ),
@@ -76,7 +79,9 @@ export function useCancelRunMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (runId: string) =>
-      unwrap(apiClient.POST('/api/v1/runs/{runId}/cancel', { params: { path: { runId } } })),
+      unwrap(
+        apiClient.POST('/api/v1/runs/{run_id}/cancel', { params: { path: { run_id: runId } } }),
+      ),
     onMutate: async (runId) => {
       await queryClient.cancelQueries({ queryKey: runKeys.detail(runId) });
       const previous = queryClient.getQueryData<Run>(runKeys.detail(runId));
@@ -100,7 +105,12 @@ export function useExportRunMutation(runId: string, projectId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: ExportRequest) =>
-      unwrap(apiClient.POST('/api/v1/runs/{runId}/exports', { params: { path: { runId } }, body })),
+      unwrap(
+        apiClient.POST('/api/v1/runs/{run_id}/exports', {
+          params: { path: { run_id: runId } },
+          body,
+        }),
+      ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: runKeys.artifacts(runId) });
       void queryClient.invalidateQueries({ queryKey: projectKeys.runs(projectId) });

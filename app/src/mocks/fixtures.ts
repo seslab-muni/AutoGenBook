@@ -7,7 +7,6 @@ import type {
   NodeStatus,
   OutlineNode,
   OutputFormat,
-  RAGCitation,
   Run,
   RunArtifact,
   RunEvent,
@@ -87,7 +86,8 @@ interface SeedOutlineNode {
   subPrompt?: string;
   contentMarkdown: string;
   contentLatex: string;
-  ragCitations: RAGCitation[];
+  /** `OutlineNode.ragCitations` is untyped freeform JSON in the API's own schema; fixtures still model realistic entries. */
+  ragCitations: Record<string, unknown>[];
   children?: SeedOutlineNode[];
 }
 
@@ -245,7 +245,14 @@ function seedProject(seed: SeedProject): void {
         outline: 'project',
         outputFormat: seed.outputFormat,
         allowSubdivision: false,
+        enableWebRag: false,
+        auditBook: false,
         auditBookMode: 'warn',
+        legacyTex: false,
+        rebuildKb: false,
+        failFastSchema: false,
+        resume: false,
+        exportTexOnly: false,
       },
       baseRunId: null,
       targetNodeId: null,
@@ -285,7 +292,7 @@ function seedProject(seed: SeedProject): void {
         stage: 'assembly',
         message: 'Assembling Markdown output.',
       },
-      { seq: 4, ts: finishedAt, level: 'info', message: 'Run succeeded.' },
+      { seq: 4, ts: finishedAt, level: 'info', stage: 'done', message: 'Run succeeded.' },
     ];
     db.runEvents.set(runId, events);
 

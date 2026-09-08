@@ -1,5 +1,5 @@
 import { apiBaseUrl, apiClient, unwrap } from './client';
-import type { Page, Run, RunEvent } from './types';
+import type { Run, RunEvent, RunEventPage } from './types';
 
 export type RunEventName = 'log' | 'stage' | 'section' | 'done';
 
@@ -26,7 +26,7 @@ export interface SubscribeRunEventsOptions {
   /** Test seam: construct the transport. Defaults to `new EventSource(url)`. */
   createEventSource?: (url: string) => EventSourceLike;
   /** Test seam: fetch one page of `GET .../events`. */
-  fetchEventsPage?: (runId: string, afterSeq: number | undefined) => Promise<Page<RunEvent>>;
+  fetchEventsPage?: (runId: string, afterSeq: number | undefined) => Promise<RunEventPage>;
   /** Test seam: fetch `GET /runs/{runId}` to detect the polling fallback's terminal state. */
   fetchRun?: (runId: string) => Promise<Run>;
 }
@@ -38,16 +38,16 @@ function defaultCreateEventSource(url: string): EventSourceLike {
 async function defaultFetchEventsPage(
   runId: string,
   afterSeq: number | undefined,
-): Promise<Page<RunEvent>> {
+): Promise<RunEventPage> {
   return unwrap(
-    apiClient.GET('/api/v1/runs/{runId}/events', {
-      params: { path: { runId }, query: afterSeq !== undefined ? { afterSeq } : {} },
+    apiClient.GET('/api/v1/runs/{run_id}/events', {
+      params: { path: { run_id: runId }, query: afterSeq !== undefined ? { afterSeq } : {} },
     }),
   );
 }
 
 async function defaultFetchRun(runId: string): Promise<Run> {
-  return unwrap(apiClient.GET('/api/v1/runs/{runId}', { params: { path: { runId } } }));
+  return unwrap(apiClient.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }));
 }
 
 function isTerminal(status: Run['status']): boolean {
@@ -158,6 +158,7 @@ export function subscribeRunEvents(runId: string, options: SubscribeRunEventsOpt
           seq: lastSeq ?? 0,
           ts: run.finishedAt ?? new Date().toISOString(),
           level: run.status === 'failed' ? 'error' : 'info',
+          stage: 'done',
           message: run.error ?? `Run ${run.status}`,
         });
         return;

@@ -128,7 +128,7 @@ export function AppHeader({ project, activeRun }: AppHeaderProps) {
           <Button variant="outline" size="sm" onClick={() => openModal('sources')}>
             <Database />
             Sources
-            <Badge variant="secondary">{project.sources.length}</Badge>
+            <Badge variant="secondary">{project.sources?.length ?? 0}</Badge>
           </Button>
 
           <Button

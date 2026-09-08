@@ -11,8 +11,8 @@ export const sources = {
       queryKey: [...projectKeys.sources(projectId), params],
       queryFn: () =>
         unwrap(
-          apiClient.GET('/api/v1/projects/{projectId}/sources', {
-            params: { path: { projectId }, query: params },
+          apiClient.GET('/api/v1/projects/{project_id}/sources', {
+            params: { path: { project_id: projectId }, query: params },
           }),
         ),
     }),
@@ -22,8 +22,8 @@ export const sources = {
       queryKey: projectKeys.source(projectId, sourceId),
       queryFn: () =>
         unwrap(
-          apiClient.GET('/api/v1/projects/{projectId}/sources/{sourceId}', {
-            params: { path: { projectId, sourceId } },
+          apiClient.GET('/api/v1/projects/{project_id}/sources/{source_id}', {
+            params: { path: { project_id: projectId, source_id: sourceId } },
           }),
         ),
     }),
@@ -35,8 +35,8 @@ export function useAddSourceMutation(projectId: string) {
   return useMutation({
     mutationFn: (body: SourceCreate) =>
       unwrap(
-        apiClient.POST('/api/v1/projects/{projectId}/sources', {
-          params: { path: { projectId } },
+        apiClient.POST('/api/v1/projects/{project_id}/sources', {
+          params: { path: { project_id: projectId } },
           body,
         }),
       ),
@@ -53,8 +53,8 @@ export function useUpdateSourceMutation(projectId: string, sourceId: string) {
   return useMutation({
     mutationFn: (body: SourceUpdate) =>
       unwrap(
-        apiClient.PATCH('/api/v1/projects/{projectId}/sources/{sourceId}', {
-          params: { path: { projectId, sourceId } },
+        apiClient.PATCH('/api/v1/projects/{project_id}/sources/{source_id}', {
+          params: { path: { project_id: projectId, source_id: sourceId } },
           body,
         }),
       ),
@@ -71,8 +71,8 @@ export function useRemoveSourceMutation(projectId: string) {
   return useMutation({
     mutationFn: (sourceId: string) =>
       unwrap(
-        apiClient.DELETE('/api/v1/projects/{projectId}/sources/{sourceId}', {
-          params: { path: { projectId, sourceId } },
+        apiClient.DELETE('/api/v1/projects/{project_id}/sources/{source_id}', {
+          params: { path: { project_id: projectId, source_id: sourceId } },
         }),
       ),
     onSuccess: () => {

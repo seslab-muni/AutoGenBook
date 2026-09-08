@@ -16,7 +16,11 @@ export const projects = {
     queryOptions({
       queryKey: projectKeys.detail(projectId),
       queryFn: () =>
-        unwrap(apiClient.GET('/api/v1/projects/{projectId}', { params: { path: { projectId } } })),
+        unwrap(
+          apiClient.GET('/api/v1/projects/{project_id}', {
+            params: { path: { project_id: projectId } },
+          }),
+        ),
     }),
 };
 
@@ -37,7 +41,10 @@ export function useUpdateProjectMutation(projectId: string) {
   return useMutation({
     mutationFn: (body: ProjectUpdate) =>
       unwrap(
-        apiClient.PATCH('/api/v1/projects/{projectId}', { params: { path: { projectId } }, body }),
+        apiClient.PATCH('/api/v1/projects/{project_id}', {
+          params: { path: { project_id: projectId } },
+          body,
+        }),
       ),
     onSuccess: (project: Project) => {
       queryClient.setQueryData(projectKeys.detail(projectId), project);
@@ -51,7 +58,11 @@ export function useDeleteProjectMutation(projectId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () =>
-      unwrap(apiClient.DELETE('/api/v1/projects/{projectId}', { params: { path: { projectId } } })),
+      unwrap(
+        apiClient.DELETE('/api/v1/projects/{project_id}', {
+          params: { path: { project_id: projectId } },
+        }),
+      ),
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: projectKeys.detail(projectId) });
       void queryClient.invalidateQueries({ queryKey: projectKeys.lists() });
@@ -65,8 +76,8 @@ export function useDuplicateProjectMutation(projectId: string) {
   return useMutation({
     mutationFn: () =>
       unwrap(
-        apiClient.POST('/api/v1/projects/{projectId}/duplicate', {
-          params: { path: { projectId } },
+        apiClient.POST('/api/v1/projects/{project_id}/duplicate', {
+          params: { path: { project_id: projectId } },
         }),
       ),
     onSuccess: () => {

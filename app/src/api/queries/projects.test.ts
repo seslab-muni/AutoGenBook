@@ -22,8 +22,8 @@ describe('projects queries', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.title).toBe('Distributed Consensus & Quantum Fault Tolerance');
-    expect(result.current.data?.sources.length).toBeGreaterThan(0);
-    expect(result.current.data?.outline[0]?.children.length).toBeGreaterThan(0);
+    expect(result.current.data?.sources?.length).toBeGreaterThan(0);
+    expect(result.current.data?.outline?.[0]?.children?.length).toBeGreaterThan(0);
   });
 
   it('creating a project invalidates the list query, which refetches to include it', async () => {

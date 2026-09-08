@@ -8,10 +8,10 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
 import { apiBaseUrl } from '@/api/client';
-import type { RAGCitation } from '@/api/types';
 import { Callout } from '@/features/editor/components/callout';
 import { CitationChip } from '@/features/editor/components/citation-chip';
 import { normalizeDisplayMath } from '@/features/editor/lib/normalize-display-math';
+import type { RagCitation } from '@/features/editor/lib/rag-citation';
 import { remarkCallouts, remarkCitations } from '@/features/editor/lib/remark-plugins';
 import { mathAwareSchema } from '@/features/editor/lib/sanitize-schema';
 import { cn } from '@/lib/utils';
@@ -45,8 +45,8 @@ function withoutNode<P extends ExtraProps>(props: P): Omit<P, 'node'> {
 interface MarkdownViewProps {
   /** Pandoc-style Markdown, as written by the CLI's Markdown-first path (`book_builder.py`). */
   markdown: string;
-  /** Looked up by citekey (matched against `RAGCitation.id`) to label/resolve `[@key]`/`\cite{key}` chips. */
-  citations?: readonly RAGCitation[];
+  /** Looked up by citekey (matched against `RagCitation.id`) to label/resolve `[@key]`/`\cite{key}` chips. */
+  citations?: readonly RagCitation[];
   /** Called with a citekey when its chip is clicked; omit to render chips as inert labels. */
   onCitationClick?: (citeKey: string) => void;
   className?: string;
@@ -66,7 +66,7 @@ export function MarkdownView({
   className,
 }: MarkdownViewProps) {
   const citationsById = useMemo(() => {
-    const map = new Map<string, RAGCitation>();
+    const map = new Map<string, RagCitation>();
     for (const citation of citations ?? []) map.set(citation.id, citation);
     return map;
   }, [citations]);

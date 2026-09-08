@@ -40,7 +40,7 @@ export function driveFakeRun(runId: string): void {
         seq: db.nextSeq(runId),
         ts: db.now(),
         level: entry.event.level ?? 'info',
-        stage: entry.event.stage ?? null,
+        stage: entry.event.stage ?? '',
         message: entry.event.message,
         payload: entry.event.payload ?? null,
       });
@@ -82,13 +82,18 @@ function buildTimeline(run: Run): TimelineEntry[] {
       },
       {
         delayMs: 900,
-        event: { name: 'section', message: 'Section regenerated.', payload: { nodeId } },
+        event: {
+          name: 'section',
+          stage: 'drafting',
+          message: 'Section regenerated.',
+          payload: { nodeId },
+        },
         onComplete: () => completeNode(nodeId),
       },
       {
         delayMs: 0,
         status: 'succeeded',
-        event: { name: 'done', message: 'Run succeeded.' },
+        event: { name: 'done', stage: 'drafting', message: 'Run succeeded.' },
       },
     ];
   }
@@ -103,7 +108,7 @@ function buildTimeline(run: Run): TimelineEntry[] {
       {
         delayMs: 900,
         status: 'succeeded',
-        event: { name: 'done', message: 'Export succeeded.' },
+        event: { name: 'done', stage: 'export', message: 'Export succeeded.' },
         onComplete: () => appendExportArtifact(run),
       },
     ];
@@ -124,7 +129,12 @@ function buildTimeline(run: Run): TimelineEntry[] {
   for (const nodeId of nodeIds) {
     entries.push({
       delayMs: 500,
-      event: { name: 'section', message: `Section drafted.`, payload: { nodeId } },
+      event: {
+        name: 'section',
+        stage: 'drafting',
+        message: `Section drafted.`,
+        payload: { nodeId },
+      },
       onComplete: () => completeNode(nodeId),
     });
   }
@@ -133,7 +143,11 @@ function buildTimeline(run: Run): TimelineEntry[] {
       delayMs: 500,
       event: { name: 'stage', stage: 'assembly', message: 'Assembling Markdown output.' },
     },
-    { delayMs: 0, status: 'succeeded', event: { name: 'done', message: 'Run succeeded.' } },
+    {
+      delayMs: 0,
+      status: 'succeeded',
+      event: { name: 'done', stage: 'assembly', message: 'Run succeeded.' },
+    },
   );
   return entries;
 }
@@ -156,7 +170,7 @@ function completeNode(nodeId: string): void {
 }
 
 function appendExportArtifact(run: Run): void {
-  const format = (run.options as { format?: string } | undefined)?.format === 'pdf' ? 'pdf' : 'tex';
+  const format = run.options.outputFormat === 'pdf' ? 'pdf' : 'tex';
   const artifacts: RunArtifact[] = db.runArtifacts.get(run.id) ?? [];
   const fileId = `${run.id}-artifact-${format}`;
   const filename = format === 'pdf' ? 'book.pdf' : 'book.tex';

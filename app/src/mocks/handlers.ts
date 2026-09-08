@@ -23,7 +23,8 @@ import type {
   RegenerateRequest,
   Run,
   RunEvent,
-  RunOptions,
+  RunEventPage,
+  RunOptionsIn,
   Source,
   SourceCreate,
   SourceType,
@@ -307,7 +308,22 @@ const projectHandlers = [
         new URL(request.url).pathname,
       );
     }
-    db.projects.set(projectId, { ...row, ...body, updatedAt: db.now() });
+    db.projects.set(projectId, {
+      ...row,
+      ...body,
+      title: body.title ?? row.title,
+      subtitle: body.subtitle ?? row.subtitle,
+      authors: body.authors ?? row.authors,
+      topic: body.topic ?? row.topic,
+      targetAudience: body.targetAudience ?? row.targetAudience,
+      totalPagesBudget: body.totalPagesBudget ?? row.totalPagesBudget,
+      equationFrequencyLevel: body.equationFrequencyLevel ?? row.equationFrequencyLevel,
+      doConsiderOutline: body.doConsiderOutline ?? row.doConsiderOutline,
+      doConsiderPreviousSections: body.doConsiderPreviousSections ?? row.doConsiderPreviousSections,
+      outputFormat: body.outputFormat ?? row.outputFormat,
+      maxOutlineLevels: body.maxOutlineLevels ?? row.maxOutlineLevels,
+      updatedAt: db.now(),
+    });
     return HttpResponse.json(db.getProject(projectId));
   }),
 
@@ -343,11 +359,19 @@ const projectHandlers = [
         : {}),
     });
     db.projects.set(row.id, row);
-    for (const src of source.sources) {
+    for (const src of source.sources ?? []) {
       const id = db.nextId();
       db.sources.set(id, { ...src, id, projectId: row.id });
     }
-    insertOutlineTree(treeToReplace(source.outline), row.id, null, 1, '', '', row.maxOutlineLevels);
+    insertOutlineTree(
+      treeToReplace(source.outline ?? []),
+      row.id,
+      null,
+      1,
+      '',
+      '',
+      row.maxOutlineLevels,
+    );
     return HttpResponse.json(db.getProject(row.id), { status: 201 });
   }),
 ];
@@ -360,7 +384,7 @@ function treeToReplace(nodes: OutlineNodeTree[]): OutlineTreeReplace {
     mathLevel: node.mathLevel,
     equationDensityLevel: node.equationDensityLevel,
     ...(node.subPrompt ? { subPrompt: node.subPrompt } : {}),
-    ...(node.children.length ? { children: treeToReplace(node.children) } : {}),
+    ...(node.children?.length ? { children: treeToReplace(node.children) } : {}),
   }));
 }
 
@@ -561,7 +585,7 @@ const outlineHandlers = [
       ...node,
       ...(body as Partial<OutlineNode>),
       actualWords:
-        body.contentMarkdown !== undefined
+        body.contentMarkdown != null
           ? body.contentMarkdown.trim().split(/\s+/).filter(Boolean).length
           : node.actualWords,
       updatedAt: db.now(),
@@ -608,7 +632,20 @@ const outlineHandlers = [
         projectId,
         kind: 'regenerate_section',
         status: 'queued',
-        options: { promptModifier: body.promptModifier ?? null, resume: true },
+        options: {
+          outline: 'project',
+          outputFormat: project.outputFormat,
+          allowSubdivision: true,
+          enableWebRag: false,
+          auditBook: false,
+          auditBookMode: 'warn',
+          legacyTex: false,
+          rebuildKb: false,
+          failFastSchema: false,
+          resume: true,
+          exportTexOnly: false,
+          promptModifier: body.promptModifier ?? null,
+        },
         baseRunId: project.lastRunId,
         targetNodeId: node.id,
         exitCode: null,
@@ -654,7 +691,7 @@ const runHandlers = [
         new URL(request.url).pathname,
       );
     }
-    const body = (await request.json().catch(() => ({}))) as RunOptions;
+    const body = (await request.json().catch(() => ({}))) as RunOptionsIn;
     const runId = db.nextId();
     const run: Run = {
       id: runId,
@@ -663,9 +700,16 @@ const runHandlers = [
       status: 'queued',
       options: {
         outline: body.outline ?? 'project',
-        outputFormat: body.outputFormat ?? db.projects.get(projectId)?.outputFormat,
-        allowSubdivision: body.allowSubdivision ?? false,
+        outputFormat: body.outputFormat ?? db.projects.get(projectId)?.outputFormat ?? 'markdown',
+        allowSubdivision: body.allowSubdivision ?? true,
+        enableWebRag: body.enableWebRag ?? false,
+        auditBook: body.auditBook ?? false,
         auditBookMode: body.auditBookMode ?? 'warn',
+        legacyTex: body.legacyTex ?? false,
+        rebuildKb: false,
+        failFastSchema: body.failFastSchema ?? false,
+        resume: false,
+        exportTexOnly: false,
       },
       baseRunId: null,
       targetNodeId: null,
@@ -707,6 +751,7 @@ const runHandlers = [
       seq: db.nextSeq(run.id),
       ts: db.now(),
       level: 'warn',
+      stage: '',
       message: 'Run cancelled.',
     });
     return HttpResponse.json(cancelled, { status: 202 });
@@ -717,8 +762,16 @@ const runHandlers = [
     if (!run) return notFound('Run', new URL(request.url).pathname);
     const url = new URL(request.url);
     const afterSeq = Number(url.searchParams.get('afterSeq') ?? 0);
-    const events = (db.runEvents.get(run.id) ?? []).filter((event) => event.seq > afterSeq);
-    return HttpResponse.json(paginate(events, url));
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 200), 1), 500);
+    const matching = (db.runEvents.get(run.id) ?? []).filter((event) => event.seq > afterSeq);
+    const items = matching.slice(0, limit);
+    const page: RunEventPage = {
+      items,
+      total: matching.length,
+      limit,
+      afterSeq: items.at(-1)?.seq ?? afterSeq,
+    };
+    return HttpResponse.json(page);
   }),
 
   http.get('*/api/v1/runs/:runId/artifacts', ({ params, request }) => {
@@ -750,8 +803,17 @@ const runHandlers = [
       id: runId,
       projectId: baseRun.projectId,
       kind: 'export',
+      // Mirrors `RunService.export` (`api/application/runs.py`): the base run's options carried
+      // forward, with `outputFormat` overridden to the requested export format, `resume`/
+      // `exportTexOnly` forced on, and `promptModifier` cleared.
       status: 'queued',
-      options: { format: body.format, resume: true, exportTexOnly: body.format === 'latex' },
+      options: {
+        ...baseRun.options,
+        outputFormat: body.format,
+        resume: true,
+        exportTexOnly: true,
+        promptModifier: null,
+      },
       baseRunId: baseRun.id,
       targetNodeId: null,
       exitCode: null,

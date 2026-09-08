@@ -7,6 +7,7 @@ import { db } from '@/mocks/db';
 import { MOCK_USER } from '@/mocks/fixtures';
 import { useUiStore } from '@/stores/ui-store';
 import { renderRouterApp } from '@/test/router-test-utils';
+import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
 // See `app-header.test.tsx` / `use-run-stream.test.ts` for why SSE is mocked wherever the
 // project layout mounts (it always mounts `useActiveRun`, hence `useRunStream`).
@@ -34,7 +35,7 @@ describe('RunsPanel "Started by" column', () => {
       projectId: PROJECT_ID,
       kind: 'full',
       status: 'succeeded',
-      options: {},
+      options: DEFAULT_RUN_OPTIONS,
       baseRunId: null,
       targetNodeId: null,
       exitCode: 0,

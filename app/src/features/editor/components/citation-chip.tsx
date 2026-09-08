@@ -1,11 +1,11 @@
 import { BookMarked } from 'lucide-react';
 
-import type { RAGCitation } from '@/api/types';
+import type { RagCitation } from '@/features/editor/lib/rag-citation';
 import { cn } from '@/lib/utils';
 
 interface CitationChipProps {
   citeKey: string;
-  citation: RAGCitation | undefined;
+  citation: RagCitation | undefined;
   onClick: ((citeKey: string) => void) | undefined;
 }
 

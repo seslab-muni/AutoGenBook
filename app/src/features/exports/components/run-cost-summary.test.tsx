@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { Run } from '@/api/types';
+import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 import { RunCostSummary } from './run-cost-summary';
 
 function makeRun(overrides: Partial<Run> = {}): Run {
@@ -10,7 +11,7 @@ function makeRun(overrides: Partial<Run> = {}): Run {
     projectId: 'project-1',
     kind: 'full',
     status: 'succeeded',
-    options: {},
+    options: DEFAULT_RUN_OPTIONS,
     baseRunId: null,
     targetNodeId: null,
     exitCode: 0,
