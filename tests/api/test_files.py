@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
@@ -140,6 +141,45 @@ async def test_upload_over_max_size_rejected_by_content_length_never_touches_sto
 
     assert response.status_code == 413
     assert put_calls == 0
+    assert file_storage._objects == {}
+
+
+async def test_download_content_sets_nosniff_header(client: AsyncClient) -> None:
+    """issue #59: `get_file_content` reflects the uploader-supplied
+    `content_type` straight back as the response's `Content-Type` - without
+    `X-Content-Type-Options: nosniff`, a browser sniffing the body instead
+    of trusting a mismatched type is the exact MIME-sniffing vector this
+    header exists to shut off."""
+    upload_response = await _upload(client, "notes.txt", b"hello", "text/plain")
+    file_id = upload_response.json()["id"]
+
+    response = await client.get(f"/api/v1/files/{file_id}/content")
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+async def test_upload_leaves_no_orphaned_blob_when_the_db_insert_fails(
+    client: AsyncClient, monkeypatch, file_storage: InMemoryFileStorage
+) -> None:
+    """issue #59: `FileService.upload` necessarily writes the blob to
+    storage before it can insert the `files` row (the row needs the
+    upload's own computed `sha256`/`size_bytes`) - a failed insert must not
+    leave that blob behind with nothing in the database ever pointing at
+    it, or it's an orphan that consumes storage forever with no way for any
+    future cleanup job to even find it (nothing references its key)."""
+
+    async def fake_add(self: SqlAlchemyFileRepository, file):
+        raise RuntimeError("db insert failed")
+
+    monkeypatch.setattr(SqlAlchemyFileRepository, "add", fake_add)
+
+    # `ASGITransport`'s default `raise_app_exceptions=True` re-raises an
+    # exception that reached no handler instead of returning it as a 500
+    # response - the point of this test is what happens to the already-
+    # uploaded blob, not the HTTP status code.
+    with pytest.raises(RuntimeError, match="db insert failed"):
+        await _upload(client, "notes.txt", b"hello world")
+
     assert file_storage._objects == {}
 
 

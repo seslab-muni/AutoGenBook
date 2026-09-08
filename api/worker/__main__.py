@@ -6,7 +6,7 @@ import os
 import signal
 import socket
 
-from api.application.runs import GenerationService, sweep_stale_work_dirs
+from api.application.runs import GenerationService, sweep_orphaned_work_dirs, sweep_stale_work_dirs
 from api.core.db import get_sessionmaker
 from api.core.settings import get_settings
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
@@ -98,6 +98,16 @@ async def _worker_slot(slot: int, session_factory, storage, settings, stop_event
                     logger.info("removed %s stale work dir(s)", removed)
             except Exception:  # noqa: BLE001
                 logger.exception("worker slot %s: error while sweeping stale work dirs", slot)
+
+            try:
+                async with session_factory() as session:
+                    orphaned = await sweep_orphaned_work_dirs(
+                        SqlAlchemyRunRepository(session), settings.runs_dir
+                    )
+                if orphaned:
+                    logger.info("removed %s orphaned work dir(s)", orphaned)
+            except Exception:  # noqa: BLE001
+                logger.exception("worker slot %s: error while sweeping orphaned work dirs", slot)
 
         if not claimed and not stop_event.is_set():
             try:

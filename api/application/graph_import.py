@@ -103,7 +103,26 @@ def _extract_citations(content: str, kb_index: dict[str, Any]) -> list[dict[str,
     return list(found.values())
 
 
+def _format_review_issue(issue: Any) -> str:
+    if not isinstance(issue, dict):
+        return str(issue)
+    severity = str(issue.get("severity", "")).strip()
+    issue_type = str(issue.get("type", "")).strip()
+    description = str(issue.get("description", "")).strip()
+    required_fix = str(issue.get("required_fix", "")).strip()
+    return f"[{severity}] {issue_type}: {description} → {required_fix}"
+
+
 async def _load_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | None:
+    """Read back a section's reviewer output
+    (`autogenbook/schemas/book_review.py:BookSectionReviewerOutput`):
+    `{ok_to_keep, issues: [{type, severity, description, required_fix}],
+    suggested_edits, retrieval_queries}` - there is no `score` field at all.
+    `reviewerScore` is deliberately left unpopulated here rather than
+    invented from `ok_to_keep`/issue counts (issue #81) - that mapping
+    would be an arbitrary heuristic with no basis in what the CLI actually
+    reports, and it's simpler to add later once there's a real signal for it
+    than to walk back a guessed one every existing row already has."""
     reviews_dir = out_dir / "section_reviews"
     for name in (f"{cli_key}_revised.json", f"{cli_key}.json"):
         data = await _load_json(reviews_dir / name)
@@ -112,10 +131,7 @@ async def _load_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | 
         result: dict[str, Any] = {}
         issues = data.get("issues")
         if isinstance(issues, list) and issues:
-            result["notes"] = "\n".join(str(issue) for issue in issues)
-        score = data.get("score")
-        if isinstance(score, (int, float)):
-            result["score"] = float(score)
+            result["notes"] = "\n".join(_format_review_issue(issue) for issue in issues)
         return result or None
     return None
 
@@ -141,11 +157,10 @@ async def _leaf_content_changes(
     if kb_index is not None:
         changes["rag_citations"] = _extract_citations(content, kb_index)
     review = await _load_section_review(out_dir, cli_key)
-    if review:
-        if "notes" in review:
-            changes["reviewer_notes"] = review["notes"]
-        if "score" in review:
-            changes["reviewer_score"] = review["score"]
+    if review and "notes" in review:
+        # `reviewer_score` is deliberately never set from this - see
+        # `_load_section_review`'s docstring (issue #81).
+        changes["reviewer_notes"] = review["notes"]
     return changes
 
 

@@ -69,6 +69,27 @@ async def test_healthcheck_succeeds_when_bucket_exists(s3_storage: S3FileStorage
     await s3_storage.healthcheck()
 
 
+async def test_put_raises_storage_error_when_bucket_missing() -> None:
+    """issue #59: an unreachable/misconfigured bucket used to surface from
+    `put` as a bare, unhandled `botocore.exceptions.ClientError` (a generic
+    500) instead of the `StorageError` (503) the rest of the API uses for
+    "a dependency is unreachable" - the same failure mode `healthcheck`
+    already handled correctly."""
+    with mock_aws():
+        storage = S3FileStorage(_settings("missing-bucket"))
+
+        with pytest.raises(StorageError):
+            await storage.put("k", io.BytesIO(b"x"), "text/plain")
+
+
+async def test_delete_raises_storage_error_when_bucket_missing() -> None:
+    with mock_aws():
+        storage = S3FileStorage(_settings("missing-bucket"))
+
+        with pytest.raises(StorageError):
+            await storage.delete("k")
+
+
 async def test_healthcheck_raises_storage_error_when_bucket_missing() -> None:
     with mock_aws():
         # No `create_bucket` call this time - the bucket the storage is

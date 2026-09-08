@@ -178,7 +178,17 @@ class RunService:
         )
         created = await self._runs.add(run)
 
-        project.last_run_id = created.id
+        # `last_run_id` is deliberately *not* set to this just-queued run
+        # here (issue #66): `_resolvable_base_run` (regenerate/export) treats
+        # it as "the base to resume from", so eagerly pointing it at a run
+        # that hasn't succeeded yet meant one failed/cancelled/still-queued
+        # full run permanently blocked regenerate/export until another full
+        # run succeeded - even though the *previous* succeeded run's work
+        # dir was still on disk and perfectly resumable. Only
+        # `GenerationService._import_graph`/`_import_target_node` (worker
+        # side, on an actually succeeded run) advance it now. The
+        # `updated_at` bump is left as-is - queueing a run is still activity
+        # worth reordering the project hub list by.
         project.updated_at = now
         # Only these two columns - a concurrent `PATCH /projects/{id}`
         # reading `project` in between must not have its own change
@@ -507,12 +517,71 @@ async def sweep_stale_work_dirs(run_repository: RunRepository, retention_days: f
     return removed
 
 
+async def sweep_orphaned_work_dirs(run_repository: RunRepository, runs_dir: str) -> int:
+    """Remove any directory directly under `RUNS_DIR` that no `runs` row
+    references at all, regardless of status (issue #57). `ProjectService.
+    delete` soft-deletes a project now, so its `runs` rows (and their
+    `work_dir`s) survive going forward - but a project hard-deleted before
+    that fix landed already cascaded its `runs` rows away, permanently
+    orphaning that project's (potentially hundreds of MB) work directories
+    with nothing left in the database to ever find them by. Unlike
+    `sweep_stale_work_dirs`, this doesn't wait out `retention_days`: a
+    directory with zero referencing rows isn't "idle", it's unreferenced
+    garbage the moment it's found - there's no in-flight run it could
+    possibly still belong to."""
+    runs_root = Path(runs_dir)
+    if not runs_root.is_dir():
+        return 0
+    known = {
+        str(Path(work_dir).resolve()) for work_dir in await run_repository.list_all_work_dirs()
+    }
+    removed = 0
+    for entry in sorted(runs_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if str(entry.resolve()) not in known:
+            await run_in_threadpool(shutil.rmtree, entry, True)
+            removed += 1
+    return removed
+
+
 def _read_run_meta(work_dir: str) -> dict[str, Any] | None:
     path = Path(work_dir) / book_command.OUT_DIRNAME / "run_meta.json"
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _run_meta_belongs_to_this_attempt(
+    run_meta: dict[str, Any] | None, started_at: datetime | None
+) -> bool:
+    """A `regenerate_section`/`export` run shares its base run's `work_dir`
+    verbatim. If *this* run is cancelled or times out, the CLI subprocess is
+    killed via SIGTERM/SIGKILL and never reaches the `finally` in
+    `llm_usage.write_run_meta` that (re)writes `run_meta.json` - so the file
+    still sitting there is whatever the base run (or an earlier attempt of
+    this same run, before a stale-requeue) left behind. Nothing about
+    `run_meta.json`'s own contents identifies which run wrote it (the CLI's
+    `run_id` is an internal timestamp, unrelated to the API's `Run.id`), so
+    the only way to tell it's stale is to compare when it was written
+    against when *this* attempt actually started (issue #81) - a
+    `run_meta.json` that finished before this attempt even claimed the run
+    can't possibly be this attempt's own output. Attributing a stale file's
+    totals/error to this run would double-count cost and misattribute a
+    failure that was really the base run's."""
+    if not run_meta or started_at is None:
+        return False
+    finished_at_raw = run_meta.get("finished_at")
+    if not isinstance(finished_at_raw, str):
+        return False
+    try:
+        finished_at = datetime.fromisoformat(finished_at_raw)
+    except ValueError:
+        return False
+    if finished_at.tzinfo is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
+    return finished_at >= started_at
 
 
 def _extract_totals(run_meta: dict[str, Any] | None) -> tuple[int | None, float | None]:
@@ -1003,6 +1072,13 @@ class GenerationService:
         self, run: Run, exit_code: int, project: Project, *, timed_out: bool = False
     ) -> Run:
         run_meta = await run_in_threadpool(_read_run_meta, run.work_dir)
+        if not _run_meta_belongs_to_this_attempt(run_meta, run.started_at):
+            # A cancelled/timed-out regenerate_section/export run shares its
+            # base run's work_dir, and its own CLI subprocess never got to
+            # rewrite run_meta.json (issue #81) - what's on disk is the base
+            # run's (or an earlier attempt's) leftover output. Don't
+            # attribute its totals/error to this run.
+            run_meta = None
         total_tokens, total_cost = _extract_totals(run_meta)
 
         current = await self._runs.get(run.id)

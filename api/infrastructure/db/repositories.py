@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.domain.models import Project
@@ -61,12 +61,19 @@ class SqlAlchemyProjectRepository:
 
     async def get(self, project_id: uuid.UUID) -> Project | None:
         record = await self._session.get(ProjectRecord, project_id)
-        return _to_domain(record) if record is not None else None
+        if record is None or record.deleted_at is not None:
+            return None
+        return _to_domain(record)
 
     async def list(self, limit: int, offset: int) -> tuple[list[Project], int]:
-        total = await self._session.scalar(select(func.count()).select_from(ProjectRecord))
+        total = await self._session.scalar(
+            select(func.count())
+            .select_from(ProjectRecord)
+            .where(ProjectRecord.deleted_at.is_(None))
+        )
         result = await self._session.execute(
             select(ProjectRecord)
+            .where(ProjectRecord.deleted_at.is_(None))
             .order_by(ProjectRecord.updated_at.desc())
             .limit(limit)
             .offset(offset)
@@ -116,10 +123,32 @@ class SqlAlchemyProjectRepository:
         return _to_domain(record)
 
     async def delete(self, project_id: uuid.UUID) -> None:
-        record = await self._session.get(ProjectRecord, project_id)
-        if record is not None:
-            await self._session.delete(record)
-            await self._session.commit()
+        # Soft delete (issue #57): never a SQL `DELETE`, so the project's
+        # `runs` (and `run_artifacts`/`run_events` cascading from them)
+        # survive - a hard delete used to cascade those away, permanently
+        # orphaning the run's work directory on disk with nothing left in
+        # the database for `sweep_stale_work_dirs`/`sweep_orphaned_work_dirs`
+        # to ever find it by.
+        now = datetime.now(timezone.utc)
+        # Cascade the soft delete onto the project's own sources, the same
+        # way `SourceService.remove` soft-deletes one (`deleted_at` set,
+        # `file_id` nulled so the `RESTRICT` FK on `project_sources.file_id`
+        # no longer blocks deleting a file this project no longer
+        # references) - preserving the pre-soft-delete contract that
+        # deleting a project frees up its attached files for deletion,
+        # instead of leaving their source rows "live" forever under a
+        # project that's no longer reachable through the API.
+        await self._session.execute(
+            update(SourceRecord)
+            .where(SourceRecord.project_id == project_id, SourceRecord.deleted_at.is_(None))
+            .values(deleted_at=now, file_id=None)
+        )
+        await self._session.execute(
+            update(ProjectRecord)
+            .where(ProjectRecord.id == project_id, ProjectRecord.deleted_at.is_(None))
+            .values(deleted_at=now)
+        )
+        await self._session.commit()
 
     async def sources_count(self, project_id: uuid.UUID) -> int:
         total = await self._session.scalar(

@@ -120,6 +120,145 @@ async def test_create_node_appends_order_index_by_default(client: AsyncClient) -
     assert second["orderIndex"] == 1
 
 
+async def test_create_node_with_explicit_order_index_shifts_existing_siblings(
+    client: AsyncClient,
+) -> None:
+    """issue #67: `POST /outline` used to write a caller-supplied
+    `orderIndex` verbatim. Under a real parent, inserting a second child at
+    an already-occupied position used to raise a raw `IntegrityError` from
+    `uq_outline_nodes_project_parent_order`, surfaced as a generic 500 -
+    it must instead shift the existing sibling(s) out of the way, the same
+    way `PATCH .../outline/{id}` already does."""
+    project = await _create_project(client)
+    project_id = project["id"]
+    parent = await _create_node(client, project_id, title="Parent")
+    first = await _create_node(client, project_id, title="First", parentId=parent["id"])
+    second = await _create_node(client, project_id, title="Second", parentId=parent["id"])
+    assert (first["orderIndex"], second["orderIndex"]) == (0, 1)
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "Inserted", "parentId": parent["id"], "orderIndex": 0},
+    )
+    assert response.status_code == 201, response.text
+    inserted = response.json()
+    assert inserted["orderIndex"] == 0
+
+    list_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    by_id = {n["id"]: n for n in list_response.json()["items"]}
+    assert by_id[inserted["id"]]["orderIndex"] == 0
+    assert by_id[first["id"]]["orderIndex"] == 1
+    assert by_id[second["id"]]["orderIndex"] == 2
+
+
+async def test_create_node_with_explicit_order_index_at_root_never_duplicates_positions(
+    client: AsyncClient,
+) -> None:
+    """issue #67: at root level (`parentId: null`), the same unchecked-write
+    bug didn't even raise - both SQLite and Postgres treat `NULL` as
+    distinct in the (`project_id`, `parent_id`, `order_index`) unique index
+    by default, so two live root nodes could silently end up sharing
+    `order_index: 0`, making the outline order (and the `sectionNumber`/
+    `cliKey` derived from it) nondeterministic. Creating with an explicit
+    `orderIndex` at root must shift existing root siblings instead."""
+    project = await _create_project(client)
+    project_id = project["id"]
+    first = await _create_node(client, project_id, title="First")
+    second = await _create_node(client, project_id, title="Second")
+    assert (first["orderIndex"], second["orderIndex"]) == (0, 1)
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "Inserted", "orderIndex": 0},
+    )
+    assert response.status_code == 201, response.text
+    inserted = response.json()
+
+    list_response = await client.get(f"/api/v1/projects/{project_id}/outline")
+    items = list_response.json()["items"]
+    order_indexes = sorted(n["orderIndex"] for n in items)
+    assert order_indexes == [0, 1, 2]
+    by_id = {n["id"]: n for n in items}
+    assert by_id[inserted["id"]]["orderIndex"] == 0
+    assert by_id[first["id"]]["orderIndex"] == 1
+    assert by_id[second["id"]]["orderIndex"] == 2
+
+
+async def test_create_node_rejects_out_of_range_order_index_with_422(
+    client: AsyncClient,
+) -> None:
+    project = await _create_project(client)
+    project_id = project["id"]
+    await _create_node(client, project_id, title="Only")
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "TooFar", "orderIndex": 5},
+    )
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+    negative_response = await client.post(
+        f"/api/v1/projects/{project_id}/outline",
+        json={"title": "Negative", "orderIndex": -1},
+    )
+    assert negative_response.status_code == 422
+
+
+async def test_outline_repository_add_translates_order_collision_into_409(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Backstop for a concurrent write racing past `OutlineService.create`'s
+    own check-then-shift logic (issue #67) - a real
+    `uq_outline_nodes_project_parent_order` collision at the repository
+    layer must come back as `Conflict` (409), not bubble up as a raw,
+    unhandled `IntegrityError` (generic 500). Uses a real (non-root)
+    `parent_id` so the collision is caught by both backends' default unique
+    index semantics, not just Postgres's `NULLS NOT DISTINCT` (which only
+    covers the root/`parent_id IS NULL` case, and which SQLite - the test
+    suite's default backend - doesn't support at all)."""
+    from api.core.errors import Conflict
+    from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+
+    async with session_factory() as session:
+        project_repo = SqlAlchemyProjectRepository(session)
+        outline_repo = SqlAlchemyOutlineRepository(session)
+
+        project = await project_repo.add(
+            _domain_project_for_outline_repo_test()
+        )
+        parent = await outline_repo.add(_domain_node(project.id, None, 0))
+        await outline_repo.add(_domain_node(project.id, parent.id, 0))
+
+        with pytest.raises(Conflict):
+            await outline_repo.add(_domain_node(project.id, parent.id, 0))
+
+
+def _domain_project_for_outline_repo_test():
+    from api.domain.models import OutputFormat, Project, TargetAudience
+
+    now = datetime.now(timezone.utc)
+    return Project(
+        id=uuid.uuid4(),
+        owner_id=None,
+        title="Repo Test",
+        subtitle="Subtitle",
+        authors=["Author"],
+        topic="topic",
+        target_audience=TargetAudience.GRADUATE,
+        total_pages_budget=100,
+        equation_frequency_level=2,
+        do_consider_outline=True,
+        do_consider_previous_sections=True,
+        output_format=OutputFormat.MARKDOWN,
+        max_outline_levels=3,
+        additional_requirements=None,
+        last_run_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
 async def test_create_node_depth_limit_rejected_with_422(client: AsyncClient) -> None:
     project = await _create_project(client, maxOutlineLevels=3)
     project_id = project["id"]

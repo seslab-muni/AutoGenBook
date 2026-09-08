@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -315,6 +316,55 @@ async def test_execute_marks_failed_on_nonzero_cli_exit(
     assert finished.status == RunStatus.failed
     assert finished.exit_code != 0
     assert finished.error is not None
+
+
+async def test_finalize_ignores_stale_run_meta_left_by_a_shared_work_dir(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #81: a `regenerate_section`/`export` run reuses its base run's
+    `work_dir` verbatim. If *this* run's own CLI subprocess never gets to
+    (re)write `run_meta.json` - killed by cancellation or a timeout before
+    reaching the `finally` that writes it - `_finalize` used to read
+    whatever `run_meta.json` was already sitting in that shared directory
+    (the base run's own, from a run that finished over an hour before this
+    attempt even started), double-counting its cost/tokens onto this run and
+    misattributing its error string on a failed exit."""
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        work_dir = tmp_path / "shared-run"
+        out_dir = work_dir / "out"
+        out_dir.mkdir(parents=True)
+        stale_finished_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        (out_dir / "run_meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "20260101T000000Z",
+                    "finished_at": stale_finished_at.isoformat(),
+                    "token_totals": {"writer": 12345},
+                    "cost_totals_usd": {"writer": 6.78},
+                    "error": "the base run's own failure message",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(
+                project.id,
+                work_dir,
+                kind=RunKind.regenerate_section,
+                started_at=datetime.now(timezone.utc),
+                cancel_requested=False,
+            )
+        )
+        service = _make_service(session, InMemoryFileStorage(), _settings())
+
+        finished = await service._finalize(run, exit_code=1, project=project)
+
+    assert finished.status == RunStatus.failed
+    assert finished.total_tokens is None
+    assert finished.total_cost_usd is None
+    assert finished.error == "CLI exited with code 1"
 
 
 async def test_execute_on_a_reclaimed_run_does_not_collide_on_seq_or_hang(

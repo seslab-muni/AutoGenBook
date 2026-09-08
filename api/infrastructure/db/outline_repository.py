@@ -5,9 +5,10 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.errors import NotFound
+from api.core.errors import Conflict, NotFound
 from api.domain.models import OutlineNode
 from api.infrastructure.db.models import OutlineNodeRecord
 
@@ -130,7 +131,20 @@ class SqlAlchemyOutlineRepository:
         _apply_domain_to_record(node, record)
         record.created_at = node.created_at
         self._session.add(record)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            # Backstop for a concurrent insert/reorder racing this one past
+            # `OutlineService.create`'s own check-then-shift logic - the
+            # partial unique index (`uq_outline_nodes_project_parent_order`)
+            # is the actual source of truth. Surface it as a normal
+            # conflict instead of the generic 500 an unhandled
+            # `IntegrityError` used to produce (issue #67), mirroring
+            # `SqlAlchemyRunRepository.add`'s handling of `uq_runs_project_active`.
+            await self._session.rollback()
+            raise Conflict(
+                f"node {node.id} collides with an existing sibling position"
+            ) from exc
         await self._session.refresh(record)
         return _to_domain(record)
 

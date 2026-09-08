@@ -244,6 +244,56 @@ async def test_export_end_to_end_does_not_regenerate_sections(
     assert project_after.json()["lastRunId"] == base_run["id"]
 
 
+async def test_regenerate_resolves_previous_succeeded_run_after_a_later_run_never_succeeds(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """issue #66: `RunService.create` used to set `project.lastRunId` to the
+    just-queued run immediately, at queue time - before it had any chance to
+    succeed. `_resolvable_base_run` (regenerate/export) treats `lastRunId` as
+    "the base to resume from", so a full run started after an earlier one
+    succeeded, that itself never succeeds (cancelled here before the worker
+    even claims it, same as a run that fails or is simply still queued),
+    permanently overwrote `lastRunId` and made every subsequent
+    regenerate/export 409 - even though the first run's succeeded work dir
+    was still on disk and perfectly resumable."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(client)
+    project_id = project["id"]
+    node = await _create_node(client, project_id, "Chapter A")
+
+    base_run = await _run_full(client, project_id, session_factory, file_storage, settings)
+
+    second_run_response = await client.post(
+        f"/api/v1/projects/{project_id}/runs", json={"outline": "project"}
+    )
+    assert second_run_response.status_code == 202, second_run_response.text
+    second_run = second_run_response.json()
+
+    # Queueing the second run must not overwrite `lastRunId` before it has
+    # actually succeeded.
+    project_after_queue = await client.get(f"/api/v1/projects/{project_id}")
+    assert project_after_queue.json()["lastRunId"] == base_run["id"]
+
+    cancel_response = await client.post(f"/api/v1/runs/{second_run['id']}/cancel")
+    assert cancel_response.status_code == 202, cancel_response.text
+    assert cancel_response.json()["status"] == "cancelled"
+
+    project_after_cancel = await client.get(f"/api/v1/projects/{project_id}")
+    assert project_after_cancel.json()["lastRunId"] == base_run["id"]
+
+    regen_response = await client.post(
+        f"/api/v1/projects/{project_id}/outline/{node['id']}/regenerate", json={}
+    )
+    assert regen_response.status_code == 202, regen_response.text
+    assert regen_response.json()["baseRunId"] == base_run["id"]
+
+
 async def test_regenerate_404_for_missing_node(
     app, client: AsyncClient, tmp_path: Path
 ) -> None:

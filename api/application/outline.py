@@ -122,8 +122,29 @@ class OutlineService:
             )
 
         siblings = [n for n in flat if n.parent_id == parent_id]
-        if order_index is None:
-            order_index = max((n.order_index for n in siblings), default=-1) + 1
+        # An explicit `order_index` is inserted, not trusted verbatim
+        # (issue #67): naively writing the caller's value raised a generic
+        # 500 on a real collision under a non-root parent (a raw
+        # `IntegrityError` from `uq_outline_nodes_project_parent_order`),
+        # and silently produced two nodes sharing the same root-level
+        # position (`parent_id IS NULL`, which Postgres's default unique-
+        # index semantics never compare equal). The requested index is
+        # validated against the current sibling count and, below, routed
+        # through the same shift-siblings `reorder` call `update` already
+        # uses for a position change, instead of being written directly.
+        requested_order_index = order_index
+        if requested_order_index is not None and not (
+            0 <= requested_order_index <= len(siblings)
+        ):
+            raise ValidationFailed(
+                f"orderIndex {requested_order_index} is out of range for parent "
+                f"{parent_id}; must be between 0 and {len(siblings)}"
+            )
+        # Placeholder position for the initial insert - guaranteed free
+        # since it's past every existing sibling's index; `reorder` below
+        # overwrites every sibling's (including this new node's) final
+        # `order_index` in one pass, so this value never actually surfaces.
+        order_index = max((n.order_index for n in siblings), default=-1) + 1
 
         resolved_target_pages = target_pages if target_pages is not None else 1
         resolved_equation_density = (
@@ -157,6 +178,19 @@ class OutlineService:
             updated_at=now,
         )
         created = await self._outline_repository.add(node)
+
+        if requested_order_index is not None:
+            sibling_ids = [n.id for n in siblings]
+            new_order = (
+                sibling_ids[:requested_order_index]
+                + [created.id]
+                + sibling_ids[requested_order_index:]
+            )
+            await self._outline_repository.reorder(project_id, parent_id, new_order)
+            refreshed = await self._outline_repository.list(project_id)
+            positioned = {n.id: n for n in assign_positions(refreshed)}
+            return positioned[created.id]
+
         positioned = {n.id: n for n in assign_positions(flat + [created])}
         return positioned[created.id]
 

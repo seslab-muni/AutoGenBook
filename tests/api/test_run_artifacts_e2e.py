@@ -16,7 +16,7 @@ from pathlib import Path
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.application.runs import GenerationService, sweep_stale_work_dirs
+from api.application.runs import GenerationService, sweep_orphaned_work_dirs, sweep_stale_work_dirs
 from api.core.settings import Settings, get_settings
 from api.domain.models import (
     OutputFormat,
@@ -342,3 +342,91 @@ async def test_sweep_stale_work_dirs_uses_the_newest_finished_at_across_a_shared
     assert removed == 1
     assert not shared_work_dir.exists()
     assert export_run.id != base_run.id
+
+
+async def test_sweep_orphaned_work_dirs_removes_dirs_no_run_row_references(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #57: before projects were soft-deleted, a hard
+    `DELETE /projects/{id}` cascaded away every `runs` row for it - and with
+    it, the only thing `sweep_stale_work_dirs` uses to find a work
+    directory at all - permanently orphaning that project's (potentially
+    huge) work directory with nothing left in the database to ever clean it
+    up. `sweep_orphaned_work_dirs` finds and removes those by scanning
+    `RUNS_DIR` directly, rather than working backwards from `runs` rows."""
+    referenced_dir = tmp_path / "referenced-run"
+    referenced_dir.mkdir()
+    orphaned_dir = tmp_path / "orphaned-run"
+    orphaned_dir.mkdir()
+    (orphaned_dir / "out").mkdir()
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run_repo = SqlAlchemyRunRepository(session)
+        await run_repo.add(_make_run(project.id, referenced_dir))
+
+        removed = await sweep_orphaned_work_dirs(run_repo, str(tmp_path))
+
+    assert removed == 1
+    assert referenced_dir.exists()
+    assert not orphaned_dir.exists()
+
+
+async def test_sweep_orphaned_work_dirs_keeps_a_dir_referenced_by_a_soft_deleted_projects_run(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """issue #57: `ProjectService.delete` now soft-deletes the project, so
+    its `runs` rows (and their `work_dir`) survive - `sweep_orphaned_work_
+    dirs` must not remove a directory a `runs` row still references, no
+    matter whether that row's project is itself soft-deleted."""
+    work_dir = tmp_path / "still-referenced"
+    work_dir.mkdir()
+
+    async with session_factory() as session:
+        project_repo = SqlAlchemyProjectRepository(session)
+        project = await project_repo.add(_make_project())
+        run_repo = SqlAlchemyRunRepository(session)
+        await run_repo.add(_make_run(project.id, work_dir))
+
+        await project_repo.delete(project.id)
+        assert await project_repo.get(project.id) is None  # soft-deleted
+
+        removed = await sweep_orphaned_work_dirs(run_repo, str(tmp_path))
+
+    assert removed == 0
+    assert work_dir.exists()
+
+
+async def test_delete_project_with_a_finished_run_keeps_its_work_dir_on_disk(
+    app,
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """issue #57, end to end: deleting a project that has a succeeded run
+    must not orphan that run's work directory - the run row (and thus the
+    directory `sweep_orphaned_work_dirs` would otherwise consider garbage)
+    survives the project's soft delete."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project_response = await client.post("/api/v1/projects", json=MINIMAL_PROJECT)
+    project_id = project_response.json()["id"]
+
+    run_response = await client.post(f"/api/v1/projects/{project_id}/runs", json={})
+    run_id = run_response.json()["id"]
+    finished = await _drive_generation(run_id, session_factory, file_storage, settings)
+    assert finished.status == RunStatus.succeeded
+
+    work_dir = Path(settings.runs_dir) / run_id
+    assert work_dir.is_dir()
+
+    delete_response = await client.delete(f"/api/v1/projects/{project_id}")
+    assert delete_response.status_code == 204
+
+    async with session_factory() as session:
+        removed = await sweep_orphaned_work_dirs(SqlAlchemyRunRepository(session), settings.runs_dir)
+
+    assert removed == 0
+    assert work_dir.is_dir()

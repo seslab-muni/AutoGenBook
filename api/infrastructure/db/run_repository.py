@@ -250,6 +250,18 @@ class SqlAlchemyRunRepository:
         )
         return [row[0] for row in result.all()]
 
+    async def list_all_work_dirs(self) -> list[str]:
+        """Every `work_dir` any `runs` row references, regardless of status
+        - used by `sweep_orphaned_work_dirs` (issue #57) to find directories
+        under `RUNS_DIR` that no row references *at all* (e.g. a project
+        hard-deleted before soft delete existed, which cascaded away every
+        `runs` row for it and orphaned its work directory with nothing left
+        in the database to ever find it by). Unlike `list_stale_work_dirs`,
+        this doesn't filter by status or age - it's the full universe of
+        "known" directories, not just ones safe to remove on their own."""
+        result = await self._session.execute(select(RunRecord.work_dir).distinct())
+        return [row[0] for row in result.all()]
+
 
 def _event_to_domain(record: RunEventRecord) -> RunEvent:
     return RunEvent(

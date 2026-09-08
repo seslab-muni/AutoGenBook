@@ -80,11 +80,28 @@ class ProjectRecord(Base):
         onupdate=sa.func.now(),
         nullable=False,
     )
+    # Soft delete (issue #57): `DELETE /projects/{id}` only ever sets this,
+    # following the same pattern sources/outline nodes already use - never a
+    # SQL `DELETE`, so the project's `runs` rows (and everything cascading
+    # from them: `run_artifacts`, `run_events`) stay in place. A hard
+    # `session.delete` here used to cascade those away out from under
+    # in-flight work: a run still `running` when its project's `DELETE`
+    # returned 204 left the worker's `append_batch`/`_finalize` hitting an
+    # FK violation or an `assert record is not None` against a row that no
+    # longer existed, with the CLI subprocess still running unattended.
+    # `SqlAlchemyProjectRepository.get`/`list` filter this out; `delete`
+    # additionally refuses (409) while a run is still active for the
+    # project - see `ProjectService.delete`.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
     # `passive_deletes=False` (the default) makes the ORM issue explicit child
     # DELETEs when a project is deleted, so cascading works under SQLite too
     # (the test suite's engine doesn't enable `PRAGMA foreign_keys`), on top
-    # of the `ON DELETE CASCADE` FK enforced by Postgres in production.
+    # of the `ON DELETE CASCADE` FK enforced by Postgres in production. Dead
+    # in practice now that `delete` above never issues a SQL `DELETE`
+    # through the ORM - kept as a DB-level safety net, not the primary path.
     # `lazy="selectin"` avoids a lazy-load attempt on the async session.
     sources: Mapped[list["SourceRecord"]] = relationship(
         "SourceRecord",
@@ -167,6 +184,19 @@ class OutlineNodeRecord(Base):
         # avoid ever colliding within a single statement, since this
         # constraint can't defer the check to commit time the way a
         # deferrable table constraint could.
+        #
+        # `postgresql_nulls_not_distinct` (Postgres 15+, the version this
+        # project targets - `docker-compose.yml` pins `postgres:16-alpine`)
+        # makes two rows with `parent_id IS NULL` (root-level siblings)
+        # compare equal on that column instead of Postgres's default "every
+        # NULL is distinct from every other NULL" - without it, two root
+        # nodes could silently share the same `order_index`, since the
+        # *whole* indexed tuple was never considered a duplicate whenever
+        # any one column was NULL (issue #67). SQLite has no equivalent
+        # syntax and ignores this dialect-specific option entirely, so the
+        # collision there is caught by `OutlineService.create` routing an
+        # explicit `orderIndex` through the same shift-siblings logic
+        # `update` already uses, rather than by this index.
         sa.Index(
             "uq_outline_nodes_project_parent_order",
             "project_id",
@@ -175,6 +205,7 @@ class OutlineNodeRecord(Base):
             unique=True,
             postgresql_where=sa.text("deleted_at IS NULL"),
             sqlite_where=sa.text("deleted_at IS NULL"),
+            postgresql_nulls_not_distinct=True,
         ),
         sa.Index("ix_outline_nodes_project_id_cli_key", "project_id", "cli_key"),
     )
