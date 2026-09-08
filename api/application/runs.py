@@ -262,11 +262,15 @@ class RunService:
     ) -> tuple[list[tuple[RunArtifact, File]], int]:
         await self._get(run_id)
         artifacts_, total = await self._artifacts.list(run_id, limit, offset)
-        pairs: list[tuple[RunArtifact, File]] = []
-        for artifact in artifacts_:
-            file = await self._files.get(artifact.file_id)
-            if file is not None:
-                pairs.append((artifact, file))
+        # One batched lookup instead of one `SELECT` per artifact (issue
+        # #51) - a run produces one artifact per section plus reviews, so
+        # 50-200 rows here is normal.
+        files_by_id = await self._files.get_many([artifact.file_id for artifact in artifacts_])
+        pairs = [
+            (artifact, files_by_id[artifact.file_id])
+            for artifact in artifacts_
+            if artifact.file_id in files_by_id
+        ]
         return pairs, total
 
     async def _resolvable_base_run(self, project_id: uuid.UUID, base_run_id: uuid.UUID | None) -> Run:

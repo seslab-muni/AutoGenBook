@@ -65,21 +65,57 @@ class SqlAlchemyProjectRepository:
             return None
         return _to_domain(record)
 
-    async def list(self, limit: int, offset: int) -> tuple[list[Project], int]:
+    async def list_with_counts(
+        self, limit: int, offset: int
+    ) -> tuple[list[tuple[Project, int, int]], int]:
+        """Like `list`, but paired with each project's `sources_count`/
+        `outline_node_count` - computed via one grouped-count subquery per
+        relation, outer-joined onto the page of projects, rather than
+        `ProjectService.list` issuing two `count(*)` queries per project
+        (402 statements for one `GET /projects` at `limit=200`, issue #51).
+        Total statement count here stays flat (3, regardless of page size)
+        as the number of projects grows."""
         total = await self._session.scalar(
             select(func.count())
             .select_from(ProjectRecord)
             .where(ProjectRecord.deleted_at.is_(None))
         )
+        sources_counts = (
+            select(
+                SourceRecord.project_id.label("project_id"),
+                func.count().label("sources_count"),
+            )
+            .where(SourceRecord.deleted_at.is_(None))
+            .group_by(SourceRecord.project_id)
+            .subquery()
+        )
+        outline_counts = (
+            select(
+                OutlineNodeRecord.project_id.label("project_id"),
+                func.count().label("outline_node_count"),
+            )
+            .where(OutlineNodeRecord.deleted_at.is_(None))
+            .group_by(OutlineNodeRecord.project_id)
+            .subquery()
+        )
         result = await self._session.execute(
-            select(ProjectRecord)
+            select(
+                ProjectRecord,
+                func.coalesce(sources_counts.c.sources_count, 0),
+                func.coalesce(outline_counts.c.outline_node_count, 0),
+            )
+            .outerjoin(sources_counts, sources_counts.c.project_id == ProjectRecord.id)
+            .outerjoin(outline_counts, outline_counts.c.project_id == ProjectRecord.id)
             .where(ProjectRecord.deleted_at.is_(None))
             .order_by(ProjectRecord.updated_at.desc())
             .limit(limit)
             .offset(offset)
         )
-        records = result.scalars().all()
-        return [_to_domain(record) for record in records], total or 0
+        rows = [
+            (_to_domain(record), sources_count, outline_node_count)
+            for record, sources_count, outline_node_count in result.all()
+        ]
+        return rows, total or 0
 
     async def add(self, project: Project) -> Project:
         record = ProjectRecord(
@@ -149,22 +185,3 @@ class SqlAlchemyProjectRepository:
             .values(deleted_at=now)
         )
         await self._session.commit()
-
-    async def sources_count(self, project_id: uuid.UUID) -> int:
-        total = await self._session.scalar(
-            select(func.count())
-            .select_from(SourceRecord)
-            .where(SourceRecord.project_id == project_id, SourceRecord.deleted_at.is_(None))
-        )
-        return total or 0
-
-    async def outline_node_count(self, project_id: uuid.UUID) -> int:
-        total = await self._session.scalar(
-            select(func.count())
-            .select_from(OutlineNodeRecord)
-            .where(
-                OutlineNodeRecord.project_id == project_id,
-                OutlineNodeRecord.deleted_at.is_(None),
-            )
-        )
-        return total or 0

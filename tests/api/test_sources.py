@@ -98,6 +98,70 @@ async def test_attach_list_get_update_detach_round_trip(client: AsyncClient) -> 
     assert file_get.status_code == 200
 
 
+async def _attach_source(client: AsyncClient, project_id: str, filename: str) -> dict:
+    file = await _upload_file(client, filename)
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/sources", json={"fileId": file["id"]}
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_list_sources_query_count_stays_flat_as_sources_grow(
+    client: AsyncClient, count_statements
+) -> None:
+    """Regression for issue #51: `SourceService.list` used to run one
+    `SELECT files` per source (`_require_file` in a loop) on top of the
+    page's own query, so `GET /projects/{id}/sources` cost grew linearly
+    with the number of attached sources. `_pair_with_files` batches that
+    into one `SELECT ... WHERE id IN (...)` instead, so the statement count
+    for one page must stay flat regardless of how many sources are on it."""
+    project = await _create_project(client)
+    await _attach_source(client, project["id"], "one.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}/sources")
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    first_page_statement_count = len(statements)
+
+    for i in range(9):
+        await _attach_source(client, project["id"], f"more-{i}.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}/sources")
+    assert response.status_code == 200
+    assert response.json()["total"] == 10
+    assert len(statements) == first_page_statement_count
+
+
+async def test_get_project_query_count_stays_flat_as_sources_grow(
+    client: AsyncClient, count_statements
+) -> None:
+    """Regression for issue #51: `SourceService.list_for_embed` (used to
+    embed the full `sources` array on `GET/POST/PATCH /projects/{id}` and on
+    `duplicate`) has the same per-source `SELECT files` pattern as `list`
+    above - this covers the embed path specifically, since it runs on every
+    project read, not just `GET .../sources`."""
+    project = await _create_project(client)
+    await _attach_source(client, project["id"], "one.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}")
+    assert response.status_code == 200
+    assert len(response.json()["sources"]) == 1
+    first_get_statement_count = len(statements)
+
+    for i in range(9):
+        await _attach_source(client, project["id"], f"more-{i}.txt")
+
+    with count_statements() as statements:
+        response = await client.get(f"/api/v1/projects/{project['id']}")
+    assert response.status_code == 200
+    assert len(response.json()["sources"]) == 10
+    assert len(statements) == first_get_statement_count
+
+
 async def test_add_source_defaults_type_from_extension(client: AsyncClient) -> None:
     project = await _create_project(client)
     for filename, expected_type in [
