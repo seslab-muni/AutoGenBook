@@ -196,6 +196,13 @@ kubectl create secret generic autogenbook-secrets \
   --from-literal=AUTH_JWT_SECRET="$(openssl rand -hex 32)"
 ```
 
+**Rotating any of these later**: put the same keys in a `.env.production` file at the repo root
+(plain `KEY=VALUE` lines - gitignored by `/.env*` in `.gitignore`, and `scripts/deploy.py`
+refuses to read it if it somehow isn't) and run `python scripts/deploy.py --sync-secrets` to see
+which keys would change, or add `--apply` to actually write them - it's idempotent, unlike the
+`create` command above, and never prints any secret value, only which keys are new/changed/
+unchanged.
+
 ## 5. Storage
 
 `api` and `worker` share two volumes (`runs_data`, `kb_extract_cache`) exactly like they share
@@ -801,6 +808,34 @@ Let's-Encrypt certificate to issue (`kubectl describe certificate` / `kubectl de
 web` if it hangs).
 
 ## 16. Updating a running deployment
+
+**Use `scripts/deploy.py` for this** (day-to-day redeploys after the one-time setup above) rather
+than doing it by hand. It figures out which of the two images (`autogenbook` for api+worker,
+`autogenbook-web` for web) actually needs rebuilding by diffing the relevant source paths against
+whatever commit is *currently live* on the cluster (read back from `kubectl`, not a local
+file), tags images by git commit SHA instead of a hand-picked version number, and automatically
+rolls every Deployment it touched back to its previous state if any rollout fails - so the
+cluster never ends up with an api/web pair that were never meant to run together.
+
+```bash
+# Show what would be deployed, without touching anything (the default - always safe to run):
+python scripts/deploy.py
+
+# Actually build/push/apply it, with a confirmation prompt:
+python scripts/deploy.py --apply
+
+# Sync .env.production's values into the autogenbook-secrets Secret (see step 4) - also
+# dry-run by default, and never prints secret values:
+python scripts/deploy.py --sync-secrets --apply
+```
+
+Run `python scripts/deploy.py --help` for every flag (`--force {core,web,all}` to rebuild
+regardless of the diff, `--no-rollback` to leave a failed rollout in place for debugging,
+`-y`/`--yes` to skip the confirmation prompt for scripting). One real limitation worth knowing:
+rolling back restores container images, not the database - if a failed rollout's `api` container
+already ran an Alembic migration on startup, the rollback does not undo that migration.
+
+The equivalent by hand, for reference or if the script itself is unavailable:
 
 ```bash
 docker build -t cerit.io/conerzyo/autogenbook:<NEW_TAG> .
