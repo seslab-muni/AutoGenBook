@@ -29,7 +29,7 @@ export function CitationsPanel({ citations, onOpenSource }: CitationsPanelProps)
   const sorted = [...citations].sort((a, b) => b.relevanceScore - a.relevanceScore);
 
   return (
-    <ul className="flex flex-col gap-2 overflow-auto p-3">
+    <ul className="custom-scrollbar flex flex-col gap-2 overflow-auto p-3">
       {sorted.map((citation) => (
         <li key={citation.id} className="rounded-lg border bg-card p-2.5 text-xs">
           <div className="flex items-start justify-between gap-2">

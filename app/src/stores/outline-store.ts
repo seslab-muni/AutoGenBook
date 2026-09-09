@@ -10,15 +10,30 @@ import { persist } from 'zustand/middleware';
  */
 interface OutlineState {
   collapsedByProject: Record<string, string[]>;
+  /** Whether `collapsedByProject[projectId]` has already been seeded for a large outline (see `seedCollapsed`) — an empty array is otherwise indistinguishable from "user expanded everything". */
+  seededByProject: Record<string, boolean>;
   toggleCollapsed: (projectId: string, nodeId: string) => void;
   expand: (projectId: string, nodeIds: readonly string[]) => void;
   isCollapsed: (projectId: string, nodeId: string) => boolean;
+  /**
+   * One-time (per project) default-collapse for a large outline: collapses `collapseIds` except
+   * those in `keepExpandedIds` (the path to whatever's selected). No-ops if already seeded, so it's
+   * safe to call from an effect on every render — manual expand/collapse afterwards stays authoritative.
+   */
+  seedCollapsed: (
+    projectId: string,
+    collapseIds: readonly string[],
+    keepExpandedIds: readonly string[],
+  ) => void;
+  expandAll: (projectId: string) => void;
+  collapseAll: (projectId: string, nodeIds: readonly string[]) => void;
 }
 
 export const useOutlineStore = create<OutlineState>()(
   persist(
     (set, get) => ({
       collapsedByProject: {},
+      seededByProject: {},
       toggleCollapsed: (projectId, nodeId) =>
         set((state) => {
           const collapsed = new Set(state.collapsedByProject[projectId] ?? []);
@@ -43,6 +58,24 @@ export const useOutlineStore = create<OutlineState>()(
         }),
       isCollapsed: (projectId, nodeId) =>
         (get().collapsedByProject[projectId] ?? []).includes(nodeId),
+      seedCollapsed: (projectId, collapseIds, keepExpandedIds) =>
+        set((state) => {
+          if (state.seededByProject[projectId]) return state;
+          const keep = new Set(keepExpandedIds);
+          const collapsed = collapseIds.filter((id) => !keep.has(id));
+          return {
+            collapsedByProject: { ...state.collapsedByProject, [projectId]: collapsed },
+            seededByProject: { ...state.seededByProject, [projectId]: true },
+          };
+        }),
+      expandAll: (projectId) =>
+        set((state) => ({
+          collapsedByProject: { ...state.collapsedByProject, [projectId]: [] },
+        })),
+      collapseAll: (projectId, nodeIds) =>
+        set((state) => ({
+          collapsedByProject: { ...state.collapsedByProject, [projectId]: [...nodeIds] },
+        })),
     }),
     { name: 'autogenbook-outline' },
   ),

@@ -161,7 +161,7 @@ export function ManuscriptSheet({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
         {view === 'source' ? (
           <SectionEditor
             value={draft}

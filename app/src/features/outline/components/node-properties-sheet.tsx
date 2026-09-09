@@ -78,7 +78,7 @@ function NodePropertiesForm({
         </SheetDescription>
       </SheetHeader>
 
-      <div className="flex flex-col gap-5 overflow-y-auto px-4 pb-4">
+      <div className="custom-scrollbar flex flex-col gap-5 overflow-y-auto px-4 pb-4">
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs font-medium text-foreground">
             <span>Target pages</span>
