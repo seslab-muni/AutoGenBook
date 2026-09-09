@@ -22,11 +22,11 @@ Sources used throughout: [Hello World example](https://docs.cerit.io/en/docs/exa
 | `<NAMESPACE>` (resolved) | Your cluster namespace | **`autogenbook`** (Rancher project `c-m-qvndqhf6:p-8cnwd`) |
 | `<HARBOR_USER>` (resolved) | Your Harbor username (lowercase) | **`conerzyo`** |
 | `<HOST>` (resolved) | Public hostname for the web UI | **`seslab-autogenbook`** (`seslab-autogenbook.dyn.cloud.e-infra.cz`) |
-| `<TAG>` | Image tag you push (e.g. a git short SHA) | your choice, still open |
+| `<TAG>` (resolved) | Image tag you push | **`1.0.0`** (initial release) |
 
-All of `<NAMESPACE>`, `<HARBOR_USER>`, and `<HOST>` are now filled in with real values
-throughout this guide — only `<TAG>`/`<NEW_TAG>` remain as literal placeholders, since that's
-a per-build choice rather than a fixed value.
+All of `<NAMESPACE>`, `<HARBOR_USER>`, `<HOST>`, and `<TAG>` are now filled in with real values
+throughout this guide — only `<NEW_TAG>` in step 16 (updating a running deployment) remains a
+literal placeholder, since each future update is its own per-build choice.
 
 **Rancher-managed namespace, two things to know before provisioning anything:**
 
@@ -120,12 +120,12 @@ bake secrets into the image.
 docker login cerit.io   # username = Harbor username, password = CLI secret from your profile
 
 # api + worker share one image (same as docker-compose.yml's `api`/`worker` both building `.`)
-docker build -t cerit.io/conerzyo/autogenbook:<TAG> .
-docker push cerit.io/conerzyo/autogenbook:<TAG>
+docker build -t cerit.io/conerzyo/autogenbook:1.0.0 .
+docker push cerit.io/conerzyo/autogenbook:1.0.0
 
 # frontend/nginx image
-docker build -t cerit.io/conerzyo/autogenbook-web:<TAG> ./app
-docker push cerit.io/conerzyo/autogenbook-web:<TAG>
+docker build -t cerit.io/conerzyo/autogenbook-web:1.0.0 ./app
+docker push cerit.io/conerzyo/autogenbook-web:1.0.0
 ```
 
 Images in your personal Harbor project are public-by-default within the cluster, so no
@@ -173,6 +173,9 @@ data:
   AUTOGENBOOK_KB_OCR: "1"
   AUTOGENBOOK_KB_OCR_LANG: "eng"
   MCP_GATEWAY_ENABLE: "0"
+  AUTOGENBOOK_LLM_MODEL: "glm-5.3"
+  AUTOGENBOOK_LLM_MINI_MODEL: "deepseek-v4-flash"
+  AUTOGENBOOK_FORCE_MINI_MODEL: "1"
 ```
 
 `DATABASE_URL`'s `$(POSTGRES_PASSWORD)` shell-style interpolation doesn't work inside a plain
@@ -180,13 +183,17 @@ ConfigMap value — build the real DSN as a Secret field instead (below), so thi
 is only there for reference/documentation; the Deployments will reference `DATABASE_URL` from
 the Secret, not the ConfigMap.
 
+`AUTH_JWT_SECRET` must be in this Secret too — `api/core/settings.py:Settings` refuses to boot
+without one at least 32 bytes long (issue #96, same JWT-cookie auth referenced in step 12).
+
 ```bash
 kubectl create secret generic autogenbook-secrets \
   --from-literal=POSTGRES_PASSWORD='<choose-a-strong-password>' \
   --from-literal=S3_SECRET_KEY='<choose-a-strong-secret>' \
   --from-literal=DATABASE_URL='postgresql+psycopg://autogenbook:<same-password-as-above>@db:5432/autogenbook' \
   --from-literal=OPENROUTER_API_KEY='<your-openrouter-key>' \
-  --from-literal=TAVILY_API_KEY='<your-tavily-key-or-empty>'
+  --from-literal=TAVILY_API_KEY='<your-tavily-key-or-empty>' \
+  --from-literal=AUTH_JWT_SECRET="$(openssl rand -hex 32)"
 ```
 
 ## 5. Storage
@@ -194,10 +201,24 @@ kubectl create secret generic autogenbook-secrets \
 `api` and `worker` share two volumes (`runs_data`, `kb_extract_cache`) exactly like they share
 Docker named volumes today — that requires `ReadWriteMany`, which on this platform means the
 `nfs-csi` storage class (per the [NGINX case study](https://docs.cerit.io/en/docs/case-studies/nginx)).
-Postgres and MinIO only need `ReadWriteOnce` each; `nfs-csi` also supports RWO, but if
-`kubectl get storageclass` shows a block-storage class on your cluster, prefer that for
-Postgres — Postgres on NFS works but is more sensitive to latency/locking behavior than a
-block volume.
+Postgres and MinIO only need `ReadWriteOnce` each.
+
+**Status: Postgres on `nfs-csi` failed in practice and was moved to block storage.** The plain
+`postgres:16-alpine` Deployment in step 6 crashlooped with `initdb: error: could not change
+permissions of directory "/var/lib/postgresql/data": Operation not permitted` — `nfs-csi`'s NFS
+export squashes root, so the kubelet can't `chown` the volume to `fsGroup: 999` no matter what
+`securityContext` the Pod sets, and this cluster's restricted Pod Security Admission (step 1)
+rules out the usual root-`initContainer`-chown workaround. This is a known NFS-CSI +
+fsGroup limitation, not a manifest bug — CERIT's own
+[CloudNative-PG operator page](https://docs.cerit.io/en/docs/operators/postgres-cnpg) exists
+specifically because of it. `kubectl get storageclass` on this cluster shows a Ceph RBD block
+class (`csi-ceph-rbd-du`), which sidesteps the problem entirely (a real block device doesn't
+have NFS's root-squash behavior) and needs no change to `k8s/db.yaml` — only `postgres-data`'s
+`storageClassName` below changed, from `nfs-csi` to `csi-ceph-rbd-du`. `minio-data` stays on
+`nfs-csi`: MinIO's own startup doesn't hit the same chown-on-init failure, so there was no
+reason to move it. If `csi-ceph-rbd-du` (or an equivalent block class) isn't available on your
+cluster, switch to the CloudNative-PG operator instead — it's the platform-documented fix for
+this exact issue.
 
 Sizes below are confirmed for this deployment's actual scale: a 4-person lab generating
 course-material books for two courses from up to ~100 sources total. That's a small workload —
@@ -214,7 +235,7 @@ metadata:
   name: postgres-data
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: nfs-csi
+  storageClassName: csi-ceph-rbd-du
   resources:
     requests:
       storage: 5Gi
@@ -264,6 +285,13 @@ that's what `fsGroup: 999` below is for. This is a commonly-hit rough edge with 
 Postgres pods; if the container CrashLoopBackOffs on first start with a permissions error,
 check `kubectl logs` first before assuming the manifest is wrong.
 
+**Second rough edge, hit right after the first was fixed by moving to block storage (step 5):**
+a freshly provisioned block volume's filesystem creates a `lost+found` directory at its root,
+and `initdb` refuses to initialize a directory that isn't completely empty —
+`initdb: error: directory "/var/lib/postgresql/data" exists but is not empty`. The official
+`postgres` image's own documented fix is to point `PGDATA` at a subdirectory of the mount
+instead of the mount root, which is what the `env:` block below does.
+
 ```yaml
 # k8s/db.yaml
 apiVersion: apps/v1
@@ -296,6 +324,8 @@ spec:
         envFrom:
         - configMapRef: {name: autogenbook-config}
         - secretRef: {name: autogenbook-secrets}
+        env:
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
         ports:
         - containerPort: 5432
         resources:
@@ -413,12 +443,20 @@ spec:
         envFrom:
         - configMapRef: {name: autogenbook-config}
         - secretRef: {name: autogenbook-secrets}
+        env:
+        - {name: HOME, value: /tmp}
         command: ["sh", "-c"]
         args:
         - >
           mc alias set local "$S3_ENDPOINT_URL" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" &&
           mc mb --ignore-existing "local/$S3_BUCKET"
 ```
+
+**Status: hit and fixed.** `minio/mc` doesn't set `$HOME` for its non-root UID, so it defaults to
+`/` — unwritable by UID 1000 — and `mc alias set` failed with `Unable to save new mc config.
+mkdir /.mc: permission denied`. The `env: HOME=/tmp` line above is the fix (same class of issue
+as the API image's `ENV HOME=/app` in step 1; `/tmp` is always world-writable, no `chown`
+needed).
 
 Run `kubectl apply -f k8s/minio-init-job.yaml` once after MinIO is `Ready`, or re-run the Job
 (`kubectl delete job minio-init && kubectl apply -f ...`) any time you rotate the bucket.
@@ -446,7 +484,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: api
-        image: cerit.io/conerzyo/autogenbook:<TAG>
+        image: cerit.io/conerzyo/autogenbook:1.0.0
         command: ["sh", "-c", "alembic -c api/alembic.ini upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
         securityContext:
           runAsUser: 1000
@@ -511,7 +549,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: worker
-        image: cerit.io/conerzyo/autogenbook:<TAG>
+        image: cerit.io/conerzyo/autogenbook:1.0.0
         command: ["python", "-m", "api.worker"]
         securityContext:
           runAsUser: 1000
@@ -558,7 +596,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: web
-        image: cerit.io/conerzyo/autogenbook-web:<TAG>
+        image: cerit.io/conerzyo/autogenbook-web:1.0.0
         securityContext:
           runAsUser: 101
           runAsGroup: 101
@@ -624,13 +662,22 @@ Only `web` gets an Ingress — `api`, `db`, `minio` stay `ClusterIP`-only, match
 `docker-compose.yml`'s split between the one host-published container and everything else on
 internal-only networks.
 
-## 12. Critical: this app has no built-in authentication — you must add some
+## 12. Application auth (in place) and optional Ingress-level hardening
 
-`docs/OPERATIONS.md` documents (issue #50) that `/api/v1` has **no authentication and no
-per-client quota**: anyone who can reach it can read/write every project, upload files, and
-kick off runs that spend your `OPENROUTER_API_KEY` budget. In Docker Compose that's mitigated
-by binding to `127.0.0.1` — on a public Ingress, that protection is simply gone. Do **not**
-apply the Ingress from step 11 without one of these:
+**Status: application-level auth shipped (issue #96, PR #99 `feature/auth-jwt-cookie`) after
+this guide was first written — the claim below that the app has no auth is outdated.**
+`docs/OPERATIONS.md`'s **Authentication and user management** section is the current source of
+truth: every `/api/v1` route requires a login session (an httpOnly, `SameSite=Lax` JWT cookie)
+except `POST /auth/login` and the health/ready probes, and the frontend gates on it too. That
+means `k8s/ingress.yaml` is safe to `kubectl apply` as-is — it does **not** need one of the
+options below before applying.
+
+What auth does *not* cover, per the same `docs/OPERATIONS.md` section: there's still no CORS
+middleware and no per-owner visibility filtering (any logged-in account can see every
+project) — auth exists because CERIT-SC requires it, not to segregate the lab's own accounts
+from each other. If you want defense-in-depth beyond the app's own login (e.g. keeping the
+Ingress unreachable to anyone without a second factor, or restricting to a known network),
+add one of these Ingress-level options on top:
 
 - **Basic auth** (simplest, works today):
   ```bash
@@ -737,7 +784,7 @@ kubectl apply -f k8s/minio-init-job.yaml
 kubectl wait --for=condition=complete job/minio-init --timeout=60s
 kubectl apply -f k8s/api.yaml -f k8s/worker.yaml -f k8s/web.yaml
 kubectl apply -f k8s/networkpolicy.yaml
-kubectl apply -f k8s/ingress.yaml   # only after step 12's auth annotation is in place
+kubectl apply -f k8s/ingress.yaml   # safe as-is - see step 12 on app-level auth
 ```
 
 ## 15. Verify
@@ -767,9 +814,10 @@ the frontend changes.
 
 ## 17. Open items / what's still needed
 
-- **Auth mechanism (step 12)** — deliberately deferred. Do not apply the Ingress from step 11
-  until one of basic auth / e-infra SSO / IP allowlist is decided and wired in; without it the
-  app is fully unauthenticated and reachable from the public internet.
+- **Auth mechanism (step 12)** — resolved: application-level JWT-cookie auth (issue #96)
+  shipped after this guide was written, so the Ingress from step 11 no longer needs one of
+  basic auth / e-infra SSO / IP allowlist before applying. Those remain available as optional
+  extra hardening on top of the app's own login.
 - **Namespace resource quota is currently zero** (`kubectl describe resourcequota -n
   autogenbook` → `Hard: 0` on `limits.cpu`/`limits.memory`/`requests.cpu`/`requests.memory`).
   This is a real, binding cap — not the "0 means unlimited" Rancher convention hoped for in
@@ -778,9 +826,7 @@ the frontend changes.
   CERIT support request) before applying anything below. A reasonable ask given what this
   stack actually requests in total: `requests.cpu: 4`, `requests.memory: 8Gi`, `limits.cpu: 8`,
   `limits.memory: 16Gi`.
-- Namespace, Harbor username, and hostname are resolved (`autogenbook` / `conerzyo` /
-  `seslab-autogenbook.dyn.cloud.e-infra.cz`) and committed as real files under `k8s/` —
-  `kubectl apply -f k8s/<file>.yaml` per the deploy order in step 14 (`k8s/ingress.yaml` is
-  deliberately excluded from that pattern; see its header comment).
-- `<TAG>` for the images you push — your choice (e.g. a git short SHA); find/replace it in
-  `k8s/api.yaml`, `k8s/worker.yaml`, `k8s/web.yaml` once decided.
+- Namespace, Harbor username, hostname, and image tag are resolved (`autogenbook` / `conerzyo` /
+  `seslab-autogenbook.dyn.cloud.e-infra.cz` / `1.0.0`) and committed as real files under `k8s/` —
+  `kubectl apply -f k8s/<file>.yaml` per the deploy order in step 14, `k8s/ingress.yaml`
+  included (see its header comment for why it's safe to apply as-is).
