@@ -40,7 +40,7 @@ function Harness({
   probeNodeIds?: string[];
 }) {
   const { data: project } = useQuery(projects.detail(projectId));
-  const { data: outlineData } = useQuery(outline.flat(projectId, { limit: 500 }));
+  const { data: outlineData } = useQuery(outline.flat(projectId));
   if (!project) return null;
   return (
     <>

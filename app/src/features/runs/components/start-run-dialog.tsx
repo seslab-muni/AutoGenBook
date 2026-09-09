@@ -55,8 +55,10 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
   const open = activeModal === 'start-run';
   const navigate = useNavigate();
 
+  // No `limit` override: shares the route loader's cache entry (`p.$projectId.tsx` already
+  // `ensureQueryData`s `outline.flat(project.id)`) instead of firing a second, redundant fetch.
   const { data: outlineData } = useQuery({
-    ...outline.flat(project.id, { limit: 500 }),
+    ...outline.flat(project.id),
     enabled: open,
   });
   const nodeCount = outlineData?.total ?? 0;

@@ -1,7 +1,6 @@
 import { apiClient, unwrap } from '@/api/client';
 import { authKeys } from '@/api/queries/keys';
 import { queryClient } from '@/app/query-client';
-import { router } from '@/app/router';
 
 /**
  * The signed-in user. There is no synchronous "do we have a session" check — the session cookie
@@ -29,6 +28,14 @@ export function getAuthHeaders(): Record<string, string> {
  * scoped under `authKeys.all`) so no stale "signed in" state lingers, then navigates to
  * `/login`. Not a hook (called from a plain click handler in `AppHeader`'s user menu), so it
  * drives the API call directly rather than through `useLogoutMutation`.
+ *
+ * `router` is imported dynamically (see `@/api/client`'s `responseMiddleware` for why): a static
+ * import here would put `@/app/router` in the same circular chain as this module and
+ * `@/api/client`, risking it capturing an uninitialized `queryClient` depending on bundler
+ * evaluation order. Navigation happens before the cache removal for the same reason it does
+ * there: `AppHeader`'s `useQuery(auth.me())` is still a mounted, active observer at this point,
+ * and removing its query while it's still observed would trigger an immediate (and pointless)
+ * refetch — navigating away first unmounts that observer.
  */
 export function signOut(): void {
   void unwrap(apiClient.POST('/api/v1/auth/logout'))
@@ -37,7 +44,8 @@ export function signOut(): void {
       // session cache is cleared and the user is sent to /login regardless.
     })
     .finally(() => {
-      queryClient.removeQueries({ queryKey: authKeys.all });
-      void router.navigate({ to: '/login' });
+      void import('@/app/router')
+        .then(({ router }) => router.navigate({ to: '/login' }))
+        .then(() => queryClient.removeQueries({ queryKey: authKeys.all }));
     });
 }
