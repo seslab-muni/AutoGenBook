@@ -72,7 +72,10 @@ interface CopilotPanelProps {
  * `NodePropertiesSheet` (#19); citations/review tabs are #20's.
  */
 export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPanelProps) {
-  const { data: outlineData } = useQuery(outline.flat(projectId, { limit: 500 }));
+  // No `limit` override: shares the route loader's cache entry (`p.$projectId.tsx` already
+  // `ensureQueryData`s `outline.flat(projectId)`) instead of firing a second, redundant fetch
+  // on every project page load.
+  const { data: outlineData } = useQuery(outline.flat(projectId));
   const flat = outlineData?.items ?? [];
   const node = selectedNodeId ? (flat.find((item) => item.id === selectedNodeId) ?? null) : null;
 

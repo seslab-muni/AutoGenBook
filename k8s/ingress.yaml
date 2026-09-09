@@ -1,7 +1,9 @@
-# Do NOT `kubectl apply` this until the auth mechanism (docs/DEPLOY_GUIDE.md section 12) is
-# actually wired in - as-is, applying this exposes an unauthenticated API to the public
-# internet. Add auth annotations (basic auth / e-infra SSO / IP allowlist, or drop this
-# Ingress-level gate entirely once real application-level auth ships) before applying.
+# Safe to `kubectl apply`: every `/api/v1` route (except `POST /auth/login` and the
+# health/ready probes) requires a login session - an httpOnly JWT cookie issued by the API
+# (issue #96, PR #99 `feature/auth-jwt-cookie`) - so this Ingress no longer exposes an
+# unauthenticated API. The Ingress-level options in docs/DEPLOY_GUIDE.md section 12 (basic
+# auth / e-infra SSO / IP allowlist) are optional extra hardening on top of that, not a
+# prerequisite - add them only if you want defense-in-depth beyond the app's own auth.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -9,6 +11,11 @@ metadata:
   annotations:
     kubernetes.io/tls-acme: "true"
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # ingress-nginx's own default (1m) sits in front of the `web` pod's nginx, which already
+    # allows up to MAX_UPLOAD_MB (200m, k8s/configmap.yaml) - without this, uploads over 1 MiB
+    # get a 413 from the ingress controller itself before ever reaching `web`, as plain HTML
+    # (not JSON), which is what broke the frontend's response parsing.
+    nginx.ingress.kubernetes.io/proxy-body-size: "200m"
 spec:
   ingressClassName: nginx
   tls:

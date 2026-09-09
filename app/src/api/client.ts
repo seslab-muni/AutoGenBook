@@ -2,7 +2,6 @@ import createClient, { type Middleware } from 'openapi-fetch';
 
 import { authKeys } from '@/api/queries/keys';
 import { queryClient } from '@/app/query-client';
-import { router } from '@/app/router';
 import { getAuthHeaders } from '@/auth/session';
 
 import type { paths } from './schema.gen';
@@ -83,13 +82,44 @@ const requestMiddleware: Middleware = {
  * signed out in another tab) — not a normal "wrong password" (that 401 is login's own, handled
  * inline by the login form). Clears the cached `auth.me()` and sends the user back to `/login`
  * with the page they were on so a fresh sign-in returns them there.
+ *
+ * Also skipped while already on `/login`: that route's own `beforeLoad` calls
+ * `ensureQueryData(auth.me())` to check for an existing session, and a 401 there is the normal,
+ * expected "not logged in" outcome (handled inline by `login.tsx`'s own catch) — not a session
+ * that "died". Without this guard, that expected 401 still reaches this middleware (it only
+ * excludes the login *endpoint*, not the `me` probe), which would navigate to `/login` again
+ * with a `redirect` search param built from the current URL. Since the current URL is already
+ * `/login?redirect=...`, that re-navigation re-runs `beforeLoad`, which fetches `auth.me()` again
+ * (an errored query always refetches, `staleTime` doesn't protect it), 401s again, and redirects
+ * again — each hop percent-encoding the previous one inside `redirect`, growing the URL
+ * exponentially forever.
+ *
+ * `router` is imported dynamically here rather than statically: `@/app/router` eagerly builds
+ * the router off the singleton `queryClient` at its own module-load time
+ * (`createAppRouter(queryClient)`), and a static import of it from this module would put it in
+ * the same circular chain as `@/app/query-client` (which imports `ApiError` from this file) —
+ * depending on bundler evaluation order, that can make `router.tsx` run before
+ * `@/app/query-client` finishes initializing, permanently baking `undefined` into the router's
+ * context. A dynamic import resolves after the initial module graph has settled, so it always
+ * sees the fully-initialized singleton.
  */
 const responseMiddleware: Middleware = {
   onResponse({ response, schemaPath }) {
-    if (response.status === 401 && schemaPath !== '/api/v1/auth/login') {
-      queryClient.removeQueries({ queryKey: authKeys.all });
+    if (
+      response.status === 401 &&
+      schemaPath !== '/api/v1/auth/login' &&
+      window.location.pathname !== '/login'
+    ) {
       const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      void router.navigate({ to: '/login', search: { redirect: current } });
+      // Navigate first, remove the cached query after: `AppHeader`'s `useQuery(auth.me())` is
+      // still a mounted, active observer at this point (we're on a protected route), and
+      // `removeQueries` on a query with an active observer triggers an immediate refetch to
+      // satisfy it — which would 401 again, re-entering this handler in a tight loop that never
+      // needs a navigation to break it. Navigating away first unmounts that observer, so the
+      // removal afterward has nothing left to refetch.
+      void import('@/app/router')
+        .then(({ router }) => router.navigate({ to: '/login', search: { redirect: current } }))
+        .then(() => queryClient.removeQueries({ queryKey: authKeys.all }));
     }
     return response;
   },

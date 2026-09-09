@@ -4,7 +4,7 @@ metadata:
   name: postgres-data
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: nfs-csi
+  storageClassName: csi-ceph-rbd-du
   resources:
     requests:
       storage: 5Gi

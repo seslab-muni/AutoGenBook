@@ -21,6 +21,11 @@ spec:
         envFrom:
         - configMapRef: {name: autogenbook-config}
         - secretRef: {name: autogenbook-secrets}
+        env:
+        # minio/mc doesn't set $HOME for its non-root UID, so it defaults to `/` - which UID
+        # 1000 can't write to - and `mc alias set` fails trying to create `/.mc`. Same class of
+        # fix as the API image's `ENV HOME=/app` (docs/DEPLOY_GUIDE.md step 1).
+        - {name: HOME, value: /tmp}
         command: ["sh", "-c"]
         args:
         - >

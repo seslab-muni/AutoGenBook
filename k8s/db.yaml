@@ -28,6 +28,12 @@ spec:
         envFrom:
         - configMapRef: {name: autogenbook-config}
         - secretRef: {name: autogenbook-secrets}
+        env:
+        # The block-storage PVC's filesystem creates a `lost+found` directory at its root,
+        # which makes initdb refuse to initialize the mount point directly ("directory ...
+        # exists but is not empty"). Point PGDATA at a subdirectory of the mount instead - the
+        # standard workaround documented by the official postgres image for exactly this case.
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
         ports:
         - containerPort: 5432
         resources:
