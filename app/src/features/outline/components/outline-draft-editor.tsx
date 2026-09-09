@@ -15,6 +15,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { parseOutlineText, type ParsedOutlineNode } from '@/features/outline/parse-outline-text';
 
 interface DraftNode {
   key: string;
@@ -24,6 +26,14 @@ interface DraftNode {
 
 function newNode(title = ''): DraftNode {
   return { key: crypto.randomUUID(), title, children: [] };
+}
+
+function fromParsedNodes(nodes: readonly ParsedOutlineNode[]): DraftNode[] {
+  return nodes.map((node) => ({
+    key: crypto.randomUUID(),
+    title: node.title,
+    children: fromParsedNodes(node.children),
+  }));
 }
 
 function toReplaceNodes(nodes: readonly DraftNode[]): OutlineTreeReplace {
@@ -137,7 +147,18 @@ export function OutlineDraftEditor({
   onOpenChange,
 }: OutlineDraftEditorProps) {
   const [nodes, setNodes] = useState<DraftNode[]>([newNode()]);
+  const [pasteText, setPasteText] = useState('');
   const replaceMutation = useReplaceOutlineMutation(projectId);
+
+  function handleParse() {
+    const parsed = parseOutlineText(pasteText, maxOutlineLevels);
+    if (parsed.length === 0) {
+      toast.error('Could not find any chapter titles in the pasted text');
+      return;
+    }
+    setNodes(fromParsedNodes(parsed));
+    setPasteText('');
+  }
 
   function handleSave() {
     const body = toReplaceNodes(nodes);
@@ -164,9 +185,32 @@ export function OutlineDraftEditor({
         <DialogHeader>
           <DialogTitle>Author outline</DialogTitle>
           <DialogDescription>
-            Type chapter and section titles directly. This replaces the entire outline.
+            Type chapter and section titles directly, or paste a list below. This replaces the
+            entire outline.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="space-y-1.5">
+          <Textarea
+            value={pasteText}
+            onChange={(event) => setPasteText(event.target.value)}
+            placeholder={
+              'Paste a plain list, a numbered list (1. / 1.1 / 1.1.1), or Markdown headings ' +
+              '(#, ##, ###) — nesting is detected automatically.'
+            }
+            className="min-h-24"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            onClick={handleParse}
+            disabled={pasteText.trim().length === 0}
+          >
+            Parse into outline
+          </Button>
+        </div>
 
         <div className="space-y-1">
           {nodes.map((node) => (
