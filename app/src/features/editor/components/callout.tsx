@@ -11,9 +11,7 @@ interface CalloutProps {
 /**
  * A blockquote starting with `**Theorem**`/`**Lemma**`/`**Definition**`/
  * `**Proof**`/`**Example**` (see `remarkCallouts`) renders as this indigo
- * left-border card instead of a plain blockquote — same look as the AI
- * Studio mock's `MathRenderer` theorem box (`_reference/utils/mathRenderer.tsx`),
- * ported to a real remark-driven renderer.
+ * left-border card instead of a plain blockquote.
  */
 export function Callout({ label, children, className }: CalloutProps) {
   return (

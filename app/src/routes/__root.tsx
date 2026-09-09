@@ -5,6 +5,7 @@ import { ErrorView } from '@/components/layout/error-view';
 import { NotFoundView } from '@/components/layout/not-found-view';
 import { Toaster } from '@/components/ui/sonner';
 import { NewProjectDialog } from '@/features/projects/components/new-project-dialog';
+import { reportError } from '@/lib/report-error';
 
 export interface RootRouteContext {
   queryClient: QueryClient;
@@ -13,7 +14,10 @@ export interface RootRouteContext {
 export const Route = createRootRouteWithContext<RootRouteContext>()({
   component: RootLayout,
   notFoundComponent: () => <NotFoundView />,
-  errorComponent: ({ error }) => <ErrorView error={error} />,
+  errorComponent: ({ error }) => {
+    reportError(error, { source: 'router.errorComponent' });
+    return <ErrorView error={error} />;
+  },
 });
 
 function RootLayout() {

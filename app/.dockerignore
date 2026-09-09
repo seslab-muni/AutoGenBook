@@ -1,5 +1,7 @@
 node_modules
 dist
 .env*
-_reference
 coverage
+e2e
+playwright-report
+test-results

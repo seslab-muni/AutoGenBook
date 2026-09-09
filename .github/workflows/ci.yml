@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Nightly e2e run (issue #23) - the `e2e` job below also runs on every push to `main`, this
+    # is only so main gets checked even on a day with no pushes. UTC, well outside any timezone's
+    # working hours.
+    - cron: "17 3 * * *"
 
 jobs:
   python:
@@ -93,6 +98,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check generated API types are up to date
+        # `src/api/schema.gen.ts` is generated from `../docs/openapi.yaml` (`pnpm gen:api`,
+        # `app/README.md`'s API client layer section) and committed - a PR that edits the spec
+        # without regenerating types would otherwise merge silently out of sync with it.
+        run: |
+          pnpm gen:api
+          git diff --exit-code src/api/schema.gen.ts
+
       - name: Lint (eslint + tsc --noEmit)
         run: pnpm lint
 
@@ -105,3 +118,78 @@ jobs:
       # than assumed covered by lint.
       - name: Build (tsc -b + vite build)
         run: pnpm build
+
+      - name: Check bundle-size budget
+        # Reads `dist/bundle-stats.json` (`rollup-plugin-visualizer`, wired in `vite.config.ts`)
+        # and `dist/.vite/manifest.json`, both produced by the `pnpm build` step above.
+        run: pnpm check:bundle-budget
+
+      - name: Build the app's Docker image
+        run: docker build .
+
+  # End-to-end/a11y smoke against the real Docker Compose stack (issue #23) - not run on every
+  # PR: building every image plus the stack's own startup easily takes several minutes on top of
+  # the `app`/`python` jobs above, so this only runs on `main` (catch a regression right after it
+  # merges) and nightly (catch drift on a day with no pushes) - see the workflow-level `schedule`
+  # trigger above.
+  e2e:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the stack (CLI subprocess swapped for tests/api/fake_cli.py)
+        run: |
+          echo "AUTH_JWT_SECRET=$(openssl rand -hex 32)" > .env
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --build
+
+      - name: Seed a login
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
+            -e AUTOGENBOOK_USER_PASSWORD="${E2E_USER_PASSWORD}" api \
+            python -m api.scripts.users create --email "${E2E_USER_EMAIL}" --name "E2E User"
+        env:
+          E2E_USER_EMAIL: e2e@example.com
+          E2E_USER_PASSWORD: e2e-ci-password-not-a-secret
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install app dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright's browser
+        working-directory: app
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run the e2e/a11y suite
+        working-directory: app
+        run: pnpm e2e
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:8080
+          E2E_USER_EMAIL: e2e@example.com
+          E2E_USER_PASSWORD: e2e-ci-password-not-a-secret
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: app/playwright-report/
+          retention-days: 14
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v

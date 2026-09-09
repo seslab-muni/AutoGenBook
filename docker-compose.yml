@@ -93,10 +93,12 @@ services:
       # `web` (the only container actually exposed to the host, see its
       # `ports:` comment below) is reachable beyond localhost.
       WEB_BIND_HOST: ${WEB_BIND_HOST:-127.0.0.1}
-      # Auth (issue #96) - `api` only, not `worker`: the worker never speaks
-      # HTTP, so it has no session cookie to verify. `AUTH_JWT_SECRET` has no
-      # default (`:?...` fails `docker compose up` outright, loudly, instead
-      # of starting an API container that would reject every login).
+      # Auth (issue #96). `AUTH_JWT_SECRET` has no default (`:?...` fails `docker compose up`
+      # outright, loudly, instead of starting an API container that would reject every login) -
+      # `worker` also requires it (see its own `environment:` block) since both processes
+      # construct the same `Settings`, even though only `api` actually verifies session cookies
+      # with it; `AUTH_TOKEN_TTL_H`/`AUTH_COOKIE_*` below are `api`-only; the worker never speaks
+      # HTTP, so it has no cookie to issue or verify.
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Set AUTH_JWT_SECRET in .env (openssl rand -hex 32) before starting the stack}
       AUTH_TOKEN_TTL_H: ${AUTH_TOKEN_TTL_H:-24}
       AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-autogenbook_session}
@@ -137,6 +139,12 @@ services:
     stop_grace_period: 30s
     environment:
       <<: *app-env
+      # `api.core.settings.Settings` (shared by `api` and `worker`, since both construct it via
+      # `get_settings()`) requires this with no default - without it the worker crashes on
+      # startup before it can poll for runs at all. The worker itself never speaks HTTP/issues
+      # cookies, so this is only here to satisfy that shared, required field, not because the
+      # worker verifies sessions.
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Set AUTH_JWT_SECRET in .env (openssl rand -hex 32) before starting the stack}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       WORKER_POLL_INTERVAL_S: ${WORKER_POLL_INTERVAL_S:-2}
       WORKER_STALE_S: ${WORKER_STALE_S:-300}

@@ -330,7 +330,16 @@ export function OutlinePane({
         </div>
       ) : null}
 
-      <div className="custom-scrollbar flex-1 overflow-auto p-1.5" role="tree">
+      {/* `role="tree"` only when actual `treeitem`s are rendered below - applying it
+          unconditionally let the empty-state's plain `Button`s (not `treeitem`s) end up as
+          direct children of a `tree`, which ARIA disallows (axe's `aria-required-children`,
+          issue #23). */}
+      <div
+        className="custom-scrollbar flex-1 overflow-auto p-1.5"
+        {...(tree.length > 0 && !(isFiltering && filteredTree.length === 0)
+          ? { role: 'tree' }
+          : {})}
+      >
         {tree.length === 0 ? (
           <EmptyState
             icon={ListTree}

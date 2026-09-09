@@ -11,7 +11,7 @@ describe('ProjectCard actions', () => {
 
     const card = (
       await screen.findByRole('heading', { name: /Distributed Consensus & Quantum Fault/i })
-    ).closest('[role="button"]') as HTMLElement;
+    ).closest('[data-slot="card"]') as HTMLElement;
     // Seeded in `mocks/fixtures.ts`'s `seedProject` for a project with `hasCompletedRun: true`.
     expect(await within(card).findByText('$6.42')).toBeInTheDocument();
   });
@@ -21,7 +21,7 @@ describe('ProjectCard actions', () => {
 
     const card = (
       await screen.findByRole('heading', { name: /Distributed Consensus & Quantum Fault/i })
-    ).closest('[role="button"]') as HTMLElement;
+    ).closest('[data-slot="card"]') as HTMLElement;
     expect(within(card).getByText(MOCK_USER.displayName)).toBeInTheDocument();
   });
 
@@ -30,7 +30,7 @@ describe('ProjectCard actions', () => {
 
     const card = (
       await screen.findByRole('heading', { name: /Deep Reinforcement Learning & Multi-Agent/i })
-    ).closest('[role="button"]') as HTMLElement;
+    ).closest('[data-slot="card"]') as HTMLElement;
     // Seeded as `owned: false` in `mocks/fixtures.ts`.
     expect(within(card).getByText('—')).toBeInTheDocument();
   });
@@ -40,7 +40,7 @@ describe('ProjectCard actions', () => {
 
     const card = (
       await screen.findByRole('heading', { name: /Deep Reinforcement Learning & Multi-Agent/i })
-    ).closest('[role="button"]') as HTMLElement;
+    ).closest('[data-slot="card"]') as HTMLElement;
     expect(within(card).queryByText(/^\$/)).not.toBeInTheDocument();
   });
 
@@ -50,7 +50,7 @@ describe('ProjectCard actions', () => {
 
     const card = (
       await screen.findByRole('heading', { name: /Distributed Consensus & Quantum Fault/i })
-    ).closest('[role="button"]') as HTMLElement;
+    ).closest('[data-slot="card"]') as HTMLElement;
     await user.click(within(card).getByRole('button', { name: /project actions/i }));
     await user.click(await screen.findByRole('menuitem', { name: /duplicate/i }));
 
@@ -68,7 +68,7 @@ describe('ProjectCard actions', () => {
 
     const card = (
       await screen.findByRole('heading', { name: /Deep Reinforcement Learning & Multi-Agent/i })
-    ).closest('[role="button"]') as HTMLElement;
+    ).closest('[data-slot="card"]') as HTMLElement;
     await user.click(within(card).getByRole('button', { name: /project actions/i }));
     await user.click(await screen.findByRole('menuitem', { name: /delete/i }));
     await user.click(await screen.findByRole('button', { name: /delete project/i }));

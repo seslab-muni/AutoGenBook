@@ -3,6 +3,9 @@ app/dist
 app/.env*
 !app/.env.example
 app/coverage
+app/playwright-report
+app/test-results
+app/blob-report
 
 /.env*
 !/.env.example

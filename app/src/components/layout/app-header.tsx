@@ -116,7 +116,10 @@ export function AppHeader({ project, activeRun }: AppHeaderProps) {
             </div>
             <p className="truncate text-xs font-medium text-muted-foreground">
               {project.authors[0] ?? project.topic}
-              <span className="font-normal text-muted-foreground/70">
+              {/* Plain `text-muted-foreground`, not the `/70`-dimmed variant this used to be:
+                  the extra opacity dropped this span's contrast below WCAG AA at its `text-xs`
+                  size (axe's `color-contrast`, issue #23). */}
+              <span className="font-normal text-muted-foreground">
                 {' '}
                 · Created by {project.ownerName ?? '—'}
               </span>
