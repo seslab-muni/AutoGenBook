@@ -49,6 +49,11 @@ const SEED_COLLAPSE_THRESHOLD = 30;
 /** Debounce for the filter input so typing on a large tree doesn't re-filter every keystroke. */
 const FILTER_DEBOUNCE_MS = 150;
 
+/** Ids of every node in `flat` that has at least one child — shared by the seed and collapse-all paths. */
+function nodesWithChildrenIds(flat: readonly OutlineNode[]): string[] {
+  return flat.filter((node) => flat.some((child) => child.parentId === node.id)).map((node) => node.id);
+}
+
 interface OutlinePaneProps {
   projectId: string;
   maxOutlineLevels: number;
@@ -88,10 +93,20 @@ export function OutlinePane({
 
   const isFiltering = filterQuery.trim().length > 0;
   const filteredTree = useMemo(() => filterTree(tree, filterQuery), [tree, filterQuery]);
-  const matchCount = useMemo(
-    () => (isFiltering ? flat.filter((node) => nodeMatches(node, filterQuery)).length : flat.length),
-    [flat, filterQuery, isFiltering],
-  );
+  // Walks the already-pruned `filteredTree` rather than re-scanning all of `flat` — cheaper than a
+  // second full-tree pass, since `filteredTree` is normally much smaller once a query narrows it.
+  const matchCount = useMemo(() => {
+    if (!isFiltering) return flat.length;
+    let count = 0;
+    function walk(nodes: readonly OutlineTree[]) {
+      for (const entry of nodes) {
+        if (nodeMatches(entry.node, filterQuery)) count += 1;
+        walk(entry.children);
+      }
+    }
+    walk(filteredTree);
+    return count;
+  }, [flat.length, isFiltering, filteredTree, filterQuery]);
 
   const createMutation = useCreateOutlineNodeMutation(projectId);
   const deleteMutation = useDeleteOutlineNodeMutation(projectId);
@@ -124,11 +139,8 @@ export function OutlinePane({
   // path to the initially-selected node expanded; the effect above stays authoritative afterwards.
   useEffect(() => {
     if (seeded || flat.length <= SEED_COLLAPSE_THRESHOLD) return;
-    const nodesWithChildren = flat
-      .filter((node) => flat.some((child) => child.parentId === node.id))
-      .map((node) => node.id);
     const keepExpanded = selectedNodeId ? ancestorIds(selectedNodeId, flat) : [];
-    seedCollapsed(projectId, nodesWithChildren, keepExpanded);
+    seedCollapsed(projectId, nodesWithChildrenIds(flat), keepExpanded);
   }, [seeded, flat, projectId, selectedNodeId, seedCollapsed]);
 
   const handleAddChild = useCallback(
@@ -138,6 +150,10 @@ export function OutlinePane({
         { parentId, title: depth <= 1 ? 'Untitled chapter' : 'Untitled section' },
         {
           onSuccess: (node) => {
+            // A fresh "Untitled chapter/section" almost never matches an active filter, so it
+            // would otherwise be pruned out of view with no indication the add did anything.
+            setFilterInput('');
+            setFilterQuery('');
             onSelectNode(node.id);
             if (parentId) expand(projectId, [parentId]);
           },
@@ -167,18 +183,25 @@ export function OutlinePane({
     [deleteMutation, selectedNodeId, onSelectNode],
   );
 
+  // While filtering, ignore the persisted collapsed set entirely instead of mutating it, so
+  // clearing the query restores the user's own expand/collapse shape. Shared by `visibleIds`
+  // below and passed to `OutlineRow` — one definition of "effectively collapsed" for both.
+  const isCollapsed = useCallback(
+    (nodeId: string) => !isFiltering && collapsedIds.has(nodeId),
+    [collapsedIds, isFiltering],
+  );
+
   const visibleIds = useMemo(() => {
     const result: string[] = [];
     function walk(nodes: readonly OutlineTree[]) {
       for (const entry of nodes) {
         result.push(entry.node.id);
-        // While filtering, every remaining node is force-expanded (see `isCollapsed` below).
-        if (isFiltering || !collapsedIds.has(entry.node.id)) walk(entry.children);
+        if (!isCollapsed(entry.node.id)) walk(entry.children);
       }
     }
     walk(filteredTree);
     return result;
-  }, [filteredTree, collapsedIds, isFiltering]);
+  }, [filteredTree, isCollapsed]);
 
   const handleKeyNavigate = useCallback(
     (nodeId: string, key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Delete') => {
@@ -203,19 +226,9 @@ export function OutlinePane({
     [toggleCollapsed, projectId],
   );
 
-  // While filtering, ignore the persisted collapsed set entirely instead of mutating it, so
-  // clearing the query restores the user's own expand/collapse shape.
-  const isCollapsed = useCallback(
-    (nodeId: string) => !isFiltering && collapsedIds.has(nodeId),
-    [collapsedIds, isFiltering],
-  );
-
   const handleExpandAll = useCallback(() => expandAllAction(projectId), [expandAllAction, projectId]);
   const handleCollapseAll = useCallback(() => {
-    const nodesWithChildren = flat
-      .filter((node) => flat.some((child) => child.parentId === node.id))
-      .map((node) => node.id);
-    collapseAllAction(projectId, nodesWithChildren);
+    collapseAllAction(projectId, nodesWithChildrenIds(flat));
   }, [collapseAllAction, projectId, flat]);
 
   const actions: OutlineRowActions = useMemo(
