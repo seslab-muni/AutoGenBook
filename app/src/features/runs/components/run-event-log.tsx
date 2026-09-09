@@ -49,7 +49,10 @@ export function RunEventLog({ events, className, emptyMessage }: RunEventLogProp
       aria-live="polite"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
-      className={cn('space-y-1 overflow-y-auto font-mono text-[11px] leading-relaxed', className)}
+      className={cn(
+        'custom-scrollbar space-y-1 overflow-y-auto font-mono text-[11px] leading-relaxed',
+        className,
+      )}
     >
       {events.map((event) => (
         <div

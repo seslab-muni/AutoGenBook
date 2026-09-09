@@ -8,6 +8,8 @@ interface InlineEditProps {
   className?: string;
   inputClassName?: string;
   'aria-label'?: string;
+  /** Native tooltip for the display span — pass the untruncated text so a truncated row stays readable on hover. */
+  title?: string;
 }
 
 /** Double-click to edit text in place; Enter or blur commits, Escape reverts. */
@@ -17,6 +19,7 @@ export function InlineEdit({
   className,
   inputClassName,
   'aria-label': ariaLabel,
+  title,
 }: InlineEditProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -70,6 +73,7 @@ export function InlineEdit({
       role="textbox"
       tabIndex={0}
       aria-label={ariaLabel}
+      title={title}
       className={cn('cursor-text truncate', className)}
       onDoubleClick={startEditing}
       onKeyDown={(event) => {

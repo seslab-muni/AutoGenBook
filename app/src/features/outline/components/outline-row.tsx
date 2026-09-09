@@ -47,6 +47,11 @@ interface OutlineRowProps {
   /** Whether the active run (if any) is still drafting this node — shows a spinner (issue #21). */
   isGenerating?: (node: OutlineNode) => boolean;
   /**
+   * Active outline filter text, if any — while set, the title renders as a read-only span with
+   * the matched substring highlighted instead of the editable `InlineEdit` (issue #115).
+   */
+  highlightQuery?: string;
+  /**
    * True while the project has a queued/running run — the backend rejects every structural
    * write (create/delete/move) with 409 for as long as that's true (`OutlineService.
    * _reject_if_run_active`, issue #74), so add/delete/move/indent/outdent are disabled here to
@@ -68,6 +73,30 @@ function reportError(error: unknown, fallback: string) {
   toast.error(problem?.detail ?? problem?.title ?? fallback);
 }
 
+/** Read-only title with the first case-insensitive match of `query` wrapped in `<mark>`. */
+function HighlightedTitle({
+  title,
+  query,
+  className,
+}: {
+  title: string;
+  query: string;
+  className?: string;
+}) {
+  const index = title.toLowerCase().indexOf(query.trim().toLowerCase());
+  if (index === -1) {
+    return <span className={className}>{title}</span>;
+  }
+  const end = index + query.trim().length;
+  return (
+    <span className={className}>
+      {title.slice(0, index)}
+      <mark className="rounded-sm bg-primary/25 text-inherit">{title.slice(index, end)}</mark>
+      {title.slice(end)}
+    </span>
+  );
+}
+
 function OutlineRowComponent({
   projectId,
   entry,
@@ -77,6 +106,7 @@ function OutlineRowComponent({
   selectedNodeId,
   isCollapsed,
   isGenerating,
+  highlightQuery,
   structuralEditsDisabled,
   actions,
 }: OutlineRowProps) {
@@ -145,7 +175,7 @@ function OutlineRowComponent({
             tabIndex={isSelected ? 0 : -1}
             data-node-id={node.id}
             className={cn(
-              'group flex items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-none',
+              'group relative flex items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-none',
               isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
             )}
             style={{ paddingLeft: `${depth * 16 + 6}px` }}
@@ -186,12 +216,21 @@ function OutlineRowComponent({
               {node.sectionNumber}
             </span>
 
-            <InlineEdit
-              value={node.title}
-              onCommit={rename}
-              className="min-w-0 flex-1 text-sm"
-              aria-label={`Rename "${node.title}"`}
-            />
+            {highlightQuery ? (
+              <HighlightedTitle
+                title={node.title}
+                query={highlightQuery}
+                className="min-w-0 flex-1 truncate text-sm"
+              />
+            ) : (
+              <InlineEdit
+                value={node.title}
+                onCommit={rename}
+                className="min-w-0 flex-1 text-sm"
+                aria-label={`Rename "${node.title}"`}
+                title={`${node.sectionNumber} ${node.title}`}
+              />
+            )}
 
             {!node.structureLocked ? (
               <HoverCard openDelay={150}>
@@ -204,7 +243,12 @@ function OutlineRowComponent({
               </HoverCard>
             ) : null}
 
-            <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
+            <div
+              className={cn(
+                'absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 rounded px-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100',
+                isSelected ? 'bg-accent' : 'bg-accent/50',
+              )}
+            >
               {canAddChild ? (
                 <button
                   type="button"
@@ -323,6 +367,7 @@ function OutlineRowComponent({
               selectedNodeId={selectedNodeId}
               isCollapsed={isCollapsed}
               {...(isGenerating ? { isGenerating } : {})}
+              {...(highlightQuery ? { highlightQuery } : {})}
               structuralEditsDisabled={structuralEditsDisabled}
               actions={actions}
             />

@@ -206,7 +206,7 @@ export function ExportDialog({ project }: ExportDialogProps) {
     );
   } else {
     dialogBody = (
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+      <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         <div className="space-y-1.5">
           <label className="text-xs font-semibold text-foreground" htmlFor="export-base-run">
             Base run
@@ -341,7 +341,7 @@ function MarkdownCard({ artifact }: { artifact: RunArtifact | undefined }) {
           Download
         </a>
       </Button>
-      <div className="max-h-40 overflow-auto rounded-md border bg-muted/30 p-2 text-[11px]">
+      <div className="custom-scrollbar max-h-40 overflow-auto rounded-md border bg-muted/30 p-2 text-[11px]">
         {previewQuery.isPending ? (
           <Skeleton className="h-16 w-full" />
         ) : (

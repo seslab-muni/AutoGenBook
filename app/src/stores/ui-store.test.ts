@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { useUiStore } from './ui-store';
+import { DEFAULT_OUTLINE_WIDTH, MAX_OUTLINE_WIDTH, MIN_OUTLINE_WIDTH, useUiStore } from './ui-store';
 
 function resetStore() {
-  useUiStore.setState({ outlineOpen: true, copilotOpen: true, activeModal: null });
+  useUiStore.setState({
+    outlineOpen: true,
+    copilotOpen: true,
+    outlineWidth: DEFAULT_OUTLINE_WIDTH,
+    activeModal: null,
+  });
   window.localStorage.clear();
 }
 
@@ -29,13 +34,28 @@ describe('useUiStore', () => {
     expect(useUiStore.getState().activeModal).toBeNull();
   });
 
-  it('persists pane visibility (not the active modal) to localStorage', () => {
+  it('persists pane visibility and width (not the active modal) to localStorage', () => {
     useUiStore.getState().toggleOutline();
     useUiStore.getState().openModal('settings');
 
     const persisted = JSON.parse(window.localStorage.getItem('autogenbook-ui') ?? '{}') as {
       state: Record<string, unknown>;
     };
-    expect(persisted.state).toEqual({ outlineOpen: false, copilotOpen: true });
+    expect(persisted.state).toEqual({
+      outlineOpen: false,
+      copilotOpen: true,
+      outlineWidth: DEFAULT_OUTLINE_WIDTH,
+    });
+  });
+
+  it('clamps setOutlineWidth to [MIN_OUTLINE_WIDTH, MAX_OUTLINE_WIDTH]', () => {
+    useUiStore.getState().setOutlineWidth(MIN_OUTLINE_WIDTH - 100);
+    expect(useUiStore.getState().outlineWidth).toBe(MIN_OUTLINE_WIDTH);
+
+    useUiStore.getState().setOutlineWidth(MAX_OUTLINE_WIDTH + 100);
+    expect(useUiStore.getState().outlineWidth).toBe(MAX_OUTLINE_WIDTH);
+
+    useUiStore.getState().setOutlineWidth(400);
+    expect(useUiStore.getState().outlineWidth).toBe(400);
   });
 });

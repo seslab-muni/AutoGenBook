@@ -46,11 +46,11 @@ export function CopilotDrawer({
         </TabsList>
       </PaneToolbar>
 
-      <TabsContent value="copilot" className="min-h-0 overflow-auto">
+      <TabsContent value="copilot" className="custom-scrollbar min-h-0 overflow-auto">
         <CopilotPanel projectId={projectId} project={project} selectedNodeId={node?.id ?? null} />
       </TabsContent>
 
-      <TabsContent value="citations" className="min-h-0 overflow-auto">
+      <TabsContent value="citations" className="custom-scrollbar min-h-0 overflow-auto">
         {node ? (
           <CitationsPanel
             citations={parseRagCitations(node.ragCitations)}
@@ -64,7 +64,7 @@ export function CopilotDrawer({
         )}
       </TabsContent>
 
-      <TabsContent value="review" className="min-h-0 overflow-auto">
+      <TabsContent value="review" className="custom-scrollbar min-h-0 overflow-auto">
         {node ? (
           <ReviewPanel reviewerScore={node.reviewerScore} reviewerNotes={node.reviewerNotes} />
         ) : (

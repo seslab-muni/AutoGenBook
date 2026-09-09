@@ -127,7 +127,7 @@ const Hr: NonNullable<Components['hr']> = (props) => {
 const Table: NonNullable<Components['table']> = (props) => {
   const { className: c, ...rest } = withoutNode(props);
   return (
-    <div className="my-3 overflow-x-auto rounded-md border">
+    <div className="custom-scrollbar my-3 overflow-x-auto rounded-md border">
       <table className={cn('w-full border-collapse text-sm', c)} {...rest} />
     </div>
   );
@@ -150,7 +150,7 @@ const Pre: NonNullable<Components['pre']> = (props) => {
   return (
     <pre
       className={cn(
-        'my-3 overflow-x-auto rounded-lg border bg-muted p-3 font-mono text-xs leading-relaxed',
+        'custom-scrollbar my-3 overflow-x-auto rounded-lg border bg-muted p-3 font-mono text-xs leading-relaxed',
         c,
       )}
       {...rest}

@@ -3,10 +3,20 @@ import type { ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
-import { useOutlineOpen, useCopilotOpen, useUiStore } from '@/stores/ui-store';
+import { usePaneResize } from '@/components/layout/use-pane-resize';
+import { cn } from '@/lib/utils';
+import {
+  DEFAULT_OUTLINE_WIDTH,
+  MAX_OUTLINE_WIDTH,
+  MIN_OUTLINE_WIDTH,
+  useCopilotOpen,
+  useOutlineOpen,
+  useOutlineWidth,
+  useUiStore,
+} from '@/stores/ui-store';
 
 interface StudioLayoutProps {
-  /** Left pane (`w-72 lg:w-80`) — fully unmounted while collapsed. */
+  /** Left pane, resizable (`MIN_OUTLINE_WIDTH`–`MAX_OUTLINE_WIDTH`) — fully unmounted while collapsed. */
   outlinePane: ReactNode;
   /** Centre pane — always mounted, expands to fill closed side panes. */
   editorPane: ReactNode;
@@ -24,14 +34,37 @@ interface StudioLayoutProps {
 export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLayoutProps) {
   const outlineOpen = useOutlineOpen();
   const copilotOpen = useCopilotOpen();
+  const outlineWidth = useOutlineWidth();
   const toggleOutline = useUiStore((state) => state.toggleOutline);
   const toggleCopilot = useUiStore((state) => state.toggleCopilot);
+  const setOutlineWidth = useUiStore((state) => state.setOutlineWidth);
+
+  const { handleProps } = usePaneResize({
+    width: outlineWidth,
+    min: MIN_OUTLINE_WIDTH,
+    max: MAX_OUTLINE_WIDTH,
+    defaultWidth: DEFAULT_OUTLINE_WIDTH,
+    onWidthChange: setOutlineWidth,
+  });
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       {outlineOpen ? (
-        <div className="flex w-72 shrink-0 flex-col overflow-hidden border-r lg:w-80">
-          {outlinePane}
+        <div
+          className="flex shrink-0 flex-col overflow-hidden border-r"
+          style={{ width: outlineWidth }}
+        >
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{outlinePane}</div>
+            <div
+              {...handleProps}
+              aria-label="Resize outline pane"
+              className={cn(
+                'w-1 shrink-0 cursor-col-resize touch-none bg-transparent',
+                'hover:bg-ring/50 focus-visible:bg-ring focus-visible:outline-none',
+              )}
+            />
+          </div>
         </div>
       ) : null}
 
@@ -62,7 +95,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
             ) : null}
           </div>
         </PaneToolbar>
-        <div className="min-h-0 flex-1 overflow-auto">{editorPane}</div>
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">{editorPane}</div>
       </div>
 
       {copilotOpen ? (

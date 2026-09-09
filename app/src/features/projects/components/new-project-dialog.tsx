@@ -66,7 +66,7 @@ export function NewProjectDialog() {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && closeModal()}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="custom-scrollbar max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>

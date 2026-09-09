@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ListTree, Lock, Plus, Sparkles } from 'lucide-react';
+import {
+  ChevronsDownUp,
+  ChevronsUpDown,
+  ListTree,
+  Lock,
+  Plus,
+  Search,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
@@ -14,6 +23,8 @@ import { EmptyState } from '@/components/empty-state';
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { DeleteNodeDialog } from '@/features/outline/components/delete-node-dialog';
 import { NodePropertiesSheet } from '@/features/outline/components/node-properties-sheet';
 import { OutlineDraftEditor } from '@/features/outline/components/outline-draft-editor';
@@ -22,10 +33,21 @@ import {
   STRUCTURE_LOCKED_MESSAGE,
   type OutlineRowActions,
 } from '@/features/outline/components/outline-row';
-import { ancestorIds, buildTree, type OutlineTree } from '@/features/outline/model';
+import {
+  ancestorIds,
+  buildTree,
+  filterTree,
+  nodeMatches,
+  type OutlineTree,
+} from '@/features/outline/model';
 import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { useOutlineStore } from '@/stores/outline-store';
 import { useUiStore } from '@/stores/ui-store';
+
+/** Outlines above this size default to collapsed on first load (issue #115). */
+const SEED_COLLAPSE_THRESHOLD = 30;
+/** Debounce for the filter input so typing on a large tree doesn't re-filter every keystroke. */
+const FILTER_DEBOUNCE_MS = 150;
 
 interface OutlinePaneProps {
   projectId: string;
@@ -48,10 +70,28 @@ export function OutlinePane({
   const collapsedIds = useMemo(() => new Set(collapsedArray ?? []), [collapsedArray]);
   const toggleCollapsed = useOutlineStore((state) => state.toggleCollapsed);
   const expand = useOutlineStore((state) => state.expand);
+  const seedCollapsed = useOutlineStore((state) => state.seedCollapsed);
+  const seeded = useOutlineStore((state) => Boolean(state.seededByProject[projectId]));
+  const expandAllAction = useOutlineStore((state) => state.expandAll);
+  const collapseAllAction = useOutlineStore((state) => state.collapseAll);
 
   const [deletingNode, setDeletingNode] = useState<OutlineNode | null>(null);
   const [propertiesNodeId, setPropertiesNodeId] = useState<string | null>(null);
   const [draftEditorOpen, setDraftEditorOpen] = useState(false);
+  const [filterInput, setFilterInput] = useState('');
+  const [filterQuery, setFilterQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setFilterQuery(filterInput), FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [filterInput]);
+
+  const isFiltering = filterQuery.trim().length > 0;
+  const filteredTree = useMemo(() => filterTree(tree, filterQuery), [tree, filterQuery]);
+  const matchCount = useMemo(
+    () => (isFiltering ? flat.filter((node) => nodeMatches(node, filterQuery)).length : flat.length),
+    [flat, filterQuery, isFiltering],
+  );
 
   const createMutation = useCreateOutlineNodeMutation(projectId);
   const deleteMutation = useDeleteOutlineNodeMutation(projectId);
@@ -79,6 +119,17 @@ export function OutlinePane({
       expand(projectId, ancestorIds(selectedNodeId, flat));
     }
   }, [selectedNodeId, flat, projectId, expand]);
+
+  // One-time default-collapse for a large outline on first load — no-ops once seeded. Keeps the
+  // path to the initially-selected node expanded; the effect above stays authoritative afterwards.
+  useEffect(() => {
+    if (seeded || flat.length <= SEED_COLLAPSE_THRESHOLD) return;
+    const nodesWithChildren = flat
+      .filter((node) => flat.some((child) => child.parentId === node.id))
+      .map((node) => node.id);
+    const keepExpanded = selectedNodeId ? ancestorIds(selectedNodeId, flat) : [];
+    seedCollapsed(projectId, nodesWithChildren, keepExpanded);
+  }, [seeded, flat, projectId, selectedNodeId, seedCollapsed]);
 
   const handleAddChild = useCallback(
     (parentId: string | null) => {
@@ -121,12 +172,13 @@ export function OutlinePane({
     function walk(nodes: readonly OutlineTree[]) {
       for (const entry of nodes) {
         result.push(entry.node.id);
-        if (!collapsedIds.has(entry.node.id)) walk(entry.children);
+        // While filtering, every remaining node is force-expanded (see `isCollapsed` below).
+        if (isFiltering || !collapsedIds.has(entry.node.id)) walk(entry.children);
       }
     }
-    walk(tree);
+    walk(filteredTree);
     return result;
-  }, [tree, collapsedIds]);
+  }, [filteredTree, collapsedIds, isFiltering]);
 
   const handleKeyNavigate = useCallback(
     (nodeId: string, key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Delete') => {
@@ -151,7 +203,20 @@ export function OutlinePane({
     [toggleCollapsed, projectId],
   );
 
-  const isCollapsed = useCallback((nodeId: string) => collapsedIds.has(nodeId), [collapsedIds]);
+  // While filtering, ignore the persisted collapsed set entirely instead of mutating it, so
+  // clearing the query restores the user's own expand/collapse shape.
+  const isCollapsed = useCallback(
+    (nodeId: string) => !isFiltering && collapsedIds.has(nodeId),
+    [collapsedIds, isFiltering],
+  );
+
+  const handleExpandAll = useCallback(() => expandAllAction(projectId), [expandAllAction, projectId]);
+  const handleCollapseAll = useCallback(() => {
+    const nodesWithChildren = flat
+      .filter((node) => flat.some((child) => child.parentId === node.id))
+      .map((node) => node.id);
+    collapseAllAction(projectId, nodesWithChildren);
+  }, [collapseAllAction, projectId, flat]);
 
   const actions: OutlineRowActions = useMemo(
     () => ({
@@ -173,18 +238,77 @@ export function OutlinePane({
     <>
       <PaneToolbar>
         <span className="text-xs font-semibold text-foreground">Outline</span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => handleAddChild(null)}
-          disabled={maxOutlineLevels < 1 || structuralEditsDisabled}
-          title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
-        >
-          <Plus className="size-3.5" />
-          Add chapter
-        </Button>
+        <div className="flex items-center gap-1">
+          {tree.length > 0 ? (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Expand all"
+                    onClick={handleExpandAll}
+                  >
+                    <ChevronsUpDown className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Expand all</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Collapse all"
+                    onClick={handleCollapseAll}
+                  >
+                    <ChevronsDownUp className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Collapse all</TooltipContent>
+              </Tooltip>
+            </>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => handleAddChild(null)}
+            disabled={maxOutlineLevels < 1 || structuralEditsDisabled}
+            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+          >
+            <Plus className="size-3.5" />
+            Add chapter
+          </Button>
+        </div>
       </PaneToolbar>
+
+      {tree.length > 0 ? (
+        <div className="flex items-center gap-1.5 border-b px-2 py-1.5">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={filterInput}
+              onChange={(event) => setFilterInput(event.target.value)}
+              placeholder="Filter sections…"
+              aria-label="Filter outline sections"
+              className="h-7 pr-7 pl-7 text-xs"
+            />
+            {filterInput ? (
+              <button
+                type="button"
+                aria-label="Clear filter"
+                className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => setFilterInput('')}
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {structuralEditsDisabled ? (
         <div className="flex items-center gap-2 border-b bg-warning/10 px-3 py-2 text-xs font-medium text-warning-foreground">
@@ -193,7 +317,7 @@ export function OutlinePane({
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-auto p-1.5" role="tree">
+      <div className="custom-scrollbar flex-1 overflow-auto p-1.5" role="tree">
         {tree.length === 0 ? (
           <EmptyState
             icon={ListTree}
@@ -223,8 +347,10 @@ export function OutlinePane({
               </div>
             }
           />
+        ) : isFiltering && filteredTree.length === 0 ? (
+          <EmptyState icon={Search} title="No sections match" description={`No section title or number contains "${filterQuery.trim()}".`} />
         ) : (
-          tree.map((entry) => (
+          filteredTree.map((entry) => (
             <OutlineRow
               key={entry.node.id}
               projectId={projectId}
@@ -235,6 +361,7 @@ export function OutlinePane({
               selectedNodeId={selectedNodeId}
               isCollapsed={isCollapsed}
               isGenerating={isGenerating}
+              {...(isFiltering ? { highlightQuery: filterQuery.trim() } : {})}
               structuralEditsDisabled={structuralEditsDisabled}
               actions={actions}
             />
@@ -243,7 +370,9 @@ export function OutlinePane({
       </div>
 
       <PaneStatusBar>
-        {flat.length} node{flat.length === 1 ? '' : 's'}
+        {isFiltering
+          ? `${matchCount} of ${flat.length} node${flat.length === 1 ? '' : 's'}`
+          : `${flat.length} node${flat.length === 1 ? '' : 's'}`}
       </PaneStatusBar>
 
       <DeleteNodeDialog
