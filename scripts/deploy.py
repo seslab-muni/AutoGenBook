@@ -89,8 +89,25 @@ WEB_PREFIX = "app/"
 # Dockerfile's `COPY . .` really does pull in nearly everything at the repo root, so a new
 # top-level file added later is correctly treated as core-relevant by default rather than
 # silently ignored because nobody remembered to add it to an allowlist.
-NO_REBUILD_PREFIXES = ("k8s/", "docs/", "tests/", ".github/", "scripts/", "examples/", "src/")
-NO_REBUILD_FILES = frozenset({"README.md", "CLAUDE.md", ".gitignore", ".env.example"})
+#
+# Kept in sync with the root .dockerignore by tests/test_deploy_script.py's
+# DockerignoreSyncTests - caught missing ".claude/" and "output/" (both real, git-tracked, and
+# dockerignored, but absent from an earlier version of this list) during review.
+NO_REBUILD_PREFIXES = (
+    "k8s/",
+    "docs/",
+    "tests/",
+    ".github/",
+    "scripts/",
+    "examples/",
+    "src/",
+    ".claude/",
+    ".git/",
+    ".venv/",
+    "__pycache__/",
+    "output/",
+)
+NO_REBUILD_FILES = frozenset({"README.md", "CLAUDE.md", ".gitignore", ".env.example", ".env"})
 
 
 class DeployError(Exception):
@@ -155,8 +172,30 @@ def git_head() -> tuple[str, str]:
     return git("rev-parse", "HEAD"), git("rev-parse", "--short", "HEAD")
 
 
-def git_is_dirty() -> bool:
-    return bool(git("status", "--porcelain"))
+def git_dirty_paths() -> list[str]:
+    """Repo-relative paths with uncommitted changes (porcelain status, renames resolved to their
+    new path)."""
+    out = git("status", "--porcelain")
+    paths = []
+    for line in out.splitlines():
+        if not line:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.append(path.strip('"'))
+    return paths
+
+
+def git_dirty_outside_k8s() -> bool:
+    """True if anything *other than* k8s/*.yaml is uncommitted. k8s/ is excluded deliberately: a
+    successful --apply itself rewrites the image tag in the manifest it just applied (see
+    apply_phase()) without committing it, so if k8s/ counted here, a successful deploy would
+    permanently block the next one until a human noticed and committed the bump by hand - exactly
+    the "adds more work instead of easing it" failure this script exists to avoid. Any other
+    uncommitted path still blocks --apply: that's the real guarantee (an image is only ever built
+    from exactly the commit it's tagged with)."""
+    return any(not path.startswith("k8s/") for path in git_dirty_paths())
 
 
 def git_sha_exists(sha: str) -> bool:
@@ -187,18 +226,12 @@ def diff_since(tag: str) -> tuple[list[str], bool]:
 # --------------------------------------------------------------------------------------
 
 
-def kubectl_get_image(deployment: str, namespace: str) -> str | None:
+def _kubectl_get(resource: str, name: str, namespace: str, *, output: str) -> str | None:
+    """Runs `kubectl get <resource> <name> -o <output>`, returning stdout, or None if the
+    resource doesn't exist. Shared by every read-only kubectl lookup so "how do we detect
+    NotFound" only has one implementation to keep correct."""
     result = subprocess.run(
-        [
-            "kubectl",
-            "get",
-            "deployment",
-            deployment,
-            "-n",
-            namespace,
-            "-o",
-            "jsonpath={.spec.template.spec.containers[0].image}",
-        ],
+        ["kubectl", "get", resource, name, "-n", namespace, "-o", output],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -206,25 +239,28 @@ def kubectl_get_image(deployment: str, namespace: str) -> str | None:
     if result.returncode != 0:
         if "NotFound" in result.stderr:
             return None
-        raise DeployError(f"kubectl get deployment/{deployment} failed:\n{result.stderr.strip()}")
-    return result.stdout.strip() or None
+        raise DeployError(f"kubectl get {resource}/{name} failed:\n{result.stderr.strip()}")
+    return result.stdout
+
+
+def kubectl_get_image(deployment: str, namespace: str) -> str | None:
+    out = _kubectl_get(
+        "deployment", deployment, namespace, output="jsonpath={.spec.template.spec.containers[0].image}"
+    )
+    return out.strip() or None if out is not None else None
 
 
 def kubectl_get_secret_data(name: str, namespace: str) -> dict[str, str] | None:
-    result = subprocess.run(
-        ["kubectl", "get", "secret", name, "-n", namespace, "-o", "json"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        if "NotFound" in result.stderr:
-            return None
-        raise DeployError(f"kubectl get secret/{name} failed:\n{result.stderr.strip()}")
-    return json.loads(result.stdout).get("data", {})
+    out = _kubectl_get("secret", name, namespace, output="json")
+    return json.loads(out).get("data", {}) if out is not None else None
 
 
 def parse_tag(image_ref: str) -> str:
+    if ":" not in image_ref:
+        raise DeployError(
+            f"deployed image reference {image_ref!r} has no tag - expected 'repo:tag'. "
+            "Was it set with a bare 'kubectl set image ...=repo' (no tag) or by digest?"
+        )
     return image_ref.rsplit(":", 1)[1]
 
 
@@ -308,6 +344,25 @@ def _describe_reason(*, forced: bool, needs_build: bool, manifest_touched: bool,
     return base
 
 
+@dataclass
+class _ImageDecision:
+    tag: str
+    changed: list[str]
+    relevant: list[str]
+    forced: bool
+    needs_build: bool
+
+
+def _decide_image(image_key: str, tag: str, force: str | None, *, drifted: bool, notes: list[str]) -> _ImageDecision:
+    changed, unknown = diff_since(tag)
+    if unknown:
+        notes.append(f"{image_key}'s deployed commit {tag} isn't reachable locally - rebuilding to be safe.")
+    forced = force in (image_key, "all")
+    relevant = [f for f in changed if classify_path(f) == image_key]
+    needs_build = forced or drifted or unknown or bool(relevant)
+    return _ImageDecision(tag=tag, changed=changed, relevant=relevant, forced=forced, needs_build=needs_build)
+
+
 def build_plan(namespace: str, force: str | None) -> Plan:
     head_full, head_short = git_head()
     notes: list[str] = []
@@ -321,34 +376,21 @@ def build_plan(namespace: str, force: str | None) -> Plan:
         )
     tags = {name: parse_tag(ref) for name, ref in live_images.items()}  # type: ignore[arg-type]
 
-    core_tag = tags["api"]
-    web_tag = tags["web"]
-    core_drifted = tags["worker"] != core_tag
+    # api and worker share one image and must always agree; api is the reference tag if they don't.
+    core_drifted = tags["worker"] != tags["api"]
     if core_drifted:
         notes.append(
-            f"worker is on tag {tags['worker']} but api is on {core_tag} - they share one image "
+            f"worker is on tag {tags['worker']} but api is on {tags['api']} - they share one image "
             "and should always match; forcing a core rebuild to realign them."
         )
 
-    core_changed, core_unknown = diff_since(core_tag)
-    web_changed, web_unknown = diff_since(web_tag)
-    if core_unknown:
-        notes.append(
-            f"api/worker's deployed commit {core_tag} isn't reachable locally - rebuilding the core image to be safe."
-        )
-    if web_unknown:
-        notes.append(f"web's deployed commit {web_tag} isn't reachable locally - rebuilding the web image to be safe.")
+    image_tags = {"core": tags["api"], "web": tags["web"]}
+    decisions = {
+        image_key: _decide_image(image_key, tag, force, drifted=(image_key == "core" and core_drifted), notes=notes)
+        for image_key, tag in image_tags.items()
+    }
 
-    core_forced = force in ("core", "all")
-    web_forced = force in ("web", "all")
-
-    core_relevant = [f for f in core_changed if classify_path(f) == "core"]
-    web_relevant = [f for f in web_changed if classify_path(f) == "web"]
-
-    core_needs_build = core_forced or core_drifted or core_unknown or bool(core_relevant)
-    web_needs_build = web_forced or web_unknown or bool(web_relevant)
-
-    if core_needs_build:
+    if decisions["core"].needs_build:
         notes.append(
             "rolling back the core image does not undo any Alembic migration it already ran on "
             "startup - migrations are forward-only. See docs/DEPLOY_GUIDE.md."
@@ -357,29 +399,28 @@ def build_plan(namespace: str, force: str | None) -> Plan:
     deployments: dict[str, DeploymentPlan] = {}
     for name in DEPLOYMENT_ORDER:
         spec = DEPLOYMENTS[name]
-        is_core = spec.image_key == "core"
-        needs_build = core_needs_build if is_core else web_needs_build
-        forced = core_forced if is_core else web_forced
-        relevant = core_relevant if is_core else web_relevant
-        changed = core_changed if is_core else web_changed
+        decision = decisions[spec.image_key]
 
         manifest_rel = str(spec.manifest.relative_to(REPO_ROOT))
-        manifest_touched = manifest_rel in changed
-        needs_apply = needs_build or manifest_touched
+        manifest_touched = manifest_rel in decision.changed
+        needs_apply = decision.needs_build or manifest_touched
 
         deployments[name] = DeploymentPlan(
             name=name,
             manifest=spec.manifest,
             image_key=spec.image_key,
             current_tag=tags[name],
-            needs_build=needs_build,
+            needs_build=decision.needs_build,
             needs_apply=needs_apply,
             reason=_describe_reason(
-                forced=forced, needs_build=needs_build, manifest_touched=manifest_touched, relevant=relevant
+                forced=decision.forced,
+                needs_build=decision.needs_build,
+                manifest_touched=manifest_touched,
+                relevant=decision.relevant,
             ),
         )
 
-    images_to_build = {DEPLOYMENTS[n].image_key for n, d in deployments.items() if d.needs_build}
+    images_to_build = {image_key for image_key, decision in decisions.items() if decision.needs_build}
     return Plan(head_full, head_short, deployments, images_to_build, notes)
 
 
@@ -432,6 +473,32 @@ def build_and_push(image_key: str, tag: str, registry: str) -> None:
     run(["docker", "push", ref])
 
 
+def _display_path(path: Path) -> str:
+    """Repo-relative for display when possible, falling back to the absolute path otherwise -
+    e.g. in tests, which deliberately use manifests outside REPO_ROOT for isolation."""
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _manifest_at_ref(ref: str, manifest: Path) -> bytes | None:
+    """Returns the manifest's exact git-committed content at `ref`, or None if `ref` isn't a
+    resolvable commit (e.g. a legacy semver tag predating this script). Used as the rollback
+    baseline: restoring *this*, rather than whatever happened to be on disk right before this run
+    started, is what actually undoes every change this run made to the manifest - not just an
+    image-tag rewrite, but any other content change HEAD's commit(s) also carried for it."""
+    if not git_sha_exists(ref):
+        return None
+    rel = manifest.relative_to(REPO_ROOT).as_posix()
+    result = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "show", f"{ref}:{rel}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
 def _apply_and_wait(name: str, manifest: Path, namespace: str, rollout_timeout: str) -> None:
     print(f"\n==> Applying {manifest} (deployment/{name})")
     run(["kubectl", "apply", "-f", str(manifest), "-n", namespace])
@@ -449,8 +516,14 @@ def apply_phase(plan: Plan, registry: str, namespace: str, rollout_timeout: str,
 
     for name in order:
         d = plan.deployments[name]
-        original = d.manifest.read_bytes()
-        touched.append((name, d.manifest, original))
+        # The rollback baseline is the manifest's content as it was *last deployed*
+        # (git-committed at d.current_tag), not just its bytes right before this run's own
+        # mutation - those can already contain this run's other, non-tag manifest edits (e.g. a
+        # resource-limit change bundled in the same commit), which a real rollback must undo too.
+        baseline = _manifest_at_ref(d.current_tag, d.manifest)
+        if baseline is None:
+            baseline = d.manifest.read_bytes()  # best effort: d.current_tag isn't a resolvable commit
+        touched.append((name, d.manifest, baseline))
 
         try:
             if d.needs_build:
@@ -465,6 +538,14 @@ def apply_phase(plan: Plan, registry: str, namespace: str, rollout_timeout: str,
 
     if failed_at is None:
         print("\nAll deployments applied and healthy.")
+        retagged = sorted({_display_path(m) for n, m, _ in touched if plan.deployments[n].needs_build})
+        if retagged:
+            print(
+                "\nThe following manifest(s) were updated with the new image tag on disk and "
+                "still need to be committed to keep git in sync with the cluster:\n  "
+                + "\n  ".join(retagged)
+                + f"\n\n  git add {' '.join(retagged)} && git commit -m 'Deploy {plan.head_short}'"
+            )
         return 0
 
     print(f"\n!! deployment/{failed_at} failed to roll out.", file=sys.stderr)
@@ -518,10 +599,10 @@ def preflight(namespace: str) -> None:
 def run_deploy(args: argparse.Namespace) -> int:
     preflight(args.namespace)
 
-    if args.apply and git_is_dirty():
+    if args.apply and git_dirty_outside_k8s():
         raise DeployError(
-            "working tree has uncommitted changes - commit or stash them first. Building from a "
-            "dirty tree would tag an image with a commit it doesn't actually match."
+            "working tree has uncommitted changes outside k8s/ - commit or stash them first. "
+            "Building from a dirty tree would tag an image with a commit it doesn't actually match."
         )
 
     plan = build_plan(args.namespace, args.force)
