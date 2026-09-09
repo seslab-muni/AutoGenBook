@@ -34,7 +34,15 @@ class ClassifyPathTests(unittest.TestCase):
         self.assertEqual(deploy.classify_path("app/src/api/client.ts"), "web")
 
     def test_known_no_rebuild_prefixes_are_none(self):
-        for path in ("k8s/api.yaml", "docs/DEPLOY_GUIDE.md", "tests/test_x.py", "scripts/deploy.py", "src/autogenbook/main.py"):
+        for path in (
+            "k8s/api.yaml",
+            "docs/DEPLOY_GUIDE.md",
+            "tests/test_x.py",
+            "scripts/deploy.py",
+            "src/autogenbook/main.py",
+            ".claude/skills/static-analysis/run-sonar-scan.sh",
+            "output/book/some-run/manuscript.md",
+        ):
             with self.subTest(path=path):
                 self.assertEqual(deploy.classify_path(path), "none")
 
@@ -58,6 +66,36 @@ class ParseTagTests(unittest.TestCase):
 
     def test_registry_with_port_does_not_confuse_it(self):
         self.assertEqual(deploy.parse_tag("cerit.io:5000/conerzyo/autogenbook-web:1.2.3"), "1.2.3")
+
+    def test_missing_tag_raises_clean_deploy_error_not_index_error(self):
+        with self.assertRaises(deploy.DeployError):
+            deploy.parse_tag("cerit.io/conerzyo/autogenbook")
+
+
+class DockerignoreSyncTests(unittest.TestCase):
+    """Regression guard for a class of bug caught in review: classify_path()'s blocklist had
+    silently drifted out of sync with the root .dockerignore - .claude/ and output/ are both
+    real, git-tracked, and excluded from the core image's build context, but were missing from
+    the blocklist, so a change under either wastefully triggered a full core rebuild. This walks
+    every simple (non-glob) .dockerignore entry and asserts classify_path() also treats it as
+    core-irrelevant, so a *future* drift trips this test instead of silently wasting a rebuild."""
+
+    def test_simple_dockerignore_entries_are_recognized_as_no_rebuild(self):
+        lines = (deploy.REPO_ROOT / ".dockerignore").read_text().splitlines()
+        for line in lines:
+            entry = line.strip()
+            if not entry or entry.startswith("#") or "*" in entry:
+                continue  # glob entries (*.pyc) are reviewed by hand instead of reimplemented here
+            if entry.startswith("app/"):
+                continue  # governed by app/.dockerignore (a separate build context), not this one
+            with self.subTest(entry=entry):
+                as_file = deploy.classify_path(entry)
+                as_dir_child = deploy.classify_path(f"{entry}/some_file.txt")
+                self.assertTrue(
+                    as_file == "none" or as_dir_child == "none",
+                    f".dockerignore excludes {entry!r} from the core image's build context, but "
+                    "classify_path() doesn't recognize it as core-irrelevant.",
+                )
 
 
 class SetImageTagTests(unittest.TestCase):
@@ -175,6 +213,43 @@ def _fake_plan(tmp_dir: Path, *, api_manifest: Path, worker_manifest: Path, web_
     )
 
 
+class ManifestAtRefTests(unittest.TestCase):
+    """_manifest_at_ref is the rollback baseline: it must return the manifest's exact
+    git-committed content at a resolvable ref, and None (triggering the caller's disk-bytes
+    fallback) for one that isn't - never raise, and never confuse "not found" with "empty"."""
+
+    def test_returns_historical_content_for_a_resolvable_ref(self):
+        manifest = deploy.REPO_ROOT / "k8s" / "api.yaml"
+        expected = subprocess.run(
+            ["git", "-C", str(deploy.REPO_ROOT), "show", "HEAD:k8s/api.yaml"],
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout
+        self.assertEqual(deploy._manifest_at_ref("HEAD", manifest), expected)
+
+    def test_returns_none_for_an_unresolvable_ref(self):
+        manifest = deploy.REPO_ROOT / "k8s" / "api.yaml"
+        self.assertIsNone(deploy._manifest_at_ref("not-a-real-commit-or-tag", manifest))
+
+
+class GitDirtyOutsideK8sTests(unittest.TestCase):
+    """git_dirty_outside_k8s() deliberately excludes k8s/ - see its docstring for why (a
+    successful --apply rewrites a manifest's tag without committing it, and that must not block
+    the next run's dirty-tree gate)."""
+
+    def test_only_k8s_dirty_is_not_dirty_outside_k8s(self):
+        with patch.object(deploy, "git_dirty_paths", return_value=["k8s/api.yaml", "k8s/web.yaml"]):
+            self.assertFalse(deploy.git_dirty_outside_k8s())
+
+    def test_any_non_k8s_path_is_dirty_outside_k8s(self):
+        with patch.object(deploy, "git_dirty_paths", return_value=["k8s/api.yaml", "autogenbook/main.py"]):
+            self.assertTrue(deploy.git_dirty_outside_k8s())
+
+    def test_clean_tree_is_not_dirty(self):
+        with patch.object(deploy, "git_dirty_paths", return_value=[]):
+            self.assertFalse(deploy.git_dirty_outside_k8s())
+
+
 class ApplyPhaseRollbackTests(unittest.TestCase):
     """Exercises the rollback state machine without touching git/docker/kubectl: kubectl calls
     are faked via a patched subprocess.run that fails only for the deployment we choose, and
@@ -278,6 +353,49 @@ class ApplyPhaseRollbackTests(unittest.TestCase):
             for name in ("api", "worker", "web"):
                 self.assertIn(b"deadbee", manifests[name].read_bytes())
                 self.assertIn(b"keep-me", manifests[name].read_bytes())
+
+    def test_rollback_uses_manifest_at_ref_baseline_not_raw_disk_bytes(self):
+        # Regression test for a bug caught in review: the rollback baseline used to be whatever
+        # bytes were on disk right before this run's own mutation - which, for a manifest whose
+        # content HEAD's commit already changed beyond just the tag (e.g. a bad resource limit
+        # bundled in the same commit), is already the new, broken content. Simulate exactly that:
+        # the on-disk manifest is "corrupted" relative to what _manifest_at_ref (mocked here,
+        # exercised for real in ManifestAtRefTests) says was actually last deployed.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            api_manifest = tmp / "api.yaml"
+            api_manifest.write_text("image: cerit.io/conerzyo/autogenbook:oldtag\n# corrupted-by-this-run\n")
+            worker_manifest = tmp / "worker.yaml"
+            worker_manifest.write_text("image: cerit.io/conerzyo/autogenbook:oldtag\n")
+            web_manifest = tmp / "web.yaml"
+            web_manifest.write_text("image: cerit.io/conerzyo/autogenbook-web:oldtag\n")
+
+            plan = deploy.Plan(
+                head_full="f" * 40,
+                head_short="fffffff",
+                deployments={
+                    "api": deploy.DeploymentPlan("api", api_manifest, "core", "sometag", False, True, "test"),
+                    "worker": deploy.DeploymentPlan("worker", worker_manifest, "core", "sometag", False, False, "test"),
+                    "web": deploy.DeploymentPlan("web", web_manifest, "web", "sometag", False, False, "test"),
+                },
+                images_to_build=set(),
+                notes=[],
+            )
+
+            historical_content = b"image: cerit.io/conerzyo/autogenbook:oldtag\n# this is what was actually last deployed\n"
+
+            def fake_apply_and_wait(name, manifest_path, namespace, timeout):
+                raise subprocess.CalledProcessError(1, ["kubectl", "rollout", "status"])
+
+            with patch.object(deploy, "_manifest_at_ref", return_value=historical_content), patch.object(
+                deploy, "_apply_and_wait", side_effect=fake_apply_and_wait
+            ):
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", "180s", no_rollback=False)
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(api_manifest.read_bytes(), historical_content)
 
 
 if __name__ == "__main__":
