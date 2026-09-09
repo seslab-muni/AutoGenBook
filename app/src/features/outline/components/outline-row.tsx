@@ -268,8 +268,12 @@ function OutlineRowComponent({
               className={cn(
                 // `opacity-0` alone still leaves the buttons hit-testable and overlapping the
                 // title — `pointer-events-none` keeps them inert until actually shown.
-                'pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 rounded px-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
-                isSelected ? 'bg-accent' : 'bg-accent/50',
+                //
+                // The fill is solid (not `/50`, and not conditional on `isSelected`): this sits
+                // directly on top of the spinner/`StatusBadge` at the row's right edge (see their
+                // `group-hover:opacity-0` below), and a translucent or row-bg-matched fill let
+                // that trailing content visibly bleed through behind the icons.
+                'pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 rounded bg-accent px-0.5 opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
               )}
             >
               {canAddChild ? (
@@ -313,11 +317,14 @@ function OutlineRowComponent({
 
             {generating ? (
               <Loader2
-                className="size-3 shrink-0 animate-spin text-primary"
+                className="size-3 shrink-0 animate-spin text-primary transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
                 aria-label="Generating"
               />
             ) : null}
-            <StatusBadge status={node.status} className="ml-0.5 shrink-0" />
+            <StatusBadge
+              status={node.status}
+              className="ml-0.5 shrink-0 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+            />
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
