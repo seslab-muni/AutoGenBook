@@ -1,5 +1,5 @@
 {
-  "ignorePatterns": ["_reference", "dist", "coverage"],
+  "ignorePatterns": ["dist", "coverage"],
   "ignores": [
     "@fontsource-variable/*",
     "tailwindcss",

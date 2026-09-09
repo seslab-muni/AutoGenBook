@@ -60,10 +60,14 @@ describe('ProjectsHub', () => {
     const user = userEvent.setup();
     renderRouterApp('/');
 
-    const heading = await screen.findByRole('heading', {
-      name: /Distributed Consensus & Quantum Fault/i,
-    });
-    await user.click(heading);
+    await screen.findByRole('heading', { name: /Distributed Consensus & Quantum Fault/i });
+    // The card's click target is a full-card overlay button (see `project-card.tsx`), not the
+    // heading itself - real browsers hit-test to it regardless of where on the card you click,
+    // but jsdom's `user.click` dispatches directly on its target and bubbles through actual DOM
+    // ancestors, so the test has to target that button explicitly rather than the heading text.
+    await user.click(
+      screen.getByRole('button', { name: /Open Distributed Consensus & Quantum Fault/i }),
+    );
 
     expect(
       await screen.findByRole('heading', {

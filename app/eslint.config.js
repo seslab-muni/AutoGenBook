@@ -11,7 +11,6 @@ export default tseslint.config(
     ignores: [
       'dist',
       'coverage',
-      '_reference',
       // Vendored by `msw init public --save` (src/mocks/browser.ts) — not hand-edited.
       'public/mockServiceWorker.js',
       'src/routeTree.gen.ts',

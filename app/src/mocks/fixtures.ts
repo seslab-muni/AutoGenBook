@@ -15,9 +15,8 @@ import type {
 } from '@/api/types';
 
 /**
- * Seed data ported from `_reference/data/sampleBooks.ts` (the AI Studio mock)
- * into the flat outline shape (`parentId`/`orderIndex`/`cliKey`) and the
- * File+Source split the real API uses.
+ * Seed data for the flat outline shape (`parentId`/`orderIndex`/`cliKey`) and
+ * the File+Source split the real API uses.
  */
 
 /**

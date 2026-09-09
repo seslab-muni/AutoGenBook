@@ -17,8 +17,7 @@ interface SectionJumpSelectProps {
 /**
  * Flattened, numbered section picker for the centre pane's toolbar — shown
  * only while the outline pane is closed, so there's still a way to switch
- * sections without reopening it (mirrors `_reference/components/editor/StageEditor.tsx`'s
- * chapter dropdown).
+ * sections without reopening it.
  */
 export function SectionJumpSelect({ flat, selectedNodeId, onSelectNode }: SectionJumpSelectProps) {
   const positioned = assignPositions(flat)

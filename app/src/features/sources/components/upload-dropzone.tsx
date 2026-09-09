@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useState, type DragEvent, type ReactNode } from 'react';
 import { AlertTriangle, Loader2, Upload, X } from 'lucide-react';
 
 import type { FileDto } from '@/api/types';
@@ -60,7 +60,6 @@ interface UploadDropzoneProps {
  * backend has no endpoints for them yet (issue #5 explicitly defers them). */
 export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzoneProps) {
   const [dragOver, setDragOver] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
   const { items, enqueue, cancel, dismiss } = useUploadQueue({
     onUploaded: (file) => {
       if (file.kbEligible) onUploaded(file);
@@ -73,7 +72,7 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
     enqueue([...fileList]);
   }
 
-  function handleDrop(event: DragEvent<HTMLDivElement>) {
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     setDragOver(false);
     if (disabled) return;
@@ -98,14 +97,13 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
         ))}
       </div>
 
-      <div
-        role="button"
-        tabIndex={0}
-        aria-disabled={disabled}
-        onClick={() => !disabled && inputRef.current?.click()}
-        onKeyDown={(event) => {
-          if (!disabled && (event.key === 'Enter' || event.key === ' ')) inputRef.current?.click();
-        }}
+      {/* A `<label>`, not a `role="button"` div: it wraps the real `<input type="file">` below,
+          so a click anywhere in it natively delegates to the input - no manual click/keydown
+          handling needed, and no interactive-in-interactive nesting (axe's `nested-interactive`
+          rule, issue #23) from stacking a synthetic button role on top of an already-focusable
+          input. Keyboard users tab to the (visually hidden but still focusable) input directly
+          and open the picker with the browser's native Enter/Space handling. */}
+      <label
         onDragOver={(event) => {
           event.preventDefault();
           if (!disabled) setDragOver(true);
@@ -127,7 +125,6 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
           be attached as sources.
         </p>
         <input
-          ref={inputRef}
           type="file"
           multiple
           disabled={disabled}
@@ -138,7 +135,7 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
             event.target.value = '';
           }}
         />
-      </div>
+      </label>
 
       {items.length > 0 ? (
         <ul className="space-y-1.5">

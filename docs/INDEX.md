@@ -6,6 +6,7 @@
 - Architecture: `ARCHITECTURE.md`
 - API reference (CLI): `API_REFERENCE.md`
 - Web API reference (HTTP): `WEB_API_REFERENCE.md` (`openapi.yaml`)
+- Web UI: `WEB_UI.md` (screens, state ownership, SSE handling, known limitations — see `app/README.md` for setup/scripts)
 - Configuration: `CONFIGURATION.md`
 - Operations: `OPERATIONS.md`
 - Troubleshooting: `TROUBLESHOOTING.md`

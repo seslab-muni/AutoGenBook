@@ -2,6 +2,7 @@ import { MutationCache, QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
+import { reportError } from '@/lib/report-error';
 
 function isClientError(error: unknown): boolean {
   return error instanceof ApiError && error.status >= 400 && error.status < 500;
@@ -30,6 +31,7 @@ export function createQueryClient(): QueryClient {
       onError: (error) => {
         const problem = error instanceof ApiError ? error.problem : undefined;
         toast.error(problem?.title ?? 'Something went wrong', { description: problem?.detail });
+        reportError(error, { source: 'mutationCache' });
       },
     }),
   });

@@ -1,0 +1,25 @@
+# CI/e2e override (issue #23): points the CLI subprocess `api`/`worker` shell out to
+# (`api/core/settings.py`'s `CLI_ENTRYPOINT`, consumed by `book_command.py`) at
+# `tests/api/fake_cli.py` instead of the real `main.py`, so the Playwright smoke suite
+# (`app/e2e`) can drive a full project → source → outline → run → export flow deterministically,
+# without an `OPENROUTER_API_KEY` or any LLM/network calls. `tests/api/fake_cli.py` is already
+# baked into the `api`/`worker` image (the root `Dockerfile`'s `COPY . .` copies the whole repo,
+# tests/ included).
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait
+# then seed a login (same pattern as the README's manual seeding step):
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
+#     -e AUTOGENBOOK_USER_PASSWORD=... api python -m api.scripts.users create \
+#     --email e2e@example.com --name "E2E"
+services:
+  api:
+    environment:
+      CLI_ENTRYPOINT: tests/api/fake_cli.py
+
+  worker:
+    environment:
+      CLI_ENTRYPOINT: tests/api/fake_cli.py
+      # The fake CLI is deterministic and finishes in well under a minute
+      # (FAKE_CLI_STEP_SLEEP_S) - no need for the real CLI's 6-hour ceiling
+      # while a stuck e2e run waits it out.
+      CLI_RUN_TIMEOUT_S: "120"
