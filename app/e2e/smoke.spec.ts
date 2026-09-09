@@ -24,6 +24,11 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
   await page.getByLabel('Authors').fill('E2E Suite');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page).toHaveURL(/\/p\/[^/]+$/);
+  // The New Project dialog (mounted once at the root layout, so it survives this navigation)
+  // plays a ~200ms close animation after `closeModal()`, during which its own embedded
+  // `SourcePicker` still has an "Upload files" input in the DOM - opening Sources before that
+  // finishes makes `getByLabel('Upload files')` match two inputs instead of one.
+  await expect(page.getByRole('dialog')).toBeHidden();
 
   // --- Source upload + attach ---
   await page.getByRole('button', { name: /Sources/ }).click();
@@ -45,7 +50,11 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
     const input = page.getByRole('textbox', { name: /^Rename "Untitled chapter"/ }).last();
     await input.fill(title);
     await input.press('Enter');
-    await expect(page.getByText(title, { exact: true })).toBeVisible();
+    // Not a generic `getByText(title)`: the newly-created chapter auto-selects, so its title
+    // also renders as the editor pane's `<h1>` - scoping to the outline row's own rename span
+    // (by its accessible name, which includes the now-renamed title) avoids a strict-mode
+    // violation from matching both.
+    await expect(page.getByRole('textbox', { name: `Rename "${title}"` })).toBeVisible();
   }
 
   // --- Start a run ---
@@ -58,7 +67,7 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
 
   // --- A section shows generated content ---
   await page.goto(page.url().replace(/\/runs\/.+$/, ''));
-  await page.getByText(chapterTitles[0]!, { exact: true }).click();
+  await page.getByRole('textbox', { name: `Rename "${chapterTitles[0]}"` }).click();
   await expect(
     page.getByText(
       'This section is empty. Switch to Source to write it, or use the Copilot to generate it.',
