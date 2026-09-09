@@ -68,32 +68,40 @@ interface OutlineRowProps {
 export const STRUCTURE_LOCKED_MESSAGE =
   "A run is active — the outline's structure can't be changed until it finishes or is cancelled.";
 
+/**
+ * Move/indent/outdent reorder a node relative to its siblings in `flat` — while a filter is
+ * active, some of those siblings are pruned out of the visible tree, so reordering against them
+ * would silently happen relative to a hidden node. Clearing the filter first keeps the intended
+ * order in view.
+ */
+const FILTER_ACTIVE_MOVE_MESSAGE = 'Clear the outline filter to reorder sections.';
+
 function reportError(error: unknown, fallback: string) {
   const problem = error instanceof ApiError ? error.problem : undefined;
   toast.error(problem?.detail ?? problem?.title ?? fallback);
 }
 
-/** Read-only title with the first case-insensitive match of `query` wrapped in `<mark>`. */
-function HighlightedTitle({
-  title,
-  query,
-  className,
-}: {
-  title: string;
-  query: string;
-  className?: string;
-}) {
-  const index = title.toLowerCase().indexOf(query.trim().toLowerCase());
-  if (index === -1) {
-    return <span className={className}>{title}</span>;
-  }
-  const end = index + query.trim().length;
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Wraps the first case-insensitive match of (already-trimmed) `query` in `text` with `<mark>`, or
+ * returns `text` unchanged if there's no match. Matches with a regex against the original-case
+ * `text` directly (rather than comparing lowercased copies) so the returned slice indices can't
+ * desync from a case-fold that changes string length (e.g. Turkish İ under `.toLowerCase()`).
+ */
+function highlightMatch(text: string, query: string): React.ReactNode {
+  const match = new RegExp(escapeRegExp(query), 'i').exec(text);
+  if (!match) return text;
+  const start = match.index;
+  const end = start + match[0].length;
   return (
-    <span className={className}>
-      {title.slice(0, index)}
-      <mark className="rounded-sm bg-primary/25 text-inherit">{title.slice(index, end)}</mark>
-      {title.slice(end)}
-    </span>
+    <>
+      {text.slice(0, start)}
+      <mark className="rounded-sm bg-primary/25 text-inherit">{text.slice(start, end)}</mark>
+      {text.slice(end)}
+    </>
   );
 }
 
@@ -129,6 +137,12 @@ function OutlineRowComponent({
   const parent = node.parentId ? flat.find((item) => item.id === node.parentId) : undefined;
   const canIndent = previousSibling !== undefined && node.level < maxOutlineLevels;
   const canOutdent = parent !== undefined;
+  const moveDisabledByFilter = Boolean(highlightQuery);
+  const moveDisabledMessage = structuralEditsDisabled
+    ? STRUCTURE_LOCKED_MESSAGE
+    : moveDisabledByFilter
+      ? FILTER_ACTIVE_MOVE_MESSAGE
+      : undefined;
 
   function rename(title: string) {
     updateMutation.mutate(
@@ -213,15 +227,22 @@ function OutlineRowComponent({
             )}
 
             <span className="shrink-0 font-mono text-[11px] font-semibold text-muted-foreground">
-              {node.sectionNumber}
+              {highlightQuery ? highlightMatch(node.sectionNumber, highlightQuery) : node.sectionNumber}
             </span>
 
             {highlightQuery ? (
-              <HighlightedTitle
-                title={node.title}
-                query={highlightQuery}
-                className="min-w-0 flex-1 truncate text-sm"
-              />
+              // Mirrors `InlineEdit`'s non-editing display span (role/tabIndex/title) so filtering
+              // doesn't regress hover-tooltip or keyboard-focus behavior — just swaps in the
+              // highlighted text and drops the double-click-to-rename affordance.
+              <span
+                role="textbox"
+                tabIndex={0}
+                aria-label={`Rename "${node.title}"`}
+                title={`${node.sectionNumber} ${node.title}`}
+                className="min-w-0 flex-1 cursor-text truncate text-sm"
+              >
+                {highlightMatch(node.title, highlightQuery)}
+              </span>
             ) : (
               <InlineEdit
                 value={node.title}
@@ -245,7 +266,9 @@ function OutlineRowComponent({
 
             <div
               className={cn(
-                'absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 rounded px-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100',
+                // `opacity-0` alone still leaves the buttons hit-testable and overlapping the
+                // title — `pointer-events-none` keeps them inert until actually shown.
+                'pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 rounded px-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
                 isSelected ? 'bg-accent' : 'bg-accent/50',
               )}
             >
@@ -315,29 +338,31 @@ function OutlineRowComponent({
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem
-            disabled={siblingIndex <= 0 || structuralEditsDisabled}
-            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            disabled={siblingIndex <= 0 || structuralEditsDisabled || moveDisabledByFilter}
+            title={moveDisabledMessage}
             onSelect={() => move('up')}
           >
             Move up
           </ContextMenuItem>
           <ContextMenuItem
-            disabled={siblingIndex >= siblings.length - 1 || structuralEditsDisabled}
-            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            disabled={
+              siblingIndex >= siblings.length - 1 || structuralEditsDisabled || moveDisabledByFilter
+            }
+            title={moveDisabledMessage}
             onSelect={() => move('down')}
           >
             Move down
           </ContextMenuItem>
           <ContextMenuItem
-            disabled={!canOutdent || structuralEditsDisabled}
-            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            disabled={!canOutdent || structuralEditsDisabled || moveDisabledByFilter}
+            title={moveDisabledMessage}
             onSelect={() => move('outdent')}
           >
             Outdent
           </ContextMenuItem>
           <ContextMenuItem
-            disabled={!canIndent || structuralEditsDisabled}
-            title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+            disabled={!canIndent || structuralEditsDisabled || moveDisabledByFilter}
+            title={moveDisabledMessage}
             onSelect={() => move('indent')}
           >
             Indent

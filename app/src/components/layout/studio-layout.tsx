@@ -51,8 +51,15 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
     <div className="flex min-h-0 flex-1 overflow-hidden">
       {outlineOpen ? (
         <div
-          className="flex shrink-0 flex-col overflow-hidden border-r"
-          style={{ width: outlineWidth }}
+          className={cn(
+            'flex shrink-0 flex-col overflow-hidden border-r',
+            // At the untouched default width, keep the old responsive w-72/lg:w-80 breakpoint
+            // (matching the copilot pane's own w-80/lg:w-96) instead of a flat inline pixel value
+            // that doesn't scale down on narrow viewports; a genuinely custom width (drag, or
+            // keyboard resize) switches to the fixed inline value below.
+            outlineWidth === DEFAULT_OUTLINE_WIDTH && 'w-72 lg:w-80',
+          )}
+          style={outlineWidth === DEFAULT_OUTLINE_WIDTH ? undefined : { width: outlineWidth }}
         >
           <div className="flex min-h-0 flex-1">
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{outlinePane}</div>
