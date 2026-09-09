@@ -15,9 +15,15 @@ export function createQueryClient(): QueryClient {
         // 4xx responses won't succeed on retry (bad request, not found, ...); anything
         // else (network errors, 5xx) gets one retry.
         retry: (failureCount, error) => !isClientError(error) && failureCount < 1,
-        // 5xx/network failures propagate to the nearest route errorComponent; 4xx
-        // errors are left for the calling component to handle inline.
-        throwOnError: (error) => !isClientError(error),
+        // 5xx/network failures propagate to the nearest route errorComponent (root's
+        // `ErrorView`, see `routes/__root.tsx`) only when there's no cached data to fall
+        // back on - same rule as `useSuspenseQuery`'s own default. Without the
+        // `query.state.data === undefined` guard, a single rate-limited (or otherwise
+        // transient) background refetch on an already-rendered page - e.g. the burst of
+        // refetches a multi-file source upload used to cause, issue #106 - would unmount
+        // the whole visible view instead of leaving the still-good cached data on screen.
+        // 4xx errors are always left for the calling component to handle inline.
+        throwOnError: (error, query) => !isClientError(error) && query.state.data === undefined,
       },
     },
     mutationCache: new MutationCache({

@@ -5,6 +5,16 @@
 # quota: uploads, downloads and run creation (which spends
 # `OPENROUTER_API_KEY` budget) shouldn't let one *authenticated* client
 # exhaust connections or LLM spend either.
+#
+# `burst`/`limit_conn` raised from 30/20 (issue #106): a single multi-file
+# source upload in this 4-person lab - each file firing its own
+# upload+attach request pair, each attach triggering its own list/detail
+# refetch - could legitimately burst past the old limits, tripping this
+# rate limiter's plain-HTML default error page (not JSON) and, before
+# issue #106's other two fixes, crashing the SPA. The debounced
+# invalidation and non-destructive `throwOnError` from that issue reduce
+# how much a normal upload burst adds, but the limit itself is still sized
+# for a public multi-tenant API rather than this lab's actual traffic.
 limit_req_zone $binary_remote_addr zone=api_req:10m rate=10r/s;
 limit_conn_zone $binary_remote_addr zone=api_conn:10m;
 # A tighter, dedicated backstop for the login endpoint itself (issue #96):
@@ -45,11 +55,13 @@ server {
         # which needs one long-lived connection per open runs view - that's
         # bounded separately by `limit_conn` below and by the DB pool fix
         # for issue #46.
-        limit_req zone=api_req burst=30 nodelay;
+        limit_req zone=api_req burst=60 nodelay;
         # Caps concurrent in-flight requests (including open SSE streams)
         # per client IP - the thing issue #46 warned can exhaust the DB
-        # pool at ~15 concurrent streams.
-        limit_conn api_conn 20;
+        # pool at ~15 concurrent streams. Raised from 20 (issue #106) to
+        # leave headroom above that DB-pool-driven SSE cap for a burst of
+        # ordinary in-flight upload/refetch requests too.
+        limit_conn api_conn 40;
 
         # Issue #47: nginx's own default (1m) is far below the API's
         # `MAX_UPLOAD_MB` (200m default) - every RAG source PDF over 1 MB
