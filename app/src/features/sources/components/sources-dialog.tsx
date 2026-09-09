@@ -281,7 +281,7 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto">{sourcesBody}</div>
+          <div className="custom-scrollbar flex-1 overflow-y-auto">{sourcesBody}</div>
         </DialogContent>
       </Dialog>
 

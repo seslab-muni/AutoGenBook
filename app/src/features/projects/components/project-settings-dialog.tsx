@@ -89,7 +89,7 @@ export function ProjectSettingsDialog({ project }: ProjectSettingsDialogProps) {
   return (
     <>
       <Dialog open={open} onOpenChange={(next) => !next && closeModal()}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+        <DialogContent className="custom-scrollbar max-h-[85vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Project settings</DialogTitle>
             <DialogDescription>

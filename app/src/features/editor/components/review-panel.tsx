@@ -26,7 +26,7 @@ export function ReviewPanel({ reviewerScore, reviewerNotes }: ReviewPanelProps) 
   }
 
   return (
-    <div className="flex flex-col gap-3 overflow-auto p-3">
+    <div className="custom-scrollbar flex flex-col gap-3 overflow-auto p-3">
       {reviewerScore != null ? (
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">Score</span>

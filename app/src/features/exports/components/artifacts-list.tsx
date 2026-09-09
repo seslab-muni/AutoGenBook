@@ -116,7 +116,7 @@ function AuditReportPreview({ artifact }: { artifact: RunArtifact }) {
         {open ? 'Hide findings' : 'Show findings'}
       </button>
       {open ? (
-        <div className="mt-1.5 max-h-64 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px]">
+        <div className="custom-scrollbar mt-1.5 max-h-64 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px]">
           {preview}
         </div>
       ) : null}
@@ -192,7 +192,7 @@ function LogPreview({ artifact }: { artifact: RunArtifact }) {
       {open ? (
         <pre
           role="log"
-          className="mt-1.5 max-h-64 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px] whitespace-pre-wrap"
+          className="custom-scrollbar mt-1.5 max-h-64 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px] whitespace-pre-wrap"
         >
           {textQuery.isPending ? 'Loading…' : textQuery.data}
         </pre>

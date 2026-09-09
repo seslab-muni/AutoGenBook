@@ -91,7 +91,7 @@ export function ProjectsHub() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-8">
+      <main className="custom-scrollbar mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-8">
         <div className="flex items-center justify-between gap-4">
           <div className="relative max-w-sm flex-1">
             <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />

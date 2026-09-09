@@ -137,6 +137,41 @@ export function descendantIds(nodeId: string, flat: readonly OutlineNode[]): Set
   return result;
 }
 
+/**
+ * Prunes `tree` down to nodes whose title or section number contains `query` (case-insensitive),
+ * plus every ancestor of a match so the path to it stays visible. A node's non-matching children
+ * are dropped even if the node itself matches — narrower results than keeping whole matched
+ * subtrees, but keeps the rule simple: a node survives iff it matches or one of its descendants
+ * does. Returns `tree` unchanged (same reference) when `query` is blank.
+ */
+export function filterTree(tree: readonly OutlineTree[], query: string): OutlineTree[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return tree as OutlineTree[];
+
+  function filterEntry(entry: OutlineTree): OutlineTree | null {
+    const selfMatches =
+      entry.node.title.toLowerCase().includes(normalized) ||
+      entry.node.sectionNumber.toLowerCase().includes(normalized);
+    const filteredChildren = entry.children
+      .map(filterEntry)
+      .filter((child): child is OutlineTree => child !== null);
+    if (!selfMatches && filteredChildren.length === 0) return null;
+    return { node: entry.node, children: filteredChildren };
+  }
+
+  return tree.map(filterEntry).filter((entry): entry is OutlineTree => entry !== null);
+}
+
+/** Whether `node` (by title or section number) matches `query`, case-insensitively. */
+export function nodeMatches(node: OutlineNode, query: string): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    node.title.toLowerCase().includes(normalized) ||
+    node.sectionNumber.toLowerCase().includes(normalized)
+  );
+}
+
 /** `orderIndex` a new last-sibling child of `parentId` should get. */
 export function nextOrderIndex(parentId: string | null, flat: readonly OutlineNode[]): number {
   const siblings = childrenOf(parentId, flat);

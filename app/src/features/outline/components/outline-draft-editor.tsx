@@ -181,7 +181,7 @@ export function OutlineDraftEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="custom-scrollbar max-h-[80vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Author outline</DialogTitle>
           <DialogDescription>

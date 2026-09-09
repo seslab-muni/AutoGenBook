@@ -869,19 +869,29 @@ def generate_contents(
             "tables": context_memory.tables,
             "open_threads": context_memory.open_threads,
         }
-        memory_update = memory_agent.run(
-            {
-                "context_memory_json": json.dumps(memory_payload, ensure_ascii=False, indent=2),
-                "section_title": node.get("title", ""),
-                "node_key": node_key,
-                "section_latex": tex,
-                "book_outline_text": toc_and_summary,
-                "retrieved_context": retrieved_context,
-            },
-            agent_ctx,
-        )
-        context_memory.apply_agent_update(memory_update, node_key, node.get("title", ""))
-        context_memory.save(memory_path)
+        try:
+            memory_update = memory_agent.run(
+                {
+                    "context_memory_json": json.dumps(memory_payload, ensure_ascii=False, indent=2),
+                    "section_title": node.get("title", ""),
+                    "node_key": node_key,
+                    "section_latex": tex,
+                    "book_outline_text": toc_and_summary,
+                    "retrieved_context": retrieved_context,
+                },
+                agent_ctx,
+            )
+        except Exception as exc:
+            # context_memory is a best-effort consistency aid, not required to produce the
+            # section itself; a bad/unparseable LLM reply here must not abort the whole run
+            # and discard an already-written, already-reviewed section.
+            print(
+                f"[GEN] WARNING: context_memory update failed for '{node_key}' "
+                f"({type(exc).__name__}: {exc}). Skipping memory update for this section."
+            )
+        else:
+            context_memory.apply_agent_update(memory_update, node_key, node.get("title", ""))
+            context_memory.save(memory_path)
 
         # Persist section content
         section_path = sections_dir / f"{node_key}{section_ext}"

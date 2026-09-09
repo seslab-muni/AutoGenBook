@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
@@ -129,5 +129,61 @@ describe('OutlinePane structural-edit gating (issue #74)', () => {
     );
     expect(screen.getByRole('menuitem', { name: 'Indent' })).not.toHaveAttribute('data-disabled');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toHaveAttribute('data-disabled');
+  });
+});
+
+describe('OutlinePane filter (issue #115)', () => {
+  it('prunes the tree to matches and their ancestors, and updates the match count', async () => {
+    const { container } = renderPane();
+    await findRow(MIDDLE_CHAPTER_TITLE);
+
+    const filterInput = screen.getByRole('textbox', { name: /filter outline sections/i });
+    fireEvent.change(filterInput, { target: { value: 'Quantum Byzantine' } });
+
+    // Debounced — wait for the unrelated chapter to be pruned out before asserting further.
+    await waitFor(() => {
+      expect(
+        screen.queryByText('Foundations of Classical Asynchronous Consensus'),
+      ).not.toBeInTheDocument();
+    });
+
+    // The match itself (its title now rendered as a highlighted, non-`getByText`-friendly span —
+    // matched by `data-node-id` instead) and its ancestor chapter stay visible.
+    expect(container.querySelector('[data-node-id="sec-2-2"]')).toBeInTheDocument();
+    await findRow(MIDDLE_CHAPTER_TITLE);
+
+    expect(screen.getByText('1 of 9 nodes')).toBeInTheDocument();
+
+    // Clearing the filter restores the full tree.
+    fireEvent.change(filterInput, { target: { value: '' } });
+    await screen.findByText('Foundations of Classical Asynchronous Consensus');
+    expect(await screen.findByText('9 nodes')).toBeInTheDocument();
+  });
+
+  it('shows a "No sections match" empty state for a query with no hits', async () => {
+    renderPane();
+    await findRow(MIDDLE_CHAPTER_TITLE);
+
+    const filterInput = screen.getByRole('textbox', { name: /filter outline sections/i });
+    fireEvent.change(filterInput, { target: { value: 'no such section exists' } });
+
+    expect(await screen.findByText('No sections match')).toBeInTheDocument();
+    expect(screen.getByText('0 of 9 nodes')).toBeInTheDocument();
+  });
+});
+
+describe('OutlinePane expand all / collapse all (issue #115)', () => {
+  it('collapse all hides child rows, expand all restores them', async () => {
+    renderPane();
+    await findRow(MIDDLE_CHAPTER_TITLE);
+    await findRow('Surface Code Syndrome Extraction Cycles');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    expect(
+      screen.queryByText('Surface Code Syndrome Extraction Cycles'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    await findRow('Surface Code Syndrome Extraction Cycles');
   });
 });

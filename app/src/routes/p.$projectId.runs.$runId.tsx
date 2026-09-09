@@ -173,7 +173,7 @@ function RunPage() {
           <RunEventLog events={events} className="flex-1 p-2" />
         </div>
 
-        <div className="space-y-4 overflow-y-auto">
+        <div className="custom-scrollbar space-y-4 overflow-y-auto">
           <div className="rounded-lg border p-3">
             <RunCostSummary run={run} />
             <p className="mt-2 text-xs text-muted-foreground">

@@ -103,7 +103,7 @@ export function RunsPanel({ projectId }: RunsPanelProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto">{body}</div>
+        <div className="custom-scrollbar flex-1 overflow-y-auto">{body}</div>
       </DialogContent>
     </Dialog>
   );

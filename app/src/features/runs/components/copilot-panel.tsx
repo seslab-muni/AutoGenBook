@@ -199,7 +199,7 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex-1 space-y-3 overflow-y-auto p-3">
+      <div className="custom-scrollbar flex-1 space-y-3 overflow-y-auto p-3">
         <div>
           <p className="text-xs font-semibold text-foreground">
             §{node.sectionNumber} {node.title}

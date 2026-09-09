@@ -9,9 +9,11 @@ import {
   childrenOf,
   depthOf,
   descendantIds,
+  filterTree,
   flattenTree,
   isLeaf,
   nextOrderIndex,
+  nodeMatches,
 } from './model';
 
 function node(overrides: Partial<OutlineNode> & Pick<OutlineNode, 'id'>): OutlineNode {
@@ -125,5 +127,47 @@ describe('nextOrderIndex', () => {
     expect(nextOrderIndex(null, [])).toBe(0);
     expect(nextOrderIndex(null, FLAT)).toBe(2);
     expect(nextOrderIndex('chapter1', FLAT)).toBe(2);
+  });
+});
+
+describe('nodeMatches', () => {
+  it('matches title or sectionNumber case-insensitively', () => {
+    const target = node({ id: 'x', title: 'Structural Analysis', sectionNumber: '2.1.3' });
+    expect(nodeMatches(target, 'structural')).toBe(true);
+    expect(nodeMatches(target, 'STRUCT')).toBe(true);
+    expect(nodeMatches(target, '2.1')).toBe(true);
+    expect(nodeMatches(target, 'nope')).toBe(false);
+  });
+
+  it('is false for a blank query', () => {
+    expect(nodeMatches(node({ id: 'x', title: 'Anything' }), '  ')).toBe(false);
+  });
+});
+
+describe('filterTree', () => {
+  it('returns the same tree reference for a blank query', () => {
+    const tree = buildTree(FLAT);
+    expect(filterTree(tree, '  ')).toBe(tree);
+  });
+
+  it('keeps a matching leaf and its ancestors, dropping non-matching siblings', () => {
+    const tree = buildTree(FLAT);
+    const filtered = filterTree(tree, 'section11');
+
+    expect(filtered.map((t) => t.node.id)).toEqual(['chapter1']);
+    expect(filtered[0]?.children.map((t) => t.node.id)).toEqual(['section11']);
+  });
+
+  it('keeps a matching root with only its matching descendants', () => {
+    const tree = buildTree(FLAT);
+    const filtered = filterTree(tree, 'section1');
+
+    expect(filtered.map((t) => t.node.id)).toEqual(['chapter1']);
+    expect(filtered[0]?.children.map((t) => t.node.id)).toEqual(['section11', 'section12']);
+  });
+
+  it('returns an empty array when nothing matches', () => {
+    const tree = buildTree(FLAT);
+    expect(filterTree(tree, 'no such section')).toEqual([]);
   });
 });
