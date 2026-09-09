@@ -31,6 +31,9 @@ export function usePaneResize({
   const onPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
+      // Without this, the same mousedown also anchors the browser's native text-selection drag,
+      // which then visibly selects text in the panes on either side of the handle as it moves.
+      event.preventDefault();
       const startX = event.clientX;
       const startWidth = width;
 
@@ -39,13 +42,18 @@ export function usePaneResize({
         const signedDelta = direction === 'right' ? delta : -delta;
         onWidthChange(clamp(startWidth + signedDelta));
       }
-      function handlePointerUp() {
+      function endDrag() {
         window.removeEventListener('pointermove', handlePointerMove);
-        window.removeEventListener('pointerup', handlePointerUp);
+        window.removeEventListener('pointerup', endDrag);
+        window.removeEventListener('pointercancel', endDrag);
       }
 
       window.addEventListener('pointermove', handlePointerMove);
-      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointerup', endDrag);
+      // A touch/OS-cancelled gesture never fires `pointerup` — without this, the listeners above
+      // stay attached to `window` and later unrelated pointer moves keep resizing from this
+      // gesture's stale `startX`/`startWidth`.
+      window.addEventListener('pointercancel', endDrag);
     },
     [clamp, direction, onWidthChange, width],
   );

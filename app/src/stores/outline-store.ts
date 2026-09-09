@@ -61,6 +61,13 @@ export const useOutlineStore = create<OutlineState>()(
       seedCollapsed: (projectId, collapseIds, keepExpandedIds) =>
         set((state) => {
           if (state.seededByProject[projectId]) return state;
+          // A project already has a `collapsedByProject` entry (even an empty array) once the
+          // user has ever toggled/expanded/collapsed-all in it — that's real, intentional state,
+          // not the "never touched" case this seed is meant for. Mark it seeded without touching
+          // it so this effect doesn't re-run, but don't clobber what the user already set up.
+          if (projectId in state.collapsedByProject) {
+            return { seededByProject: { ...state.seededByProject, [projectId]: true } };
+          }
           const keep = new Set(keepExpandedIds);
           const collapsed = collapseIds.filter((id) => !keep.has(id));
           return {
