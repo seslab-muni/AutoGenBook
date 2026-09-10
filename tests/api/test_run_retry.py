@@ -463,6 +463,41 @@ async def test_retry_409_when_graph_was_never_written(
     assert response.status_code == 409
 
 
+async def test_retry_409_when_the_graph_has_no_recorded_input_hash(
+    app,
+    authed_client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """A `structure_graph.json` missing `graph.input_sha256` is one of the
+    conditions where the real CLI's own `--resume` short-circuit
+    (`book_pipeline.py`) refuses to resume and silently rebuilds the whole
+    book from scratch at full LLM cost instead - the drift guard below can
+    never catch that if there's no stored hash to compare against, so
+    `retry_blocker` must reject it directly rather than let it fall through
+    as "no drift detected"."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    project = await _create_project(authed_client)
+    project_id = project["id"]
+    await _create_node(authed_client, project_id, "Chapter A")
+    base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
+    await _fail_run(session_factory, base_run["id"])
+
+    graph_path = Path(settings.runs_dir) / base_run["id"] / "out" / "structure_graph.json"
+    graph_data = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph_data["graph"]["input_sha256"] = ""
+    graph_path.write_text(json.dumps(graph_data), encoding="utf-8")
+
+    base_after = (await authed_client.get(f"/api/v1/runs/{base_run['id']}")).json()
+    assert base_after["retryable"] is False
+
+    response = await authed_client.post(f"/api/v1/runs/{base_run['id']}/retry")
+    assert response.status_code == 409
+
+
 async def test_retry_409_when_the_outline_changed_since_the_failed_run(
     app,
     authed_client: AsyncClient,

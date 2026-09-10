@@ -378,6 +378,11 @@ class RunRecord(Base):
             postgresql_where=sa.text("status IN ('succeeded', 'failed', 'cancelled')"),
             sqlite_where=sa.text("status IN ('succeeded', 'failed', 'cancelled')"),
         ),
+        # `RunRepository.list_by_work_dir` (issue #124: `RunService.retry`'s
+        # succeeded-sibling guard) filters on equality here every retry
+        # attempt - unindexed otherwise, since `ix_runs_finished_at_terminal`
+        # above is keyed on `finished_at`, not `work_dir`.
+        sa.Index("ix_runs_work_dir", "work_dir"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)

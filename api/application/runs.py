@@ -612,6 +612,16 @@ def retry_blocker(run: Run) -> str | None:
         return f"run {run.id}'s work directory no longer exists; start a full run"
     if not (work_dir / book_command.OUT_DIRNAME / "structure_graph.json").is_file():
         return f"run {run.id} never produced a structure graph; start a full run"
+    if not _read_graph_input_sha256(run.work_dir):
+        # `book_pipeline.py`'s own `--resume` short-circuit needs
+        # `graph.input_sha256` to decide whether it's safe to resume at
+        # all - a graph missing it (e.g. the run died before finishing its
+        # first write of the graph) makes the CLI itself refuse `--resume`
+        # and silently rebuild the whole book from scratch at full LLM
+        # cost, which is exactly the outcome the drift guard below exists
+        # to prevent. Block it here too, rather than only catching drift
+        # once there's a hash to compare against.
+        return f"run {run.id}'s structure graph has no recorded input hash; start a full run"
     return None
 
 

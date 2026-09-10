@@ -1142,7 +1142,10 @@ export interface components {
          *     A fresh `full` run always starts a brand-new work directory, so
          *     `resume=True` would resume nothing, `exportTexOnly=True` has no base
          *     Markdown to skip regenerating, and `rebuildKb` has no pre-existing index
-         *     to force a rebuild of.
+         *     to force a rebuild of. Resuming a `failed`/`cancelled` `full` run's own
+         *     work directory (issue #124) goes through `POST /runs/{id}/retry`
+         *     instead, which sets `resume=True` on the new run itself - there is no
+         *     way to request it through this body.
          */
         RunOptionsIn: {
             /**

@@ -134,14 +134,21 @@ class RunEventPage(BaseSchema):
     after_seq: int
 
 
+def _resumable_and_retryable(run: RunDomain) -> tuple[bool, bool]:
+    return Path(run.work_dir).is_dir(), retry_blocker(run) is None
+
+
 async def run_to_schema(run: RunDomain) -> Run:
     # Off the event loop (issue #55): `Path.is_dir()` is a `stat(2)` against
     # the shared `runs_data` volume, done once per run in a list response -
     # cheap on a healthy local disk, but still a blocking syscall issued
     # directly on the loop for every row instead of handed to the
     # threadpool the way every other filesystem touch in this codebase is.
-    resumable = await run_in_threadpool(Path(run.work_dir).is_dir)
-    retryable = (await run_in_threadpool(retry_blocker, run)) is None
+    # One threadpool hop computes both `resumable` and `retryable` (issue
+    # #124) rather than two - `retry_blocker` re-derives its own `is_dir()`
+    # internally, but that's a second syscall inside the same dispatched
+    # call, not a second thread-pool round trip.
+    resumable, retryable = await run_in_threadpool(_resumable_and_retryable, run)
     return Run(
         id=run.id,
         project_id=run.project_id,
