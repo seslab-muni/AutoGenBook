@@ -17,7 +17,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: web
-        image: cerit.io/conerzyo/autogenbook-web:397980c
+        image: cerit.io/conerzyo/autogenbook-web:0ad5dc6
         securityContext:
           runAsUser: 101
           runAsGroup: 101
