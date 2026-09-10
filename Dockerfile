@@ -5,8 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pandoc texlive-luatex tesseract-ocr poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+    # texlive-luatex alone only ships LuaTeX-specific style packages; the actual
+    # lualatex format (and the /usr/bin/lualatex binary) is built from the fmtutil.cnf
+    # stanza that texlive-latex-base provides, so both are required.
+    && apt-get install -y --no-install-recommends pandoc texlive-luatex texlive-latex-base tesseract-ocr poppler-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && which lualatex
 
 WORKDIR /app
 COPY requirements.txt ./requirements.txt
