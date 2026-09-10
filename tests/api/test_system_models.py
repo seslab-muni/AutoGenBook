@@ -6,6 +6,8 @@ real network call.
 
 from __future__ import annotations
 
+import asyncio
+
 from httpx import AsyncClient
 
 from api.domain.models import LlmModelInfo
@@ -121,3 +123,25 @@ async def test_caching_model_catalog_never_caches_a_failure() -> None:
     # Every call actually re-hit the inner catalog - a failure is never cached, so the endpoint
     # (and the deployment it's calling) gets to recover without waiting out the TTL.
     assert inner.calls == 3
+
+
+async def test_caching_model_catalog_coalesces_concurrent_cache_misses() -> None:
+    # Issue #128 review, fix 10: N requests landing while the cache is cold/expired should
+    # produce exactly one upstream `list_models()` call, not N racing ones. `_StubCatalog` alone
+    # wouldn't actually exercise the race (each call completes synchronously before the next
+    # ever starts) - a real `asyncio.sleep` in `list_models` forces every concurrent caller to
+    # actually be in flight at once, the way concurrent requests to the real inner catalog's
+    # blocking `GET /models` (off the event loop via `run_in_threadpool`) would be.
+    class _SlowStubCatalog(_StubCatalog):
+        async def list_models(self) -> list[LlmModelInfo]:
+            self.calls += 1
+            await asyncio.sleep(0.02)
+            return self._items
+
+    inner = _SlowStubCatalog(items=[LlmModelInfo(id="openai/gpt-5-mini")])
+    caching = CachingModelCatalog(inner, ttl_s=300.0, clock=lambda: 0.0)
+
+    results = await asyncio.gather(*(caching.list_models() for _ in range(5)))
+
+    assert inner.calls == 1
+    assert all(result == results[0] for result in results)

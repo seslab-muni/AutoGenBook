@@ -425,6 +425,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/artifacts/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run Artifacts Summary */
+        get: operations["runs-get_run_artifacts_summary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/events/stream": {
         parameters: {
             query?: never;
@@ -1128,6 +1145,19 @@ export interface components {
             sizeBytes: number;
             /** Contenttype */
             contentType: string;
+        };
+        /**
+         * RunArtifactSummary
+         * @description `GET /runs/{id}/artifacts/summary` (issue #129 review, fix 6): every
+         *     `ArtifactKind` this run has at least one artifact for, with its total
+         *     count - kept as a separate endpoint rather than a field bolted onto the
+         *     generic `Page[RunArtifact]` envelope every other list endpoint shares.
+         */
+        RunArtifactSummary: {
+            /** Countsbykind */
+            countsByKind: {
+                [key: string]: number;
+            };
         };
         /** RunEvent */
         RunEvent: {
@@ -2532,6 +2562,7 @@ export interface operations {
     "runs-list_run_artifacts": {
         parameters: {
             query?: {
+                kind?: components["schemas"]["ArtifactKind"] | null;
                 limit?: number;
                 offset?: number;
             };
@@ -2550,6 +2581,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Page_RunArtifact_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "runs-get_run_artifacts_summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunArtifactSummary"];
                 };
             };
             /** @description Validation Error */

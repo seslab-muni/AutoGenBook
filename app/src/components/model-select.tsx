@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { memo, useId, useMemo } from 'react';
 
 import { useModels } from '@/api/queries/system';
 import { Input } from '@/components/ui/input';
@@ -20,12 +20,36 @@ interface ModelSelectProps {
  * requirements at once, with no extra branching: the current value always renders (it's just
  * the input's value, in or out of the list) and an empty discovery list degrades to a plain
  * text input on its own (an empty `<datalist>` is a no-op).
+ *
+ * Wrapped in `memo` (issue #128 review): mounted inside forms like `ProjectFormFields`, where
+ * every keystroke in an unrelated field (title, topic, ...) re-renders the whole field list.
+ * Without this, that also re-ran `useModels()` and rebuilt every `<option>` in a
+ * hundreds-of-entries catalog on each keystroke, which is what made
+ * `new-project-dialog.test.tsx` slow enough to time out. `memo` only pays off when the props
+ * below stay referentially stable, so callers must not pass inline object/array literals or
+ * freshly-created callbacks - see `ProjectFormFields`'s own `useCallback`-wrapped handler.
  */
-export function ModelSelect({ value, onChange, id, placeholder, disabled }: ModelSelectProps) {
+export const ModelSelect = memo(function ModelSelect({
+  value,
+  onChange,
+  id,
+  placeholder,
+  disabled,
+}: ModelSelectProps) {
   const generatedId = useId();
   const listId = `${id ?? generatedId}-models`;
   const { data } = useModels();
-  const models = data?.items ?? [];
+  const models = useMemo(() => data?.items ?? [], [data]);
+
+  const options = useMemo(
+    () =>
+      models.map((model) => (
+        <option key={model.id} value={model.id}>
+          {model.name ?? model.id}
+        </option>
+      )),
+    [models],
+  );
 
   return (
     <>
@@ -38,15 +62,7 @@ export function ModelSelect({ value, onChange, id, placeholder, disabled }: Mode
         disabled={disabled}
         autoComplete="off"
       />
-      {models.length > 0 ? (
-        <datalist id={listId}>
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name ?? model.id}
-            </option>
-          ))}
-        </datalist>
-      ) : null}
+      {models.length > 0 ? <datalist id={listId}>{options}</datalist> : null}
     </>
   );
-}
+});

@@ -80,6 +80,8 @@ export type RunEvent = components['schemas']['RunEvent'];
 export type RunEventPage = components['schemas']['RunEventPage'];
 export type ArtifactKind = components['schemas']['ArtifactKind'];
 export type RunArtifact = components['schemas']['RunArtifact'];
+/** `GET /runs/{id}/artifacts/summary` — each `ArtifactKind` this run has produced at least one artifact for, with its total count (issue #129 review, fix 6). */
+export type RunArtifactSummary = components['schemas']['RunArtifactSummary'];
 export type RegenerateRequest = components['schemas']['RegenerateRequestIn'];
 export type ExportFormat = components['schemas']['ExportRequestIn']['format'];
 export type ExportRequest = components['schemas']['ExportRequestIn'];

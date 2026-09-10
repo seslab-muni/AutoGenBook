@@ -793,7 +793,24 @@ const runHandlers = [
   http.get('*/api/v1/runs/:runId/artifacts', ({ params, request }) => {
     const run = db.runs.get(params.runId as string);
     if (!run) return notFound('Run', new URL(request.url).pathname);
-    return HttpResponse.json(paginate(db.runArtifacts.get(run.id) ?? [], new URL(request.url)));
+    const url = new URL(request.url);
+    // `?kind=` (issue #129 review, fix 6) - mirrors `list_run_artifacts`'s own filter, applied
+    // before pagination so a kind-scoped fetch (`ArtifactsList`'s per-kind queries) gets that
+    // kind's own full page instead of racing every other kind for the same 200 rows.
+    const kind = url.searchParams.get('kind');
+    const all = db.runArtifacts.get(run.id) ?? [];
+    const filtered = kind ? all.filter((artifact) => artifact.kind === kind) : all;
+    return HttpResponse.json(paginate(filtered, url));
+  }),
+
+  http.get('*/api/v1/runs/:runId/artifacts/summary', ({ params, request }) => {
+    const run = db.runs.get(params.runId as string);
+    if (!run) return notFound('Run', new URL(request.url).pathname);
+    const countsByKind: Record<string, number> = {};
+    for (const artifact of db.runArtifacts.get(run.id) ?? []) {
+      countsByKind[artifact.kind] = (countsByKind[artifact.kind] ?? 0) + 1;
+    }
+    return HttpResponse.json({ countsByKind });
   }),
 
   http.post('*/api/v1/runs/:runId/exports', async ({ params, request }) => {

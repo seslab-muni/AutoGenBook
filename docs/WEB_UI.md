@@ -51,10 +51,14 @@ event stream and falls back to polling (`GET` the events endpoint plus the
 run itself every `pollIntervalMs`, default 2000ms) after repeated connection
 errors — the run detail route and any other consumer of `useRunStream`
 (`features/runs/hooks/use-run-stream.ts`) don't need to know which
-transport is currently active. On the terminal event (`done`), it
-invalidates the run/artifacts/outline/sources/project queries so the studio
-reflects newly-generated content without a manual refetch, and shows a
-`sonner` toast summarizing the outcome (succeeded/failed/cancelled).
+transport is currently active. On every `section` event (issue #129), not
+only the terminal `done`, it records the section's `nodeKey` (for the
+outline's per-node "still generating" spinners) and invalidates the run's
+artifacts and the project's outline/detail queries, so newly-uploaded
+sections and their content show up live while the run is still in progress
+instead of only once it finishes; `done` additionally invalidates
+sources/project and shows a `sonner` toast summarizing the outcome
+(succeeded/failed/cancelled).
 
 ## Known limitations
 

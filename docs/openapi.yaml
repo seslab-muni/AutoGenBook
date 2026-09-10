@@ -1207,6 +1207,14 @@ paths:
           type: string
           format: uuid
           title: Run Id
+      - name: kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/ArtifactKind'
+          - type: 'null'
+          title: Kind
       - name: limit
         in: query
         required: false
@@ -1231,6 +1239,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Page_RunArtifact_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}/artifacts/summary:
+    get:
+      tags:
+      - runs
+      summary: Get Run Artifacts Summary
+      operationId: runs-get_run_artifacts_summary
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunArtifactSummary'
         '422':
           description: Validation Error
           content:
@@ -2591,6 +2628,27 @@ components:
       - sizeBytes
       - contentType
       title: RunArtifact
+    RunArtifactSummary:
+      properties:
+        countsByKind:
+          additionalProperties:
+            type: integer
+          propertyNames:
+            $ref: '#/components/schemas/ArtifactKind'
+          type: object
+          title: Countsbykind
+      type: object
+      required:
+      - countsByKind
+      title: RunArtifactSummary
+      description: '`GET /runs/{id}/artifacts/summary` (issue #129 review, fix 6):
+        every
+
+        `ArtifactKind` this run has at least one artifact for, with its total
+
+        count - kept as a separate endpoint rather than a field bolted onto the
+
+        generic `Page[RunArtifact]` envelope every other list endpoint shares.'
     RunEvent:
       properties:
         seq:

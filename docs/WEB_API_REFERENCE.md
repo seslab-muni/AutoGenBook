@@ -384,11 +384,21 @@ Source: `api/application/runs.py:RunService.events`
 
 #### `GET /api/v1/runs/{runId}/artifacts`
 
-Query: `limit` (default 50, max 200), `offset` (default 0). Returns `Page<RunArtifact>`: `kind` (`markdown|tex|pdf|structure_graph|book_structure|section|section_review|kb_sources|run_meta|llm_usage|audit_report|log|bib|other`), `relativePath` (within the run's output directory), `fileId`/`filename`/`sizeBytes`/`contentType` (the uploaded object-storage `File`).
+Query: `kind` (optional; one of `markdown|tex|pdf|structure_graph|book_structure|section|section_review|kb_sources|run_meta|llm_usage|audit_report|log|bib|other` — restricts the page to that `ArtifactKind` only), `limit` (default 50, max 200), `offset` (default 0). Returns `Page<RunArtifact>`: `kind`, `relativePath` (within the run's output directory), `fileId`/`filename`/`sizeBytes`/`contentType` (the uploaded object-storage `File`).
+
+Artifacts appear here incrementally while the run is still `running`, not only once it reaches a terminal status (issue #129): the worker's drain loop uploads each leaf's `sections/<key>.md` (and `section_reviews/<key>.json`, if produced) as soon as the CLI announces that section, ahead of the terminal `upload_artifacts` call that covers everything else (`markdown`/`tex`/`pdf`/`bib`/`log`/... and any section the incremental path missed, e.g. because the run was cancelled mid-upload). Without `?kind=`, results are ordered by `relativePath`, which sorts `section_reviews/*` ahead of `sections/*` — on a run with enough leaf sections, an unfiltered `limit: 200` page can fill up with reviews before every section is listed; use `?kind=section` (or the summary endpoint below) to fetch a kind's own full set instead of racing every other kind for the same page.
 
 Status codes: `200`; `404`.
 
 Source: `api/application/runs.py:RunService.artifacts`
+
+#### `GET /api/v1/runs/{runId}/artifacts/summary`
+
+Returns `{ countsByKind: { [kind: string]: number } }` — every `ArtifactKind` this run has at least one artifact for, with its total count. Lets a client (the "N of M sections generated" counter, `ArtifactsList`'s per-kind fetches) know each kind's size without paging through `GET /runs/{runId}/artifacts` to count it.
+
+Status codes: `200`; `404`.
+
+Source: `api/application/runs.py:RunService.artifact_counts_by_kind`
 
 #### `GET /api/v1/runs/{runId}/events/stream`
 

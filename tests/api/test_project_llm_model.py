@@ -54,6 +54,35 @@ async def test_patch_project_updates_llm_model(authed_client: AsyncClient) -> No
     assert response.json()["llmModel"] == "openai/gpt-4o"
 
 
+async def test_patch_project_with_null_llm_model_leaves_it_unchanged(
+    authed_client: AsyncClient,
+) -> None:
+    # Issue #128 review, fix 9: `PATCH {"llmModel": null}` used to 500 - `ProjectUpdate.llm_model`
+    # accepts `None` (so the field can be genuinely omitted), but that `None` reaching `ProjectService.
+    # update` unconditionally applied `setattr(project, "llm_model", None)` against a `NOT NULL`
+    # column. It should instead be treated the same as not sending the field at all.
+    created = await _create_project(authed_client, llmModel="anthropic/claude-3.5-sonnet")
+    response = await authed_client.patch(
+        f"/api/v1/projects/{created['id']}", json={"llmModel": None}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["llmModel"] == "anthropic/claude-3.5-sonnet"
+
+
+async def test_patch_project_with_null_llm_model_alongside_other_fields_still_applies_them(
+    authed_client: AsyncClient,
+) -> None:
+    created = await _create_project(authed_client, llmModel="anthropic/claude-3.5-sonnet")
+    response = await authed_client.patch(
+        f"/api/v1/projects/{created['id']}",
+        json={"llmModel": None, "title": "Retitled Widgets"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["llmModel"] == "anthropic/claude-3.5-sonnet"
+    assert body["title"] == "Retitled Widgets"
+
+
 async def test_duplicate_project_copies_llm_model_rather_than_resolving_default_again(
     authed_client: AsyncClient,
 ) -> None:

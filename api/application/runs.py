@@ -29,6 +29,7 @@ from api.application.book_spec import SpecRenderer, StructureBuilder
 from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.core.settings import Settings, default_llm_model
 from api.domain.models import (
+    ArtifactKind,
     File,
     NodeStatus,
     Project,
@@ -305,10 +306,10 @@ class RunService:
         return await self._events.list(run_id, after_seq, limit)
 
     async def artifacts(
-        self, run_id: uuid.UUID, *, limit: int, offset: int
+        self, run_id: uuid.UUID, *, limit: int, offset: int, kind: ArtifactKind | None = None
     ) -> tuple[list[tuple[RunArtifact, File]], int]:
         await self._get(run_id)
-        artifacts_, total = await self._artifacts.list(run_id, limit, offset)
+        artifacts_, total = await self._artifacts.list(run_id, limit, offset, kind)
         # One batched lookup instead of one `SELECT` per artifact (issue
         # #51) - a run produces one artifact per section plus reviews, so
         # 50-200 rows here is normal.
@@ -319,6 +320,14 @@ class RunService:
             if artifact.file_id in files_by_id
         ]
         return pairs, total
+
+    async def artifact_counts_by_kind(self, run_id: uuid.UUID) -> dict[ArtifactKind, int]:
+        """Backs `GET /runs/{id}/artifacts/summary` (issue #129 review, fix
+        6) - lets the frontend's "N of M sections generated" counter and
+        per-kind `ArtifactsList` paging know each kind's total without
+        fetching (and counting) every artifact page by page."""
+        await self._get(run_id)
+        return await self._artifacts.count_by_kind(run_id)
 
     async def _resolvable_base_run(self, project_id: uuid.UUID, base_run_id: uuid.UUID | None) -> Run:
         """The most recent `full`/`regenerate_section` run whose work
@@ -1238,22 +1247,6 @@ class GenerationService:
                 try:
                     if batch:
                         await self._events.append_batch(run.id, batch)
-                        # Issue #129: as soon as a `"section"` event is
-                        # persisted, upload that leaf's `sections/<key>.md`
-                        # (and its review JSON, if any) right away instead of
-                        # waiting for the run to reach a terminal state -
-                        # `GET /runs/{id}/artifacts` then already shows it
-                        # while the CLI is still drafting the next section.
-                        # Best-effort and non-fatal by construction (`_upload_
-                        # section_artifact` never raises), so a failure here
-                        # never counts against this loop's own retry budget
-                        # below or aborts the run.
-                        for event in batch:
-                            if event.stage != "section":
-                                continue
-                            node_key = (event.payload or {}).get("nodeKey")
-                            if isinstance(node_key, str) and node_key:
-                                await self._upload_section_artifact(run, node_key)
                     current = await self._runs.get(run.id)
                     if current is not None and current.cancel_requested:
                         cancel_event.set()
@@ -1264,6 +1257,29 @@ class GenerationService:
                     if not await self._queue.heartbeat(run.id, self._worker_id):
                         self._lease_lost = True
                         cancel_event.set()
+                    # Issue #129: as soon as a `"section"` event is
+                    # persisted, upload that leaf's `sections/<key>.md`
+                    # (and its review JSON, if any) right away instead of
+                    # waiting for the run to reach a terminal state -
+                    # `GET /runs/{id}/artifacts` then already shows it
+                    # while the CLI is still drafting the next section.
+                    # Best-effort and non-fatal by construction (`_upload_
+                    # section_artifact` never raises), so a failure here
+                    # never counts against this loop's own retry budget
+                    # below or aborts the run. Run this *after* the cancel
+                    # check/heartbeat above and skip entirely once
+                    # `cancel_event` is set - the terminal `upload_artifacts`
+                    # call covers any sections not uploaded incrementally,
+                    # and racing uploads against an in-flight cancellation
+                    # is what made `test_execute_marks_cancelled_when_cancel_
+                    # requested_mid_run` intermittently fail.
+                    if batch and not cancel_event.is_set():
+                        for event in batch:
+                            if event.stage != "section":
+                                continue
+                            node_key = (event.payload or {}).get("nodeKey")
+                            if isinstance(node_key, str) and node_key:
+                                await self._upload_section_artifact(run, node_key)
                 except Exception:
                     consecutive_failures += 1
                     logger.exception(

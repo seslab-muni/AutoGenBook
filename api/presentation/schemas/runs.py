@@ -208,3 +208,16 @@ def artifact_to_schema(artifact: RunArtifactDomain, file: FileDomain) -> RunArti
         size_bytes=file.size_bytes,
         content_type=file.content_type,
     )
+
+
+class RunArtifactSummary(BaseSchema):
+    """`GET /runs/{id}/artifacts/summary` (issue #129 review, fix 6): every
+    `ArtifactKind` this run has at least one artifact for, with its total
+    count - kept as a separate endpoint rather than a field bolted onto the
+    generic `Page[RunArtifact]` envelope every other list endpoint shares."""
+
+    counts_by_kind: dict[ArtifactKind, int]
+
+
+def artifact_counts_to_schema(counts: dict[ArtifactKind, int]) -> RunArtifactSummary:
+    return RunArtifactSummary(counts_by_kind=counts)

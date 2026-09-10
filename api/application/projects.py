@@ -100,6 +100,17 @@ class ProjectService:
         return summaries, total
 
     async def update(self, project_id: uuid.UUID, changes: dict[str, Any]) -> Project:
+        # `llm_model` is `NOT NULL` (issue #128's migration 0017) but `ProjectUpdate.llm_model`
+        # is `NonBlankStr | None = None` so it can be omitted from the request - a client that
+        # instead sends it explicitly as `"llmModel": null` used to reach `model_dump(exclude_
+        # unset=True)`, `changes["llm_model"] = None`, and a 500 from the DB's `NOT NULL`
+        # constraint at the `setattr` below. Treat an explicit `null` the same as omitting the
+        # field entirely - "unchanged" - rather than rejecting it outright, since the wire
+        # format can't otherwise distinguish "leave it" from "clear it" for a field that has no
+        # meaningful cleared state (issue #128 review, fix 9).
+        changes = {
+            key: value for key, value in changes.items() if not (key == "llm_model" and value is None)
+        }
         project = await self.get(project_id)
         if "max_outline_levels" in changes:
             new_limit = changes["max_outline_levels"]

@@ -106,6 +106,10 @@ interface TimelineEntry {
 function buildTimeline(run: Run): TimelineEntry[] {
   if (run.kind === 'regenerate_section' && run.targetNodeId) {
     const nodeId = run.targetNodeId;
+    // The real worker's `"section"` events carry `nodeKey` (== `OutlineNode.cliKey`), not the
+    // node's own id — emit the same shape here so `use-run-stream.ts`'s `rememberSectionNode`
+    // populates `sectionNodeIds` the way it would against the real API.
+    const nodeKey = db.outlineNodes.get(nodeId)?.cliKey ?? nodeId;
     return [
       {
         delayMs: 400,
@@ -118,7 +122,7 @@ function buildTimeline(run: Run): TimelineEntry[] {
           name: 'section',
           stage: 'drafting',
           message: 'Section regenerated.',
-          payload: { nodeId },
+          payload: { nodeKey },
         },
         onComplete: () => completeNode(nodeId),
       },
@@ -165,13 +169,16 @@ function buildTimeline(run: Run): TimelineEntry[] {
     },
   ];
   for (const nodeId of nodeIds) {
+    // See the `regenerate_section` branch above: `nodeKey` (== `cliKey`), not `nodeId`, is what
+    // the real worker sends.
+    const nodeKey = db.outlineNodes.get(nodeId)?.cliKey ?? nodeId;
     entries.push({
       delayMs: 500,
       event: {
         name: 'section',
         stage: 'drafting',
         message: `Section drafted.`,
-        payload: { nodeId },
+        payload: { nodeKey },
       },
       onComplete: () => completeNode(nodeId),
     });

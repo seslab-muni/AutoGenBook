@@ -158,7 +158,7 @@ describe('CopilotPanel', () => {
         level: 'info',
         stage: 'section',
         message: 'Section regenerated.',
-        payload: { nodeId: 'sec-1-2' },
+        payload: { nodeKey: 'sec-1-2' },
       },
       'section',
     );

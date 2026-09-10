@@ -92,14 +92,16 @@ def test_resolved_llm_base_url_default_is_openrouter() -> None:
     assert resolved_llm_base_url(settings) == "https://openrouter.ai/api/v1"
 
 
-def test_resolved_llm_api_key_prefers_autogenbook_over_openrouter() -> None:
+def test_resolved_llm_api_key_prefers_openrouter_over_autogenbook() -> None:
+    # Matches the CLI's own precedence (`openrouter_llm.py`'s `OpenRouterLLM.__init__` tries
+    # `OPENROUTER_API_KEY` before `AUTOGENBOOK_LLM_API_KEY`) - issue #128 review, fix 8.
     settings = _settings(autogenbook_llm_api_key="agb-key", openrouter_api_key="or-key")
-    assert resolved_llm_api_key(settings) == "agb-key"
-
-
-def test_resolved_llm_api_key_falls_back_to_openrouter_api_key() -> None:
-    settings = _settings(autogenbook_llm_api_key=None, openrouter_api_key="or-key")
     assert resolved_llm_api_key(settings) == "or-key"
+
+
+def test_resolved_llm_api_key_falls_back_to_autogenbook_llm_api_key() -> None:
+    settings = _settings(autogenbook_llm_api_key="agb-key", openrouter_api_key=None)
+    assert resolved_llm_api_key(settings) == "agb-key"
 
 
 def test_resolved_llm_api_key_none_when_neither_is_set() -> None:

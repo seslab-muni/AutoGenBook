@@ -11,7 +11,7 @@ from starlette import status
 
 from api.application.runs import RunService, build_done_event
 from api.core.db import get_sessionmaker
-from api.domain.models import RunStatus, User
+from api.domain.models import ArtifactKind, RunStatus, User
 from api.infrastructure.db.run_repository import SqlAlchemyRunEventRepository, SqlAlchemyRunRepository
 from api.presentation.deps import current_user, get_run_service
 from api.presentation.schemas.common import Page, PageParams
@@ -20,9 +20,11 @@ from api.presentation.schemas.runs import (
     RegenerateRequestIn,
     Run,
     RunArtifact,
+    RunArtifactSummary,
     RunEvent,
     RunEventPage,
     RunOptionsIn,
+    artifact_counts_to_schema,
     artifact_to_schema,
     event_to_schema,
     run_to_schema,
@@ -158,16 +160,28 @@ async def list_run_events(
 @router.get("/runs/{run_id}/artifacts", response_model=Page[RunArtifact])
 async def list_run_artifacts(
     run_id: uuid.UUID,
+    kind: ArtifactKind | None = Query(default=None),
     params: PageParams = Depends(),
     service: RunService = Depends(get_run_service),
 ) -> Page[RunArtifact]:
-    pairs, total = await service.artifacts(run_id, limit=params.limit, offset=params.offset)
+    pairs, total = await service.artifacts(
+        run_id, limit=params.limit, offset=params.offset, kind=kind
+    )
     return Page[RunArtifact](
         items=[artifact_to_schema(artifact, file) for artifact, file in pairs],
         total=total,
         limit=params.limit,
         offset=params.offset,
     )
+
+
+@router.get("/runs/{run_id}/artifacts/summary", response_model=RunArtifactSummary)
+async def get_run_artifacts_summary(
+    run_id: uuid.UUID,
+    service: RunService = Depends(get_run_service),
+) -> RunArtifactSummary:
+    counts = await service.artifact_counts_by_kind(run_id)
+    return artifact_counts_to_schema(counts)
 
 
 def _sse_event_name(event: RunEvent) -> str:

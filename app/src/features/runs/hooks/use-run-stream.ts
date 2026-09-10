@@ -29,12 +29,23 @@ function appendLiveEvent(queryClient: QueryClient, runId: string, event: RunEven
 }
 
 function rememberSectionNode(queryClient: QueryClient, runId: string, event: RunEvent): void {
-  const payload = event.payload as { nodeId?: unknown; cliKey?: unknown } | null | undefined;
+  // The worker (api/infrastructure/cli/subprocess_runner.py) emits `"section"`
+  // events with a `nodeKey` payload field (matching `OutlineNode.cliKey`) -
+  // `nodeId`/`cliKey` are never actually sent by the real API, so reading
+  // only those left `sectionNodeIds` permanently empty and `outline-pane.tsx`
+  // marked every leaf as still generating. Keep reading `nodeId`/`cliKey` too
+  // since it costs nothing, in case either is ever added later.
+  const payload = event.payload as
+    | { nodeKey?: unknown; nodeId?: unknown; cliKey?: unknown }
+    | null
+    | undefined;
+  const nodeKey = typeof payload?.nodeKey === 'string' ? payload.nodeKey : undefined;
   const nodeId = typeof payload?.nodeId === 'string' ? payload.nodeId : undefined;
   const cliKey = typeof payload?.cliKey === 'string' ? payload.cliKey : undefined;
-  if (!nodeId && !cliKey) return;
+  if (!nodeKey && !nodeId && !cliKey) return;
   queryClient.setQueryData<string[]>(runKeys.sectionNodeIds(runId), (prev = []) => {
     const next = new Set(prev);
+    if (nodeKey) next.add(nodeKey);
     if (nodeId) next.add(nodeId);
     if (cliKey) next.add(cliKey);
     return [...next];

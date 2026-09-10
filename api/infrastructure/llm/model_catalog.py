@@ -9,6 +9,7 @@ dependency for one endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import urllib.error
 import urllib.request
@@ -105,12 +106,28 @@ class CachingModelCatalog:
         self._clock = clock
         self._cached: list[LlmModelInfo] | None = None
         self._cached_at: float = float("-inf")
+        # Issue #128 review, fix 10: without this, N requests landing concurrently on a cold (or
+        # just-expired) cache each fell through to `self._inner.list_models()` on their own - N
+        # upstream `GET /models` calls instead of one, all racing to fill the same cache. Every
+        # `list_models` awaits the same lock, so only the first caller through it actually
+        # refreshes; everyone else re-checks the (now-fresh) cache once they get the lock rather
+        # than firing a redundant request of their own.
+        self._lock = asyncio.Lock()
 
     async def list_models(self) -> list[LlmModelInfo]:
-        now = self._clock()
-        if self._cached is not None and (now - self._cached_at) < self._ttl_s:
+        if (models := self._fresh_cached()) is not None:
+            return models
+        async with self._lock:
+            # Another concurrent caller may have already refreshed the cache while this one
+            # waited for the lock - re-check before hitting the inner catalog again.
+            if (models := self._fresh_cached()) is not None:
+                return models
+            items = await self._inner.list_models()
+            self._cached = items
+            self._cached_at = self._clock()
+            return items
+
+    def _fresh_cached(self) -> list[LlmModelInfo] | None:
+        if self._cached is not None and (self._clock() - self._cached_at) < self._ttl_s:
             return self._cached
-        items = await self._inner.list_models()
-        self._cached = items
-        self._cached_at = now
-        return items
+        return None

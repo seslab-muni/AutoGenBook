@@ -25,6 +25,7 @@ export const runKeys = {
   detail: (runId: string) => [...runKeys.all, runId] as const,
   events: (runId: string) => [...runKeys.detail(runId), 'events'] as const,
   artifacts: (runId: string) => [...runKeys.detail(runId), 'artifacts'] as const,
+  artifactsSummary: (runId: string) => [...runKeys.detail(runId), 'artifacts', 'summary'] as const,
   /**
    * `useRunStream`'s live, deduped, seq-ordered accumulation of everything
    * seen over a run's SSE stream — distinct from `runs.events(runId, params)`

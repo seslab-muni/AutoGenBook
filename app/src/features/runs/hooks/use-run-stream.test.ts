@@ -97,14 +97,16 @@ describe('useRunStream', () => {
     await waitFor(() => expect(result.current.currentStage).toBe('drafting'));
   });
 
-  it('a section event records the node id from its payload and invalidates the artifacts list and project outline', async () => {
+  it('a section event records the node key from its payload and invalidates the artifacts list and project outline', async () => {
     seedRun('run-c', 'proj-c');
 
     const { result, queryClient } = renderWithQueryClient(() => useRunStream('run-c', 'proj-c'));
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     const { onEvent } = mockedSubscribe.mock.calls[0]![1];
 
-    onEvent(makeEvent(1, { stage: 'section', payload: { nodeId: 'node-42' } }), 'section');
+    // The real worker's `"section"` events carry `nodeKey` (== `OutlineNode.cliKey`), not
+    // `nodeId`/`cliKey` (issue #129 review fix).
+    onEvent(makeEvent(1, { stage: 'section', payload: { nodeKey: 'node-42' } }), 'section');
 
     await waitFor(() => expect(result.current.sectionNodeIds.has('node-42')).toBe(true));
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: runKeys.artifacts('run-c') });
@@ -122,7 +124,7 @@ describe('useRunStream', () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     const { onEvent } = mockedSubscribe.mock.calls[0]![1];
 
-    onEvent(makeEvent(1, { stage: 'section', payload: { nodeId: 'node-7' } }), 'log');
+    onEvent(makeEvent(1, { stage: 'section', payload: { nodeKey: 'node-7' } }), 'log');
 
     await waitFor(() =>
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: runKeys.artifacts('run-poll') }),

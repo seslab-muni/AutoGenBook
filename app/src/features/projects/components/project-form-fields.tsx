@@ -1,3 +1,5 @@
+import { useCallback } from 'react';
+
 import type { AudienceLevel, OutputFormat } from '@/api/types';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -25,6 +27,13 @@ interface ProjectFormFieldsProps {
 
 /** Metadata fields shared by the new-project dialog and the project settings dialog. */
 export function ProjectFormFields({ values, onChange, idPrefix }: ProjectFormFieldsProps) {
+  // `ModelSelect` is wrapped in `memo` (issue #128 review) precisely so that typing in an
+  // unrelated field here (title, topic, ...) doesn't re-render it and rebuild its
+  // hundreds-of-entries `<datalist>` on every keystroke - that only holds if this handler's own
+  // identity stays stable across those re-renders too, which requires `onChange` itself (passed
+  // in by the dialog that owns the form's state) to be a stable reference.
+  const handleModelChange = useCallback((value: string) => onChange({ llmModel: value }), [onChange]);
+
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
@@ -131,7 +140,7 @@ export function ProjectFormFields({ values, onChange, idPrefix }: ProjectFormFie
         <ModelSelect
           id={`${idPrefix}-model`}
           value={values.llmModel}
-          onChange={(value) => onChange({ llmModel: value })}
+          onChange={handleModelChange}
           placeholder="Deployment default"
         />
       </div>

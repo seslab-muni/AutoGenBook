@@ -67,7 +67,7 @@ describe('useActiveRun', () => {
         level: 'info',
         stage: 'section',
         message: 'x',
-        payload: { nodeId: 'n-1' },
+        payload: { nodeKey: 'n-1' },
       },
       'section',
     );

@@ -146,12 +146,16 @@ def resolved_llm_base_url(settings: Settings) -> str:
 
 def resolved_llm_api_key(settings: Settings) -> str | None:
     """The API key `GET /system/models` authenticates its `GET /models` call with -
-    `AUTOGENBOOK_LLM_API_KEY`, then `OPENROUTER_API_KEY`, or `None` if neither is set (some
-    OpenAI-compatible endpoints, e.g. a local LM Studio, need no key at all)."""
-    api_key = (settings.autogenbook_llm_api_key or "").strip()
+    `OPENROUTER_API_KEY`, then `AUTOGENBOOK_LLM_API_KEY`, or `None` if neither is set (some
+    OpenAI-compatible endpoints, e.g. a local LM Studio, need no key at all). Matches the CLI's
+    own precedence (`openrouter_llm.py`'s `OpenRouterLLM.__init__`, `OPENROUTER_API_KEY` before
+    `AUTOGENBOOK_LLM_API_KEY`) - issue #128 review, fix 8: this used to check them in the
+    opposite order, so a deployment with both set could see this endpoint report a different
+    model catalog than the one the CLI subprocess actually authenticates against."""
+    api_key = (settings.openrouter_api_key or "").strip()
     if api_key:
         return api_key
-    api_key = (settings.openrouter_api_key or "").strip()
+    api_key = (settings.autogenbook_llm_api_key or "").strip()
     return api_key or None
 
 

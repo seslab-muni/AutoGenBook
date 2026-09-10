@@ -42,6 +42,7 @@ import logging
 import mimetypes
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
@@ -167,6 +168,31 @@ async def _load_existing_by_path(
     guard) is simply omitted, so it's treated as "not existing" and
     re-uploaded fresh."""
     existing, _ = await run_artifact_repository.list(run_id, limit=10_000, offset=0)
+    if not existing:
+        return {}
+    files_by_id = await file_repository.get_many([artifact.file_id for artifact in existing])
+    return {
+        artifact.relative_path: (artifact, files_by_id[artifact.file_id])
+        for artifact in existing
+        if artifact.file_id in files_by_id
+    }
+
+
+async def _load_existing_by_paths(
+    run_id: uuid.UUID,
+    relative_paths: Sequence[str],
+    run_artifact_repository: RunArtifactRepository,
+    file_repository: FileRepository,
+) -> dict[str, tuple[RunArtifact, File]]:
+    """Same shape of result as `_load_existing_by_path`, but scoped to just
+    `relative_paths` via `RunArtifactRepository.get_many_by_paths` - the
+    incremental per-section upload path (issue #129) only ever needs to know
+    about the 1-2 paths one finished leaf touches, so it has no reason to
+    page through (and `File.get_many`-join) every artifact already recorded
+    for the whole run."""
+    if not relative_paths:
+        return {}
+    existing = await run_artifact_repository.get_many_by_paths(run_id, relative_paths)
     if not existing:
         return {}
     files_by_id = await file_repository.get_many([artifact.file_id for artifact in existing])
@@ -363,7 +389,12 @@ async def upload_section_artifacts(
     if not candidates:
         return []
 
-    existing_by_path = await _load_existing_by_path(run_id, run_artifact_repository, file_repository)
+    existing_by_path = await _load_existing_by_paths(
+        run_id,
+        [str(relative_path) for relative_path, _kind in candidates],
+        run_artifact_repository,
+        file_repository,
+    )
     result: list[RunArtifact] = []
     for relative_path, kind in candidates:
         artifact = await _upsert_artifact(

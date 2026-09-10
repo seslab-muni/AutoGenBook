@@ -15,6 +15,7 @@ one explicitly (`ProjectService.create`), the same way every other required text
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Sequence, Union
 
@@ -33,9 +34,23 @@ depends_on: Union[str, Sequence[str], None] = None
 # migrations must keep working unchanged even if the application's default ever changes.
 _FALLBACK_LLM_MODEL = "openai/gpt-5-mini"
 
+logger = logging.getLogger("alembic.runtime.migration")
+
 
 def upgrade() -> None:
-    backfill_model = os.environ.get("AUTOGENBOOK_LLM_MODEL", "").strip() or _FALLBACK_LLM_MODEL
+    env_value = os.environ.get("AUTOGENBOOK_LLM_MODEL", "").strip()
+    backfill_model = env_value or _FALLBACK_LLM_MODEL
+    # Issue #128 review: this only ever runs once (at add-column time), and a deployment that
+    # forgets to forward `AUTOGENBOOK_LLM_MODEL` to whatever runs this migration (e.g. a Compose
+    # `migrate` service with its own trimmed-down `environment:`) silently backfills every
+    # existing project to `_FALLBACK_LLM_MODEL` instead - log which one actually happened so
+    # that's visible in the migration's own output rather than only discoverable later by
+    # querying `projects.llm_model`.
+    logger.info(
+        "0017_projects_llm_model: backfilling projects.llm_model=%r (%s)",
+        backfill_model,
+        "from AUTOGENBOOK_LLM_MODEL" if env_value else "fallback default - AUTOGENBOOK_LLM_MODEL was unset/empty",
+    )
     op.add_column(
         "projects",
         sa.Column("llm_model", sa.Text(), nullable=False, server_default=backfill_model),
