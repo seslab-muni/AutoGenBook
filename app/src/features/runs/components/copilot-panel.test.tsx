@@ -156,9 +156,9 @@ describe('CopilotPanel', () => {
         seq: 1,
         ts: '2026-09-07T00:00:00Z',
         level: 'info',
-        stage: 'drafting',
+        stage: 'section',
         message: 'Section regenerated.',
-        payload: { nodeId: 'sec-1-2' },
+        payload: { nodeKey: 'sec-1-2' },
       },
       'section',
     );

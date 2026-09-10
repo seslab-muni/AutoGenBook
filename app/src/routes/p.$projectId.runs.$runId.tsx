@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { AlertTriangle, ArrowLeft, PlayCircle, RotateCw, Square } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
+import { outline as outlineQueries } from '@/api/queries/outline';
 import { runs as runQueries, useCancelRunMutation, useRetryRunMutation } from '@/api/queries/runs';
-import type { RunEvent } from '@/api/types';
+import type { ArtifactKind, RunArtifact, RunEvent } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -22,6 +23,7 @@ import {
 } from '@/features/runs/lib/run-format';
 import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
+import { isLeaf } from '@/features/outline/model';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 export const Route = createFileRoute('/p/$projectId/runs/$runId')({
@@ -58,7 +60,55 @@ function RunPage() {
     [historyPage, liveEvents],
   );
 
-  const { data: artifacts } = useQuery(runQueries.artifacts(runId));
+  // `countsByKind` (issue #129 review, fix 6) rather than counting a flat `limit: 200` artifacts
+  // page: a full book run can produce well over 200 artifacts total (one `sections/*.md` plus
+  // one `section_reviews/*.json` per leaf, plus the assembled Markdown/PDF/BibTeX/logs), and
+  // `section_reviews/*` sorts alphabetically before `sections/*` - on a run past ~95 leaves the
+  // reviews alone would fill a 200-row page and crowd every section off it, both undercounting
+  // the "N of M sections generated" counter below and truncating `ArtifactsList`'s own rendering
+  // of the sections themselves.
+  const { data: artifactsSummary } = useQuery(runQueries.artifactsSummary(runId));
+  const countsByKind = useMemo(() => artifactsSummary?.countsByKind ?? {}, [artifactsSummary]);
+
+  // One `?kind=` query per kind the run has actually produced, each sized to that kind's own
+  // count (still capped at the endpoint's 200-per-page max - a single kind realistically never
+  // needs more than one page) rather than one flat query racing every kind for the same 200 rows.
+  const kindCounts = useMemo(
+    () => Object.entries(countsByKind) as [ArtifactKind, number][],
+    [countsByKind],
+  );
+  const artifactQueries = useQueries({
+    queries: kindCounts.map(([kind, count]) =>
+      runQueries.artifacts(runId, { kind, limit: Math.min(Math.max(count, 1), 200) }),
+    ),
+  });
+  // Not wrapped in `useMemo` over `artifactQueries` itself - `useQueries`' return value is a
+  // fresh array every render, so memoizing on it would never actually skip recomputing (and
+  // `@tanstack/query/no-unstable-deps` flags exactly that). The `flatMap` below is cheap enough
+  // that recomputing it every render costs nothing worth avoiding.
+  const artifacts: RunArtifact[] = artifactQueries.flatMap((query) => query.data?.items ?? []);
+
+  // Same reasoning for the outline: `limit: 5000` is the endpoint's own max, fetched once to
+  // derive the total leaf-section count the counter is "of".
+  const { data: outlineFlat } = useQuery(outlineQueries.flat(projectId, { limit: 5000 }));
+
+  const leafSectionCount = useMemo(() => {
+    const items = outlineFlat?.items ?? [];
+    return items.filter((node) => isLeaf(node.id, items)).length;
+  }, [outlineFlat]);
+  const generatedSectionCount = countsByKind.section ?? 0;
+  // The "of M" denominator is only meaningful against the *current* outline (issue #129 review,
+  // fix 7): `--legacy-tex` never produces `sections/*.md` artifacts the way the Markdown-first
+  // path does, so `generatedSectionCount` would stay stuck at 0 against a nonzero `M`; and
+  // subdivision of an oversized outline node can produce more leaf sections than the outline
+  // had at the time this page loaded, making `generatedSectionCount` legitimately exceed
+  // `leafSectionCount`. Either way, drop the denominator and just report the raw count instead
+  // of showing a nonsensical or shrinking fraction - no `structure_graph.json` parsing needed to
+  // do better than that. A `resume` run still gets the normal "N of M" treatment: it's counting
+  // the same outline, just picking up sections a previous attempt already finished, so the
+  // fraction is still meaningful - it just shouldn't be read as "the run is this done" the way
+  // it might for a fresh run, since a resumed run can start already partway there.
+  const showSectionDenominator = !run?.options.legacyTex && generatedSectionCount <= leafSectionCount;
 
   const cancelMutation = useCancelRunMutation();
   const retryMutation = useRetryRunMutation(projectId);
@@ -144,7 +194,8 @@ function RunPage() {
             <p className="truncate text-xs text-muted-foreground">
               {run.targetNodeId ? `Target node ${run.targetNodeId} · ` : ''}
               Queued {new Date(run.queuedAt).toLocaleString()} · Started by{' '}
-              {run.startedByName ?? '—'}
+              {run.startedByName ?? '—'} · Model{' '}
+              <span className="font-mono">{run.options.llmModel}</span>
             </p>
           </div>
         </div>
@@ -218,13 +269,24 @@ function RunPage() {
           </div>
 
           <div className="rounded-lg border">
-            <div className="border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
-              Artifacts
+            <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
+              <span>Artifacts</span>
+              {leafSectionCount > 0 || generatedSectionCount > 0 ? (
+                <span className="font-normal text-muted-foreground">
+                  {showSectionDenominator
+                    ? `${generatedSectionCount} of ${leafSectionCount} sections generated`
+                    : `${generatedSectionCount} sections generated`}
+                </span>
+              ) : null}
             </div>
             <div className="p-3">
               <ArtifactsList
-                artifacts={artifacts?.items ?? []}
-                emptyMessage="Artifacts appear here once the run produces output."
+                artifacts={artifacts}
+                emptyMessage={
+                  isRunning
+                    ? 'Artifacts appear here as soon as the run finishes its first section.'
+                    : 'Artifacts appear here once the run produces output.'
+                }
               />
             </div>
           </div>

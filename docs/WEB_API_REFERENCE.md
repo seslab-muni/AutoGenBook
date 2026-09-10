@@ -93,6 +93,19 @@ This is also the endpoint Docker Compose's healthcheck polls for the `api` servi
 
 Source: `api/presentation/routers/system.py:ready`
 
+#### `GET /api/v1/system/models`
+
+Auth required (unlike `health`/`ready` above — this reaches out to the deployment's own configured LLM endpoint on every cache miss). No path/query/body. Queries `GET {baseUrl}/models` on the OpenAI-compatible endpoint the CLI itself would use (`AUTOGENBOOK_LLM_BASE_URL`, then `OPENROUTER_BASE_URL`, then OpenRouter's own default; API key from `AUTOGENBOOK_LLM_API_KEY` then `OPENROUTER_API_KEY`), and returns its model ids/names for the project-settings/start-run pickers. The result is cached in-process for ~5 minutes (`CachingModelCatalog`) so opening either dialog repeatedly doesn't re-hit the network every time; a failed fetch is never cached, so the next call retries immediately.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `items` | `{id: string, name: string \| null}[]` | The endpoint's own model ids (what `llmModel` actually stores) and, where the endpoint returns one, a human-readable name. |
+| `warning` | `string \| null` | Set (with `items: []`) when the endpoint couldn't be reached, returned an error, or an unexpected response shape — never a 5xx. |
+
+Status codes: `200` always (network/HTTP/parse failures degrade to `{items: [], warning: "..."}` rather than an error status).
+
+Source: `api/application/system.py:SystemService`, `api/infrastructure/llm/model_catalog.py`, `api/presentation/routers/system.py:list_models`
+
 ## Files
 
 Standalone file storage (MinIO/S3-backed via `api/infrastructure/storage/s3.py`); every other resource (sources, run artifacts) references a file by `fileId` only. Files are never soft-deleted — `DELETE` is a hard delete, blocked while anything still references the file.
@@ -149,6 +162,8 @@ Source: `api/application/files.py:FileService.delete`
 A project is a book/paper spec: metadata, its sources, and its outline, all addressable through their own sub-resources below. `ProjectSummary` (the list shape) omits `sources`/`outline` and instead reports counts; `Project` (the detail shape) embeds both in full.
 
 Shared fields (both `ProjectCreate`/`ProjectUpdate` and the `Project`/`ProjectSummary` responses): `title`, `subtitle`, `authors: string[]`, `topic`, `targetAudience` (`undergraduate|graduate|phd_researcher|industry_practitioner`, default `graduate`), `totalPagesBudget` (5–2000, default 350), `equationFrequencyLevel` (1–5, default 4), `doConsiderOutline`/`doConsiderPreviousSections` (booleans, default `true`), `outputFormat` (`markdown|latex|pdf`, default `markdown`), `maxOutlineLevels` (1–5, default 3), `additionalRequirements` (nullable string).
+
+`llmModel` (issue #128) is on `ProjectCreate`/`ProjectUpdate` as an optional string, but always a concrete, non-null string on `Project` (not on `ProjectSummary`): `ProjectCreate.llmModel` omitted/null is resolved once, at creation, to `AUTOGENBOOK_LLM_MODEL` (or `openai/gpt-5-mini` if that's also unset) - the env var is never consulted again for that project afterward. `POST /projects/{id}/duplicate` copies the source project's `llmModel` verbatim rather than re-resolving the deployment default. See `GET /system/models` below for the model picker's data source, and `POST /projects/{id}/runs`'s `llmModel` for the per-run override.
 
 #### `GET /api/v1/projects`
 
@@ -295,13 +310,13 @@ Source (all six): `api/application/outline.py:OutlineService`, `api/domain/outli
 
 Generation runs: driving the CLI as a subprocess, streaming its progress, and syncing its output back into outline nodes/files. `RunService` (API-side: create/list/get/cancel/export/regenerate/retry/events) is called from the routers below; `GenerationService` (worker-side, `api/worker/__main__.py`) is a separate process that actually claims queued runs and executes them — the two never run in the same process.
 
-`Run` fields: `id`, `projectId`, `kind` (`full|regenerate_section|export`), `status` (`queued|running|succeeded|failed|cancelled`), `options` (the request options echoed back, plus `promptModifier` for a `regenerate_section` run), `baseRunId`/`targetNodeId` (nullable — set for `regenerate_section`/`export`, and for a `full` run created by `POST /runs/{id}/retry` (issue #124)), `exitCode`, `error`, `totalTokens`/`totalCostUsd` (nullable, summed from the CLI's `run_meta.json`), `queuedAt`/`startedAt`/`finishedAt`, `resumable` (`false` once the run's work directory has been swept, `RUNS_RETENTION_DAYS` after it finished — a swept run can no longer be the base of a `regenerate`/`export`/`retry`), `retryable` (`true` iff `POST /runs/{id}/retry` would pass its *intrinsic* preconditions on this run: `kind == full`, `status` in `{failed, cancelled}`, and its work directory plus `structure_graph.json` both still on disk — computed by the same `retry_blocker` helper the endpoint itself validates with, so the two can never drift apart; deliberately excludes the endpoint's other, transient 409 guards — another active run, outline drift, a succeeded sibling on the same work directory).
+`Run` fields: `id`, `projectId`, `kind` (`full|regenerate_section|export`), `status` (`queued|running|succeeded|failed|cancelled`), `options` (the request options echoed back, plus `promptModifier` for a `regenerate_section` run, and `llmModel` — issue #128, always a concrete model id: resolved at creation from the request's own `llmModel` else the project's, and backfilled from the project/deployment default on read for a run row that predates this field), `baseRunId`/`targetNodeId` (nullable — set for `regenerate_section`/`export`, and for a `full` run created by `POST /runs/{id}/retry` (issue #124)), `exitCode`, `error`, `totalTokens`/`totalCostUsd` (nullable, summed from the CLI's `run_meta.json`), `queuedAt`/`startedAt`/`finishedAt`, `resumable` (`false` once the run's work directory has been swept, `RUNS_RETENTION_DAYS` after it finished — a swept run can no longer be the base of a `regenerate`/`export`/`retry`), `retryable` (`true` iff `POST /runs/{id}/retry` would pass its *intrinsic* preconditions on this run: `kind == full`, `status` in `{failed, cancelled}`, and its work directory plus `structure_graph.json` both still on disk — computed by the same `retry_blocker` helper the endpoint itself validates with, so the two can never drift apart; deliberately excludes the endpoint's other, transient 409 guards — another active run, outline drift, a succeeded sibling on the same work directory).
 
 Only one active (`queued`/`running`) run per project at a time; every create/regenerate/export endpoint below returns `409` if the project already has one.
 
 #### `POST /api/v1/projects/{projectId}/runs`
 
-Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use the project's own outline | `generate` — let the CLI structure it), `outputFormat` (nullable — defaults to the project's own `outputFormat`), `allowSubdivision`, `enableWebRag`, `auditBook`, `auditBookMode` (`off|warn|strict`, default `warn`), `legacyTex`, `rebuildKb`, `failFastSchema`, `resume`, `exportTexOnly` (all booleans, default `false`).
+Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use the project's own outline | `generate` — let the CLI structure it), `outputFormat` (nullable — defaults to the project's own `outputFormat`), `allowSubdivision`, `enableWebRag`, `auditBook`, `auditBookMode` (`off|warn|strict`, default `warn`), `legacyTex`, `rebuildKb`, `failFastSchema`, `resume`, `exportTexOnly` (all booleans, default `false`), `llmModel` (nullable string, issue #128 — omitted/null uses the project's own `llmModel`; the resolved value is what `Run.options.llmModel` echoes back and what the worker sets `AUTOGENBOOK_LLM_MODEL` to for the CLI subprocess).
 
 `legacyTex` and `auditBook` both require the resolved `outputFormat` (the explicit body value, or the project's own if omitted) to be `latex` or `pdf` — with `markdown`, `legacyTex` would otherwise "succeed" with no document assembled at all, and `auditBook` would silently be a no-op (both need a `tex_path` the markdown-only assembly path never produces).
 
@@ -369,11 +384,21 @@ Source: `api/application/runs.py:RunService.events`
 
 #### `GET /api/v1/runs/{runId}/artifacts`
 
-Query: `limit` (default 50, max 200), `offset` (default 0). Returns `Page<RunArtifact>`: `kind` (`markdown|tex|pdf|structure_graph|book_structure|section|section_review|kb_sources|run_meta|llm_usage|audit_report|log|bib|other`), `relativePath` (within the run's output directory), `fileId`/`filename`/`sizeBytes`/`contentType` (the uploaded object-storage `File`).
+Query: `kind` (optional; one of `markdown|tex|pdf|structure_graph|book_structure|section|section_review|kb_sources|run_meta|llm_usage|audit_report|log|bib|other` — restricts the page to that `ArtifactKind` only), `limit` (default 50, max 200), `offset` (default 0). Returns `Page<RunArtifact>`: `kind`, `relativePath` (within the run's output directory), `fileId`/`filename`/`sizeBytes`/`contentType` (the uploaded object-storage `File`).
+
+Artifacts appear here incrementally while the run is still `running`, not only once it reaches a terminal status (issue #129): the worker's drain loop uploads each leaf's `sections/<key>.md` (and `section_reviews/<key>.json`, if produced) as soon as the CLI announces that section, ahead of the terminal `upload_artifacts` call that covers everything else (`markdown`/`tex`/`pdf`/`bib`/`log`/... and any section the incremental path missed, e.g. because the run was cancelled mid-upload). Without `?kind=`, results are ordered by `relativePath`, which sorts `section_reviews/*` ahead of `sections/*` — on a run with enough leaf sections, an unfiltered `limit: 200` page can fill up with reviews before every section is listed; use `?kind=section` (or the summary endpoint below) to fetch a kind's own full set instead of racing every other kind for the same page.
 
 Status codes: `200`; `404`.
 
 Source: `api/application/runs.py:RunService.artifacts`
+
+#### `GET /api/v1/runs/{runId}/artifacts/summary`
+
+Returns `{ countsByKind: { [kind: string]: number } }` — every `ArtifactKind` this run has at least one artifact for, with its total count. Lets a client (the "N of M sections generated" counter, `ArtifactsList`'s per-kind fetches) know each kind's size without paging through `GET /runs/{runId}/artifacts` to count it.
+
+Status codes: `200`; `404`.
+
+Source: `api/application/runs.py:RunService.artifact_counts_by_kind`
 
 #### `GET /api/v1/runs/{runId}/events/stream`
 

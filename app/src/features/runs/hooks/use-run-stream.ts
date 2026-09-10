@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
-import { subscribeRunEvents, type RunEventName } from '@/api/sse';
+import { subscribeRunEvents } from '@/api/sse';
 import { projectKeys, runKeys } from '@/api/queries/keys';
 import { runs } from '@/api/queries/runs';
 import type { Run, RunEvent } from '@/api/types';
@@ -29,12 +29,23 @@ function appendLiveEvent(queryClient: QueryClient, runId: string, event: RunEven
 }
 
 function rememberSectionNode(queryClient: QueryClient, runId: string, event: RunEvent): void {
-  const payload = event.payload as { nodeId?: unknown; cliKey?: unknown } | null | undefined;
+  // The worker (api/infrastructure/cli/subprocess_runner.py) emits `"section"`
+  // events with a `nodeKey` payload field (matching `OutlineNode.cliKey`) -
+  // `nodeId`/`cliKey` are never actually sent by the real API, so reading
+  // only those left `sectionNodeIds` permanently empty and `outline-pane.tsx`
+  // marked every leaf as still generating. Keep reading `nodeId`/`cliKey` too
+  // since it costs nothing, in case either is ever added later.
+  const payload = event.payload as
+    | { nodeKey?: unknown; nodeId?: unknown; cliKey?: unknown }
+    | null
+    | undefined;
+  const nodeKey = typeof payload?.nodeKey === 'string' ? payload.nodeKey : undefined;
   const nodeId = typeof payload?.nodeId === 'string' ? payload.nodeId : undefined;
   const cliKey = typeof payload?.cliKey === 'string' ? payload.cliKey : undefined;
-  if (!nodeId && !cliKey) return;
+  if (!nodeKey && !nodeId && !cliKey) return;
   queryClient.setQueryData<string[]>(runKeys.sectionNodeIds(runId), (prev = []) => {
     const next = new Set(prev);
+    if (nodeKey) next.add(nodeKey);
     if (nodeId) next.add(nodeId);
     if (cliKey) next.add(cliKey);
     return [...next];
@@ -87,10 +98,17 @@ function acquire(
 
   const unsubscribe = subscribeRunEvents(runId, {
     ...(lastEventId !== undefined ? { lastEventId } : {}),
-    onEvent: (event: RunEvent, name: RunEventName) => {
+    onEvent: (event: RunEvent) => {
       appendLiveEvent(queryClient, runId, event);
-      if (name === 'section') {
+      // Checked on the event's own `stage`, not the transport-level `name`
+      // SSE hands back (`name` is always `'log'` on the polling fallback -
+      // see `sse.ts`'s `pollOnce` - even though the underlying `RunEvent`
+      // still carries `stage: 'section'`), so a section landing while the
+      // stream has fallen back to polling still refreshes the artifacts
+      // list live instead of only once the run finishes (issue #129).
+      if (event.stage === 'section') {
         rememberSectionNode(queryClient, runId, event);
+        void queryClient.invalidateQueries({ queryKey: runKeys.artifacts(runId) });
         if (projectId) {
           void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
           void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectId) });

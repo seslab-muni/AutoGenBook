@@ -97,18 +97,38 @@ describe('useRunStream', () => {
     await waitFor(() => expect(result.current.currentStage).toBe('drafting'));
   });
 
-  it('a section event records the node id from its payload and invalidates the project outline', async () => {
+  it('a section event records the node key from its payload and invalidates the artifacts list and project outline', async () => {
     seedRun('run-c', 'proj-c');
 
     const { result, queryClient } = renderWithQueryClient(() => useRunStream('run-c', 'proj-c'));
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     const { onEvent } = mockedSubscribe.mock.calls[0]![1];
 
-    onEvent(makeEvent(1, { payload: { nodeId: 'node-42' } }), 'section');
+    // The real worker's `"section"` events carry `nodeKey` (== `OutlineNode.cliKey`), not
+    // `nodeId`/`cliKey` (issue #129 review fix).
+    onEvent(makeEvent(1, { stage: 'section', payload: { nodeKey: 'node-42' } }), 'section');
 
     await waitFor(() => expect(result.current.sectionNodeIds.has('node-42')).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: runKeys.artifacts('run-c') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: projectKeys.outline('proj-c') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: projectKeys.detail('proj-c') });
+  });
+
+  it('a section-stage event delivered via the polling fallback (name "log") still invalidates the artifacts list', async () => {
+    // `sse.ts`'s polling fallback surfaces every event as `name: 'log'` - the
+    // underlying `RunEvent.stage` is the only reliable signal, so it must
+    // still be enough to pick up a section landing (issue #129).
+    seedRun('run-poll', 'proj-poll');
+
+    const { queryClient } = renderWithQueryClient(() => useRunStream('run-poll', 'proj-poll'));
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const { onEvent } = mockedSubscribe.mock.calls[0]![1];
+
+    onEvent(makeEvent(1, { stage: 'section', payload: { nodeKey: 'node-7' } }), 'log');
+
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: runKeys.artifacts('run-poll') }),
+    );
   });
 
   it('ref-counts: a second mount for the same run reuses the one subscription, only unsubscribing once every mount is gone', () => {

@@ -15,6 +15,7 @@ from api.application.runs import _DRAIN_MAX_CONSECUTIVE_FAILURES, GenerationServ
 from api.core.errors import StorageError
 from api.core.settings import Settings
 from api.domain.models import (
+    ArtifactKind,
     File,
     FileKind,
     OutputFormat,
@@ -72,6 +73,7 @@ def _make_project(**overrides) -> Project:
         output_format=OutputFormat.MARKDOWN,
         max_outline_levels=3,
         additional_requirements=None,
+        llm_model="openai/gpt-5-mini",
         last_run_id=None,
         created_at=now,
         updated_at=now,
@@ -152,6 +154,80 @@ async def test_execute_succeeds_with_fake_cli_and_persists_events(
     assert events[-1].payload["status"] == "succeeded"
 
     assert (tmp_path / "run" / "out" / "structure_graph.json").exists()
+
+
+async def test_execute_uploads_section_artifact_before_run_finishes(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
+) -> None:
+    """Issue #129: a leaf section's `sections/<key>.md` should already be a
+    downloadable `run_artifacts` row while the run is still `running`, not
+    only once it reaches a terminal state - the whole point of uploading it
+    from the drain loop the moment its `"section"` event lands, instead of
+    waiting for `_finalize`'s terminal `upload_artifacts` call."""
+    monkeypatch.setenv("FAKE_CLI_STEP_SLEEP_S", "1.0")
+    monkeypatch.setattr(
+        book_command, "ENV_ALLOWLIST", book_command.ENV_ALLOWLIST + ("FAKE_CLI_STEP_SLEEP_S",)
+    )
+
+    async with session_factory() as setup_session:
+        project = await SqlAlchemyProjectRepository(setup_session).add(_make_project())
+        run = await SqlAlchemyRunRepository(setup_session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+
+    async def run_service() -> Run:
+        async with session_factory() as service_session:
+            service = _make_service(service_session, InMemoryFileStorage(), _settings())
+            return await service.execute(run)
+
+    task = asyncio.create_task(run_service())
+
+    deadline = time.monotonic() + 15
+    seen_while_running = False
+    while time.monotonic() < deadline and not task.done():
+        async with session_factory() as poll_session:
+            current = await SqlAlchemyRunRepository(poll_session).get(run.id)
+            rows, _ = await SqlAlchemyRunArtifactRepository(poll_session).list(
+                run.id, limit=100, offset=0
+            )
+        if (
+            current is not None
+            and current.status == RunStatus.running
+            and any(a.kind == ArtifactKind.section for a in rows)
+        ):
+            seen_while_running = True
+            break
+        await asyncio.sleep(0.05)
+
+    finished = await asyncio.wait_for(task, timeout=15)
+
+    assert seen_while_running, "no section artifact appeared while the run was still running"
+    assert finished.status == RunStatus.succeeded
+
+
+async def test_execute_does_not_duplicate_artifacts_between_incremental_and_terminal_upload(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """The section artifacts uploaded incrementally as the CLI produced them
+    must not be re-inserted (as a duplicate row) by the terminal `upload_
+    artifacts` call `_finalize` makes once the run succeeds (issue #129)."""
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+        service = _make_service(session, InMemoryFileStorage(), _settings())
+
+        finished = await service.execute(run)
+
+        rows, total = await SqlAlchemyRunArtifactRepository(session).list(
+            run.id, limit=1000, offset=0
+        )
+
+    assert finished.status == RunStatus.succeeded
+    relative_paths = [artifact.relative_path for artifact in rows]
+    assert len(relative_paths) == len(set(relative_paths)) == total
+    assert any(path.startswith("sections/") for path in relative_paths)
 
 
 async def test_execute_downloads_sources_into_kb_dir(
@@ -484,7 +560,14 @@ async def test_execute_on_a_reclaimed_run_does_not_collide_on_seq_or_hang(
 async def test_execute_marks_cancelled_when_cancel_requested_mid_run(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
 ) -> None:
+    # Slow the fake CLI down so there is a real mid-run window to cancel in.
+    # The value only reaches the child if it is on `ENV_ALLOWLIST` (issue
+    # #129's incremental uploads exposed that this test used to race the
+    # default 0.05s/step CLI instead).
     monkeypatch.setenv("FAKE_CLI_STEP_SLEEP_S", "1.0")
+    monkeypatch.setattr(
+        book_command, "ENV_ALLOWLIST", book_command.ENV_ALLOWLIST + ("FAKE_CLI_STEP_SLEEP_S",)
+    )
 
     # Two independent sessions, mirroring production: the worker's
     # `GenerationService` holds its own session for the run's whole

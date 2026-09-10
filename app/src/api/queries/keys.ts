@@ -25,6 +25,7 @@ export const runKeys = {
   detail: (runId: string) => [...runKeys.all, runId] as const,
   events: (runId: string) => [...runKeys.detail(runId), 'events'] as const,
   artifacts: (runId: string) => [...runKeys.detail(runId), 'artifacts'] as const,
+  artifactsSummary: (runId: string) => [...runKeys.detail(runId), 'artifacts', 'summary'] as const,
   /**
    * `useRunStream`'s live, deduped, seq-ordered accumulation of everything
    * seen over a run's SSE stream — distinct from `runs.events(runId, params)`
@@ -46,4 +47,9 @@ export const fileKeys = {
 export const authKeys = {
   all: ['auth'] as const,
   me: () => [...authKeys.all, 'me'] as const,
+};
+
+export const systemKeys = {
+  all: ['system'] as const,
+  models: () => [...systemKeys.all, 'models'] as const,
 };

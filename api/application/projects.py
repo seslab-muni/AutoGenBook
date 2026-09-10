@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from api.core.errors import Conflict, NotFound, ValidationFailed
+from api.core.settings import Settings, default_llm_model
 from api.domain.models import OutputFormat, Project, ProjectSummary, TargetAudience
 from api.domain.outline import max_depth
 from api.domain.ports import OutlineRepository, ProjectRepository, RunRepository
@@ -16,10 +17,12 @@ class ProjectService:
         repository: ProjectRepository,
         run_repository: RunRepository,
         outline_repository: OutlineRepository,
+        settings: Settings,
     ) -> None:
         self._repository = repository
         self._run_repository = run_repository
         self._outline_repository = outline_repository
+        self._settings = settings
 
     async def create(
         self,
@@ -37,8 +40,14 @@ class ProjectService:
         output_format: OutputFormat,
         max_outline_levels: int,
         additional_requirements: str | None,
+        llm_model: str | None = None,
     ) -> Project:
         now = datetime.now(timezone.utc)
+        # Issue #128: a project always has a concrete `llm_model` - if the caller
+        # (`ProjectCreate.llmModel`) didn't supply one, it's initialized from the deployment's
+        # `AUTOGENBOOK_LLM_MODEL` (or the hardcoded fallback) *once*, here. From then on this
+        # column - never the env var - is what every run for this project resolves against.
+        resolved_llm_model = (llm_model or "").strip() or default_llm_model(self._settings)
         project = Project(
             id=uuid.uuid4(),
             owner_id=owner_id,
@@ -54,6 +63,7 @@ class ProjectService:
             output_format=output_format,
             max_outline_levels=max_outline_levels,
             additional_requirements=additional_requirements,
+            llm_model=resolved_llm_model,
             last_run_id=None,
             created_at=now,
             updated_at=now,
@@ -90,6 +100,17 @@ class ProjectService:
         return summaries, total
 
     async def update(self, project_id: uuid.UUID, changes: dict[str, Any]) -> Project:
+        # `llm_model` is `NOT NULL` (issue #128's migration 0017) but `ProjectUpdate.llm_model`
+        # is `NonBlankStr | None = None` so it can be omitted from the request - a client that
+        # instead sends it explicitly as `"llmModel": null` used to reach `model_dump(exclude_
+        # unset=True)`, `changes["llm_model"] = None`, and a 500 from the DB's `NOT NULL`
+        # constraint at the `setattr` below. Treat an explicit `null` the same as omitting the
+        # field entirely - "unchanged" - rather than rejecting it outright, since the wire
+        # format can't otherwise distinguish "leave it" from "clear it" for a field that has no
+        # meaningful cleared state (issue #128 review, fix 9).
+        changes = {
+            key: value for key, value in changes.items() if not (key == "llm_model" and value is None)
+        }
         project = await self.get(project_id)
         if "max_outline_levels" in changes:
             new_limit = changes["max_outline_levels"]
@@ -158,6 +179,9 @@ class ProjectService:
             output_format=source.output_format,
             max_outline_levels=source.max_outline_levels,
             additional_requirements=source.additional_requirements,
+            # The original's model, not the deployment default (issue #128) - a duplicate is a
+            # copy of everything about the source project, `llm_model` included.
+            llm_model=source.llm_model,
             last_run_id=None,
             created_at=now,
             updated_at=now,

@@ -1,6 +1,9 @@
+import { useCallback } from 'react';
+
 import type { AudienceLevel, OutputFormat } from '@/api/types';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { ModelSelect } from '@/components/model-select';
 import {
   Select,
   SelectContent,
@@ -84,6 +87,13 @@ export function ProjectBasicsFields({ values, onChange, idPrefix }: ProjectFormF
 
 /** Audience / format / budgets / depth / context flags — how the book is *generated*. */
 export function ProjectGenerationFields({ values, onChange, idPrefix }: ProjectFormFieldsProps) {
+  // `ModelSelect` is wrapped in `memo` (issue #128 review) precisely so that typing in an
+  // unrelated field here (title, topic, ...) doesn't re-render it and rebuild its
+  // hundreds-of-entries `<datalist>` on every keystroke - that only holds if this handler's own
+  // identity stays stable across those re-renders too, which requires `onChange` itself (passed
+  // in by the dialog that owns the form's state) to be a stable reference.
+  const handleModelChange = useCallback((value: string) => onChange({ llmModel: value }), [onChange]);
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
@@ -128,6 +138,18 @@ export function ProjectGenerationFields({ values, onChange, idPrefix }: ProjectF
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs font-semibold text-foreground" htmlFor={`${idPrefix}-model`}>
+          LLM model
+        </label>
+        <ModelSelect
+          id={`${idPrefix}-model`}
+          value={values.llmModel}
+          onChange={handleModelChange}
+          placeholder="Deployment default"
+        />
       </div>
 
       <div className="grid grid-cols-3 gap-3">

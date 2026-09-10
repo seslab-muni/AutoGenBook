@@ -236,3 +236,35 @@ def test_forced_env_overrides_parent_env(settings, work_dir, monkeypatch):
     options = RunOptions(outline="generate", output_format="markdown")
     _argv, env, _cwd = build_command(work_dir, options, settings)
     assert env["MCP_GATEWAY_ENABLE"] == "0"
+
+
+def test_llm_model_not_set_when_options_have_none(settings: Settings, work_dir: Path, monkeypatch):
+    # A run's `options.llm_model` is only ever unset for a row persisted before issue #128 -
+    # `build_command` shouldn't invent a value, just leave whatever (if anything) the parent
+    # process's own environment already had.
+    monkeypatch.delenv("AUTOGENBOOK_LLM_MODEL", raising=False)
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert "AUTOGENBOOK_LLM_MODEL" not in env
+
+
+def test_llm_model_from_options_is_set_in_env(settings: Settings, work_dir: Path):
+    options = RunOptions(
+        outline="generate", output_format="markdown", llm_model="anthropic/claude-3.5-sonnet"
+    )
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env["AUTOGENBOOK_LLM_MODEL"] == "anthropic/claude-3.5-sonnet"
+
+
+def test_llm_model_from_options_overrides_parent_env(
+    settings: Settings, work_dir: Path, monkeypatch
+):
+    # Issue #128: the CLI subprocess must use this run's own resolved model, not whatever the
+    # api/worker container's own `AUTOGENBOOK_LLM_MODEL` (a deployment-wide default, only ever
+    # consulted for a *new* project without its own model) happens to be set to.
+    monkeypatch.setenv("AUTOGENBOOK_LLM_MODEL", "openai/gpt-5-mini")
+    options = RunOptions(
+        outline="generate", output_format="markdown", llm_model="anthropic/claude-3.5-sonnet"
+    )
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env["AUTOGENBOOK_LLM_MODEL"] == "anthropic/claude-3.5-sonnet"

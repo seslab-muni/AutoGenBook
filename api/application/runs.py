@@ -27,8 +27,9 @@ from starlette.concurrency import run_in_threadpool
 from api.application import graph_import
 from api.application.book_spec import SpecRenderer, StructureBuilder
 from api.core.errors import Conflict, NotFound, ValidationFailed
-from api.core.settings import Settings
+from api.core.settings import Settings, default_llm_model
 from api.domain.models import (
+    ArtifactKind,
     File,
     NodeStatus,
     Project,
@@ -119,7 +120,19 @@ class RunService:
         run = await self._runs.get(run_id)
         if run is None:
             raise NotFound(f"run {run_id} does not exist")
-        return run
+        return await self._fill_llm_model(run)
+
+    async def _fill_llm_model(self, run: Run) -> Run:
+        """Backfills `run.options.llm_model` for a row persisted before that field existed
+        (issue #128) - `_run_options_from_json`'s dataclass-default tolerance leaves it `None`
+        on those, but `RunOptionsOut.llmModel` is a required string on the wire. Falls back to
+        the run's own project's current `llm_model`, or the deployment default if the project is
+        gone too - never mutates the stored row, just what a read of it reports."""
+        if run.options.llm_model:
+            return run
+        project = await self._projects.get(run.project_id)
+        fallback = project.llm_model if project is not None else default_llm_model(self._settings)
+        return dataclass_replace(run, options=dataclass_replace(run.options, llm_model=fallback))
 
     async def create(
         self,
@@ -133,6 +146,7 @@ class RunService:
         audit_book_mode: Literal["off", "warn", "strict"] = "warn",
         legacy_tex: bool = False,
         fail_fast_schema: bool = False,
+        llm_model: str | None = None,
         started_by: uuid.UUID | None = None,
     ) -> Run:
         project = await self._projects.get(project_id)
@@ -166,6 +180,10 @@ class RunService:
                 "against the LaTeX build, which a markdown-only run never produces)"
             )
 
+        # Resolution order (issue #128): the request's own `llmModel`, else the project's -
+        # `project.llm_model` is never `None` (see `Project.llm_model`'s docstring), so this is
+        # always a concrete model id, persisted on the run's own `options` from here on.
+        resolved_llm_model = (llm_model or "").strip() or project.llm_model
         options = RunOptions(
             outline=outline,
             output_format=resolved_output_format,
@@ -175,6 +193,7 @@ class RunService:
             audit_book_mode=audit_book_mode,
             legacy_tex=legacy_tex,
             fail_fast_schema=fail_fast_schema,
+            llm_model=resolved_llm_model,
         )
 
         run_id = uuid.uuid4()
@@ -230,7 +249,8 @@ class RunService:
     ) -> tuple[list[Run], int]:
         if await self._projects.get(project_id) is None:
             raise NotFound(f"project {project_id} does not exist")
-        return await self._runs.list(project_id, limit, offset)
+        runs, total = await self._runs.list(project_id, limit, offset)
+        return [await self._fill_llm_model(run) for run in runs], total
 
     async def cancel(self, run_id: uuid.UUID) -> Run:
         run = await self._get(run_id)
@@ -274,7 +294,10 @@ class RunService:
         # Else: still `running` (a worker holds it) - `cancel_requested` is
         # now set, and the worker's own drain loop/`_finalize` will notice
         # and wind it down; there's nothing more for the API to do here.
-        return saved
+        # `request_cancel` reads straight from the repository, bypassing `_get`'s backfill
+        # above - fill it here too so a legacy run's `llmModel` is never `null` on this
+        # response either.
+        return await self._fill_llm_model(saved)
 
     async def events(
         self, run_id: uuid.UUID, *, after_seq: int, limit: int
@@ -283,10 +306,10 @@ class RunService:
         return await self._events.list(run_id, after_seq, limit)
 
     async def artifacts(
-        self, run_id: uuid.UUID, *, limit: int, offset: int
+        self, run_id: uuid.UUID, *, limit: int, offset: int, kind: ArtifactKind | None = None
     ) -> tuple[list[tuple[RunArtifact, File]], int]:
         await self._get(run_id)
-        artifacts_, total = await self._artifacts.list(run_id, limit, offset)
+        artifacts_, total = await self._artifacts.list(run_id, limit, offset, kind)
         # One batched lookup instead of one `SELECT` per artifact (issue
         # #51) - a run produces one artifact per section plus reviews, so
         # 50-200 rows here is normal.
@@ -297,6 +320,14 @@ class RunService:
             if artifact.file_id in files_by_id
         ]
         return pairs, total
+
+    async def artifact_counts_by_kind(self, run_id: uuid.UUID) -> dict[ArtifactKind, int]:
+        """Backs `GET /runs/{id}/artifacts/summary` (issue #129 review, fix
+        6) - lets the frontend's "N of M sections generated" counter and
+        per-kind `ArtifactsList` paging know each kind's total without
+        fetching (and counting) every artifact page by page."""
+        await self._get(run_id)
+        return await self._artifacts.count_by_kind(run_id)
 
     async def _resolvable_base_run(self, project_id: uuid.UUID, base_run_id: uuid.UUID | None) -> Run:
         """The most recent `full`/`regenerate_section` run whose work
@@ -410,6 +441,10 @@ class RunService:
             resume=True,
             outline=base_run.options.outline,
             prompt_modifier=prompt_modifier,
+            # `base_run.options.llm_model` is only ever `None` for a run that predates issue
+            # #128 - fall back to the project's current model rather than carrying `None`
+            # forward onto this new run's own persisted options.
+            llm_model=base_run.options.llm_model or project.llm_model,
         )
         run = Run(
             id=uuid.uuid4(),
@@ -462,6 +497,10 @@ class RunService:
                 f"status={active.status.value})"
             )
 
+        project = await self._projects.get(base_run.project_id)
+        fallback_llm_model = (
+            project.llm_model if project is not None else default_llm_model(self._settings)
+        )
         now = datetime.now(timezone.utc)
         options = dataclass_replace(
             base_run.options,
@@ -469,6 +508,7 @@ class RunService:
             export_tex_only=True,
             output_format=output_format,
             prompt_modifier=None,
+            llm_model=base_run.options.llm_model or fallback_llm_model,
         )
         run = Run(
             id=uuid.uuid4(),
@@ -555,7 +595,11 @@ class RunService:
 
         now = datetime.now(timezone.utc)
         options = dataclass_replace(
-            run.options, resume=True, export_tex_only=False, prompt_modifier=None
+            run.options,
+            resume=True,
+            export_tex_only=False,
+            prompt_modifier=None,
+            llm_model=run.options.llm_model or project.llm_model,
         )
         new_run = Run(
             id=uuid.uuid4(),
@@ -841,8 +885,18 @@ class GenerationService:
                 await self._prepare_export(run)
             else:  # pragma: no cover - exhaustive over RunKind
                 raise ValueError(f"unknown run kind: {run.kind!r}")
+            # `run.options.llm_model` is only ever unset for a run row persisted before issue
+            # #128 (`_run_options_from_json`'s dataclass-default tolerance) - fall back to the
+            # project's current model rather than letting `book_command.build_command` see
+            # `None` and leave whatever `AUTOGENBOOK_LLM_MODEL` the worker process happened to
+            # inherit unset for this run.
+            effective_options = (
+                run.options
+                if run.options.llm_model
+                else dataclass_replace(run.options, llm_model=project.llm_model)
+            )
             argv, env, cwd = book_command.build_command(
-                run.work_dir, run.options, self._settings, author=", ".join(project.authors)
+                run.work_dir, effective_options, self._settings, author=", ".join(project.authors)
             )
             exit_code, timed_out = await self._run_subprocess_and_drain(
                 run, argv, env, cwd, shutdown_event=shutdown_event
@@ -1203,6 +1257,29 @@ class GenerationService:
                     if not await self._queue.heartbeat(run.id, self._worker_id):
                         self._lease_lost = True
                         cancel_event.set()
+                    # Issue #129: as soon as a `"section"` event is
+                    # persisted, upload that leaf's `sections/<key>.md`
+                    # (and its review JSON, if any) right away instead of
+                    # waiting for the run to reach a terminal state -
+                    # `GET /runs/{id}/artifacts` then already shows it
+                    # while the CLI is still drafting the next section.
+                    # Best-effort and non-fatal by construction (`_upload_
+                    # section_artifact` never raises), so a failure here
+                    # never counts against this loop's own retry budget
+                    # below or aborts the run. Run this *after* the cancel
+                    # check/heartbeat above and skip entirely once
+                    # `cancel_event` is set - the terminal `upload_artifacts`
+                    # call covers any sections not uploaded incrementally,
+                    # and racing uploads against an in-flight cancellation
+                    # is what made `test_execute_marks_cancelled_when_cancel_
+                    # requested_mid_run` intermittently fail.
+                    if batch and not cancel_event.is_set():
+                        for event in batch:
+                            if event.stage != "section":
+                                continue
+                            node_key = (event.payload or {}).get("nodeKey")
+                            if isinstance(node_key, str) and node_key:
+                                await self._upload_section_artifact(run, node_key)
                 except Exception:
                     consecutive_failures += 1
                     logger.exception(
@@ -1368,6 +1445,26 @@ class GenerationService:
             )
         current = await self._runs.get(run.id)
         return current if current is not None else run
+
+    async def _upload_section_artifact(self, run: Run, node_key: str) -> None:
+        """Incrementally upload one leaf's `sections/<node_key>.md` (and its
+        review JSON, if the CLI has written one yet) the moment its
+        `"section"` run event lands (issue #129) - called from `_run_
+        subprocess_and_drain`'s drain loop, on the same session/event loop
+        as everything else it does there, so no extra concurrency handling
+        is needed beyond what that loop already has. Best-effort: never
+        raises, matching `_upload_artifacts` below - a failed incremental
+        upload is filled in later by the terminal `upload_artifacts` call in
+        `_finalize`/`_fail` instead of aborting the run."""
+        out_dir = Path(run.work_dir) / book_command.OUT_DIRNAME
+        try:
+            await artifacts.upload_section_artifacts(
+                out_dir, run.id, node_key, self._files, self._artifacts, self._storage
+            )
+        except Exception:  # noqa: BLE001 - incremental artifact upload is best-effort
+            logger.exception(
+                "run %s: failed to incrementally upload section %s", run.id, node_key
+            )
 
     async def _upload_artifacts(self, run: Run, project: Project | None) -> None:
         out_dir = Path(run.work_dir) / book_command.OUT_DIRNAME

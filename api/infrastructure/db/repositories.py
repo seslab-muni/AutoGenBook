@@ -29,6 +29,7 @@ _ALL_MUTABLE_FIELDS = (
     "output_format",
     "max_outline_levels",
     "additional_requirements",
+    "llm_model",
     "last_run_id",
 )
 
@@ -55,6 +56,7 @@ def _to_domain(record: ProjectRecord, owner_name: str | None = None) -> Project:
         output_format=record.output_format,
         max_outline_levels=record.max_outline_levels,
         additional_requirements=record.additional_requirements,
+        llm_model=record.llm_model,
         last_run_id=record.last_run_id,
         created_at=_as_aware_utc(record.created_at),
         updated_at=_as_aware_utc(record.updated_at),
@@ -150,6 +152,7 @@ class SqlAlchemyProjectRepository:
             output_format=project.output_format,
             max_outline_levels=project.max_outline_levels,
             additional_requirements=project.additional_requirements,
+            llm_model=project.llm_model,
             last_run_id=project.last_run_id,
             created_at=project.created_at,
             updated_at=project.updated_at,

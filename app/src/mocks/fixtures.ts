@@ -34,6 +34,18 @@ export const MOCK_USER: AuthUser = {
 /** Not part of `AuthUser` (the API never returns a password) — only `POST /auth/login`'s mock handler checks against this. */
 export const MOCK_USER_PASSWORD = 'correcthorsebatterystaple';
 
+/** Every seeded project's `llmModel` and the `GET /system/models`/`ModelSelect` fallback default (issue #128) — mirrors the CLI's own `openrouter_llm.py:default_model_name` fallback. */
+export const DEFAULT_MOCK_LLM_MODEL = 'openai/gpt-5-mini';
+
+/** `GET /system/models`'s mock catalog — enough variety to exercise `ModelSelect`'s datalist. */
+export const MOCK_MODELS: { id: string; name: string | null }[] = [
+  { id: 'openai/gpt-5-mini', name: 'GPT-5 mini' },
+  { id: 'openai/gpt-5', name: 'GPT-5' },
+  { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
+  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+  { id: 'meta-llama/llama-3.1-70b-instruct', name: null },
+];
+
 const CONTENT_TYPES: Record<SourceType, string> = {
   pdf: 'application/pdf',
   doc: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -189,6 +201,7 @@ function seedProject(seed: SeedProject): void {
     outputFormat: seed.outputFormat,
     maxOutlineLevels: 3,
     additionalRequirements: null,
+    llmModel: DEFAULT_MOCK_LLM_MODEL,
     lastRunId: null,
     createdAt: seed.createdAt,
     updatedAt: seed.updatedAt,
@@ -252,6 +265,7 @@ function seedProject(seed: SeedProject): void {
         failFastSchema: false,
         resume: false,
         exportTexOnly: false,
+        llmModel: DEFAULT_MOCK_LLM_MODEL,
       },
       baseRunId: null,
       targetNodeId: null,

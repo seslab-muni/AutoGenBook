@@ -76,6 +76,13 @@ services:
       # now a required field on that same `Settings` object (issue #96), so
       # constructing it at all fails without this even here.
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Set AUTH_JWT_SECRET in .env (openssl rand -hex 32) before starting the stack}
+      # Migration 0017's backfill (api/infrastructure/db/alembic/versions/
+      # 0017_projects_llm_model.py) reads this to seed every existing
+      # project's `llm_model` column - without it here, every pre-existing
+      # project silently backfills to the migration's hardcoded fallback
+      # instead of whatever model this deployment was actually configured
+      # with (issue #128 review).
+      AUTOGENBOOK_LLM_MODEL: ${AUTOGENBOOK_LLM_MODEL:-}
     command: alembic -c api/alembic.ini upgrade head
     depends_on:
       db:

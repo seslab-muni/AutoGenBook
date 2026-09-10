@@ -88,6 +88,20 @@ class Settings(BaseSettings):
     # context in every browser, so compose on `127.0.0.1` keeps this `1`.
     auth_cookie_secure: bool = Field(default=True, alias="AUTH_COOKIE_SECURE")
 
+    # Issue #128: the same env vars `openrouter_llm.py:OpenRouterLLM` reads for the CLI
+    # subprocess (see `book_command.ENV_ALLOWLIST`), mirrored here so the API can (a) query the
+    # configured endpoint's `GET /models` for discovery (`GET /system/models`) and (b) compute a
+    # concrete default model for a project that hasn't set its own `llm_model` yet. Once a
+    # project has one, these are never consulted again for that project's runs - only for new
+    # projects and for the discovery endpoint.
+    autogenbook_llm_base_url: str | None = Field(default=None, alias="AUTOGENBOOK_LLM_BASE_URL")
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
+    )
+    autogenbook_llm_api_key: str | None = Field(default=None, alias="AUTOGENBOOK_LLM_API_KEY")
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    autogenbook_llm_model: str | None = Field(default=None, alias="AUTOGENBOOK_LLM_MODEL")
+
     @field_validator("auth_jwt_secret")
     @classmethod
     def _validate_jwt_secret_length(cls, value: str) -> str:
@@ -102,6 +116,47 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# Mirrors `openrouter_llm.py:_FALLBACK_MODEL`/`default_model_name` without importing the CLI
+# module (the CLI is an unmodified fork, issue #128's constraint) - what a fresh project's
+# `llm_model` is initialized from when the deployment hasn't set `AUTOGENBOOK_LLM_MODEL`.
+FALLBACK_LLM_MODEL = "openai/gpt-5-mini"
+_DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def default_llm_model(settings: Settings) -> str:
+    """The concrete model a new project's `llm_model` is initialized from
+    (`ProjectService.create`) - `AUTOGENBOOK_LLM_MODEL` if the deployment set one,
+    else `FALLBACK_LLM_MODEL`. Once a project has its own `llm_model`, this is never
+    consulted again for it."""
+    configured = (settings.autogenbook_llm_model or "").strip()
+    return configured or FALLBACK_LLM_MODEL
+
+
+def resolved_llm_base_url(settings: Settings) -> str:
+    """The OpenAI-compatible base URL `GET /system/models` queries for its model list -
+    `AUTOGENBOOK_LLM_BASE_URL`, then `OPENROUTER_BASE_URL`, then OpenRouter's own default."""
+    return (
+        (settings.autogenbook_llm_base_url or "").strip()
+        or (settings.openrouter_base_url or "").strip()
+        or _DEFAULT_OPENROUTER_BASE_URL
+    )
+
+
+def resolved_llm_api_key(settings: Settings) -> str | None:
+    """The API key `GET /system/models` authenticates its `GET /models` call with -
+    `OPENROUTER_API_KEY`, then `AUTOGENBOOK_LLM_API_KEY`, or `None` if neither is set (some
+    OpenAI-compatible endpoints, e.g. a local LM Studio, need no key at all). Matches the CLI's
+    own precedence (`openrouter_llm.py`'s `OpenRouterLLM.__init__`, `OPENROUTER_API_KEY` before
+    `AUTOGENBOOK_LLM_API_KEY`) - issue #128 review, fix 8: this used to check them in the
+    opposite order, so a deployment with both set could see this endpoint report a different
+    model catalog than the one the CLI subprocess actually authenticates against."""
+    api_key = (settings.openrouter_api_key or "").strip()
+    if api_key:
+        return api_key
+    api_key = (settings.autogenbook_llm_api_key or "").strip()
+    return api_key or None
 
 
 DEFAULT_S3_SECRET_KEY = "change-this-secret"

@@ -425,6 +425,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/artifacts/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run Artifacts Summary */
+        get: operations["runs-get_run_artifacts_summary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/events/stream": {
         parameters: {
             query?: never;
@@ -434,6 +451,23 @@ export interface paths {
         };
         /** Stream Run Events */
         get: operations["runs-stream_run_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Models */
+        get: operations["system-list_models"];
         put?: never;
         post?: never;
         delete?: never;
@@ -553,6 +587,26 @@ export interface components {
          * @enum {string}
          */
         MathLevel: "introductory" | "rigorous" | "formal_proof" | "applied";
+        /** ModelInfo */
+        ModelInfo: {
+            /** Id */
+            id: string;
+            /** Name */
+            name?: string | null;
+        };
+        /**
+         * ModelList
+         * @description `GET /api/v1/system/models`'s response. `warning` is set (and `items` empty) when the
+         *     configured LLM endpoint's model list couldn't be fetched - degrades gracefully instead of a
+         *     5xx (issue #128), so callers should still render a picker (falling back to free text) rather
+         *     than treat this as a hard error.
+         */
+        ModelList: {
+            /** Items */
+            items: components["schemas"]["ModelInfo"][];
+            /** Warning */
+            warning?: string | null;
+        };
         /**
          * NodeStatus
          * @enum {string}
@@ -889,6 +943,8 @@ export interface components {
             maxOutlineLevels: number;
             /** Additionalrequirements */
             additionalRequirements?: string | null;
+            /** Llmmodel */
+            llmModel: string;
             /** Sources */
             sources?: components["schemas"]["Source"][];
             /** Outline */
@@ -947,6 +1003,8 @@ export interface components {
             maxOutlineLevels?: number;
             /** Additionalrequirements */
             additionalRequirements?: string | null;
+            /** Llmmodel */
+            llmModel?: string | null;
             /** Sources */
             sources?: components["schemas"]["SourceCreate"][] | null;
             /** Outline */
@@ -1015,6 +1073,8 @@ export interface components {
             maxOutlineLevels?: number | null;
             /** Additionalrequirements */
             additionalRequirements?: string | null;
+            /** Llmmodel */
+            llmModel?: string | null;
         };
         /**
          * RegenerateRequestIn
@@ -1085,6 +1145,19 @@ export interface components {
             sizeBytes: number;
             /** Contenttype */
             contentType: string;
+        };
+        /**
+         * RunArtifactSummary
+         * @description `GET /runs/{id}/artifacts/summary` (issue #129 review, fix 6): every
+         *     `ArtifactKind` this run has at least one artifact for, with its total
+         *     count - kept as a separate endpoint rather than a field bolted onto the
+         *     generic `Page[RunArtifact]` envelope every other list endpoint shares.
+         */
+        RunArtifactSummary: {
+            /** Countsbykind */
+            countsByKind: {
+                [key: string]: number;
+            };
         };
         /** RunEvent */
         RunEvent: {
@@ -1187,6 +1260,8 @@ export interface components {
              * @default false
              */
             failFastSchema?: boolean;
+            /** Llmmodel */
+            llmModel?: string | null;
         };
         /** RunOptionsOut */
         RunOptionsOut: {
@@ -1223,6 +1298,8 @@ export interface components {
             exportTexOnly: boolean;
             /** Promptmodifier */
             promptModifier?: string | null;
+            /** Llmmodel */
+            llmModel: string;
         };
         /**
          * RunStatus
@@ -2485,6 +2562,7 @@ export interface operations {
     "runs-list_run_artifacts": {
         parameters: {
             query?: {
+                kind?: components["schemas"]["ArtifactKind"] | null;
                 limit?: number;
                 offset?: number;
             };
@@ -2503,6 +2581,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Page_RunArtifact_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "runs-get_run_artifacts_summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunArtifactSummary"];
                 };
             };
             /** @description Validation Error */
@@ -2543,6 +2652,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "system-list_models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelList"];
                 };
             };
         };

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useState, type FormEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Copy, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -25,6 +25,7 @@ import {
   isProjectFormValid,
   projectToFormValues,
 } from '@/features/projects/lib/project-form';
+import type { ProjectFormValues } from '@/features/projects/lib/project-form';
 import { useUiStore } from '@/stores/ui-store';
 
 interface ProjectSettingsDialogProps {
@@ -54,6 +55,13 @@ export function ProjectSettingsDialog({ project }: ProjectSettingsDialogProps) {
       setValues(projectToFormValues(project));
     }
   }
+
+  // Stable identity (issue #128 review), same reasoning as `NewProjectDialog`'s
+  // `handleFormChange` - lets `ProjectFormFields`'s `memo`'d `ModelSelect` skip re-rendering
+  // when an unrelated field changes.
+  const handleFormChange = useCallback((patch: Partial<ProjectFormValues>) => {
+    setValues((current) => ({ ...current, ...patch }));
+  }, []);
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -100,7 +108,7 @@ export function ProjectSettingsDialog({ project }: ProjectSettingsDialogProps) {
             <ProjectFormFields
               idPrefix="project-settings"
               values={values}
-              onChange={(patch) => setValues((current) => ({ ...current, ...patch }))}
+              onChange={handleFormChange}
             />
           </form>
           <DialogFooter className="sm:justify-between">

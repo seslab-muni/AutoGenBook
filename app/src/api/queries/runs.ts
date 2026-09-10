@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiClient, unwrap } from '@/api/client';
-import type { ExportRequest, Run, RunOptionsIn } from '@/api/types';
+import type { ArtifactKind, ExportRequest, Run, RunOptionsIn } from '@/api/types';
 
 import { projectKeys, runKeys } from './keys';
 
@@ -37,13 +37,35 @@ export const runs = {
         ),
     }),
 
-  artifacts: (runId: string, params: { limit?: number; offset?: number } = {}) =>
+  artifacts: (
+    runId: string,
+    params: { kind?: ArtifactKind; limit?: number; offset?: number } = {},
+  ) =>
     queryOptions({
       queryKey: [...runKeys.artifacts(runId), params],
       queryFn: () =>
         unwrap(
           apiClient.GET('/api/v1/runs/{run_id}/artifacts', {
             params: { path: { run_id: runId }, query: params },
+          }),
+        ),
+    }),
+
+  /**
+   * `GET /runs/{id}/artifacts/summary`'s `countsByKind` (issue #129 review, fix 6) — every
+   * `ArtifactKind` this run has at least one artifact for, with its total count. Backs the run
+   * detail route's "N of M sections generated" counter (`countsByKind.section`) and lets
+   * `ArtifactsList`'s per-kind fetches size themselves correctly instead of a single flat
+   * `limit: 200` page, where `section_reviews/*` (alphabetically before `sections/*`) could
+   * crowd `sections/*.md` off the page on a big enough book.
+   */
+  artifactsSummary: (runId: string) =>
+    queryOptions({
+      queryKey: runKeys.artifactsSummary(runId),
+      queryFn: () =>
+        unwrap(
+          apiClient.GET('/api/v1/runs/{run_id}/artifacts/summary', {
+            params: { path: { run_id: runId } },
           }),
         ),
     }),

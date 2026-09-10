@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useState, type FormEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
@@ -21,6 +21,7 @@ import {
   formValuesToCreate,
   isProjectFormValid,
 } from '@/features/projects/lib/project-form';
+import type { ProjectFormValues } from '@/features/projects/lib/project-form';
 import { SourcePicker } from '@/features/sources/components/source-picker';
 import type { PendingSource } from '@/features/sources/lib/pending-source';
 import { toSourceCreate } from '@/features/sources/lib/pending-source';
@@ -64,6 +65,13 @@ export function NewProjectDialog() {
     }
   }
 
+  // Stable identity (issue #128 review) so `ProjectFormFields`'s own `useCallback`-wrapped
+  // `ModelSelect` handler - and `memo`'d `ModelSelect` itself - don't see a fresh function on
+  // every keystroke; the functional update form means it needs no dependencies.
+  const handleFormChange = useCallback((patch: Partial<ProjectFormValues>) => {
+    setValues((current) => ({ ...current, ...patch }));
+  }, []);
+
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!isProjectFormValid(values)) return;
@@ -82,7 +90,7 @@ export function NewProjectDialog() {
   const fieldProps = {
     idPrefix: 'new-project',
     values,
-    onChange: (patch: Partial<typeof values>) => setValues((current) => ({ ...current, ...patch })),
+    onChange: handleFormChange,
   };
 
   return (

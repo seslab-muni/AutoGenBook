@@ -2,13 +2,14 @@ import { http, HttpResponse, sse } from 'msw';
 
 import { driveFakeRun } from './fakeRun';
 import { db, stripProjectId, type ProjectRow } from './db';
-import { MOCK_USER, MOCK_USER_PASSWORD } from './fixtures';
+import { DEFAULT_MOCK_LLM_MODEL, MOCK_MODELS, MOCK_USER, MOCK_USER_PASSWORD } from './fixtures';
 import { notFound, problemResponse } from './problem';
 import type {
   ExportRequest,
   FileDto,
   HealthStatus,
   LoginRequest,
+  ModelList,
   OutlineNode,
   OutlineNodeCreate,
   OutlineNodeTree,
@@ -63,6 +64,9 @@ function extensionOf(filename: string): string {
 const systemHandlers = [
   http.get('*/api/v1/health', () => HttpResponse.json({ status: 'ok' } satisfies HealthStatus)),
   http.get('*/api/v1/ready', () => HttpResponse.json({ status: 'ready' } satisfies ReadyStatus)),
+  http.get('*/api/v1/system/models', () =>
+    HttpResponse.json({ items: MOCK_MODELS, warning: null } satisfies ModelList),
+  ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -184,6 +188,7 @@ function createProjectRow(body: ProjectCreate): ProjectRow {
     outputFormat: body.outputFormat ?? 'markdown',
     maxOutlineLevels: body.maxOutlineLevels ?? 3,
     additionalRequirements: body.additionalRequirements ?? null,
+    llmModel: body.llmModel ?? DEFAULT_MOCK_LLM_MODEL,
     lastRunId: null,
     createdAt: now,
     updatedAt: now,
@@ -322,6 +327,7 @@ const projectHandlers = [
       doConsiderPreviousSections: body.doConsiderPreviousSections ?? row.doConsiderPreviousSections,
       outputFormat: body.outputFormat ?? row.outputFormat,
       maxOutlineLevels: body.maxOutlineLevels ?? row.maxOutlineLevels,
+      llmModel: body.llmModel ?? row.llmModel,
       updatedAt: db.now(),
     });
     return HttpResponse.json(db.getProject(projectId));
@@ -354,6 +360,7 @@ const projectHandlers = [
       doConsiderPreviousSections: source.doConsiderPreviousSections,
       outputFormat: source.outputFormat,
       maxOutlineLevels: source.maxOutlineLevels,
+      llmModel: source.llmModel,
       ...(source.additionalRequirements
         ? { additionalRequirements: source.additionalRequirements }
         : {}),
@@ -645,6 +652,9 @@ const outlineHandlers = [
           resume: true,
           exportTexOnly: false,
           promptModifier: body.promptModifier ?? null,
+          llmModel:
+            (project.lastRunId && db.runs.get(project.lastRunId)?.options.llmModel) ||
+            project.llmModel,
         },
         baseRunId: project.lastRunId,
         targetNodeId: node.id,
@@ -712,6 +722,8 @@ const runHandlers = [
         failFastSchema: body.failFastSchema ?? false,
         resume: false,
         exportTexOnly: false,
+        llmModel:
+          body.llmModel ?? db.projects.get(projectId)?.llmModel ?? DEFAULT_MOCK_LLM_MODEL,
       },
       baseRunId: null,
       targetNodeId: null,
@@ -781,7 +793,24 @@ const runHandlers = [
   http.get('*/api/v1/runs/:runId/artifacts', ({ params, request }) => {
     const run = db.runs.get(params.runId as string);
     if (!run) return notFound('Run', new URL(request.url).pathname);
-    return HttpResponse.json(paginate(db.runArtifacts.get(run.id) ?? [], new URL(request.url)));
+    const url = new URL(request.url);
+    // `?kind=` (issue #129 review, fix 6) - mirrors `list_run_artifacts`'s own filter, applied
+    // before pagination so a kind-scoped fetch (`ArtifactsList`'s per-kind queries) gets that
+    // kind's own full page instead of racing every other kind for the same 200 rows.
+    const kind = url.searchParams.get('kind');
+    const all = db.runArtifacts.get(run.id) ?? [];
+    const filtered = kind ? all.filter((artifact) => artifact.kind === kind) : all;
+    return HttpResponse.json(paginate(filtered, url));
+  }),
+
+  http.get('*/api/v1/runs/:runId/artifacts/summary', ({ params, request }) => {
+    const run = db.runs.get(params.runId as string);
+    if (!run) return notFound('Run', new URL(request.url).pathname);
+    const countsByKind: Record<string, number> = {};
+    for (const artifact of db.runArtifacts.get(run.id) ?? []) {
+      countsByKind[artifact.kind] = (countsByKind[artifact.kind] ?? 0) + 1;
+    }
+    return HttpResponse.json({ countsByKind });
   }),
 
   http.post('*/api/v1/runs/:runId/exports', async ({ params, request }) => {

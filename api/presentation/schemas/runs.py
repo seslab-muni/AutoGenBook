@@ -15,7 +15,7 @@ from api.domain.models import Run as RunDomain
 from api.domain.models import RunArtifact as RunArtifactDomain
 from api.domain.models import RunEvent as RunEventDomain
 from api.domain.models import RunKind, RunStatus
-from api.presentation.schemas.common import BaseSchema
+from api.presentation.schemas.common import BaseSchema, NonBlankStr
 
 
 class RunOptionsIn(BaseSchema):
@@ -46,6 +46,10 @@ class RunOptionsIn(BaseSchema):
     audit_book_mode: Literal["off", "warn", "strict"] = "warn"
     legacy_tex: bool = False
     fail_fast_schema: bool = False
+    # Issue #128: `None`/omitted means "use the project's own `llmModel`" - resolved by
+    # `RunService.create` and persisted on the run's own `options`, so a project-level model
+    # change afterward never retroactively changes what an already-queued/running run reports.
+    llm_model: NonBlankStr | None = None
 
 
 class RegenerateRequestIn(BaseSchema):
@@ -77,6 +81,10 @@ class RunOptionsOut(BaseSchema):
     resume: bool
     export_tex_only: bool
     prompt_modifier: str | None = None
+    # Always a concrete model id (issue #128) - `RunService`'s read paths (`get`/`list`) backfill
+    # it from the project/deployment default for a run row persisted before this field existed,
+    # so this is never `null` on the wire even for a legacy run.
+    llm_model: str
 
 
 class Run(BaseSchema):
@@ -200,3 +208,16 @@ def artifact_to_schema(artifact: RunArtifactDomain, file: FileDomain) -> RunArti
         size_bytes=file.size_bytes,
         content_type=file.content_type,
     )
+
+
+class RunArtifactSummary(BaseSchema):
+    """`GET /runs/{id}/artifacts/summary` (issue #129 review, fix 6): every
+    `ArtifactKind` this run has at least one artifact for, with its total
+    count - kept as a separate endpoint rather than a field bolted onto the
+    generic `Page[RunArtifact]` envelope every other list endpoint shares."""
+
+    counts_by_kind: dict[ArtifactKind, int]
+
+
+def artifact_counts_to_schema(counts: dict[ArtifactKind, int]) -> RunArtifactSummary:
+    return RunArtifactSummary(counts_by_kind=counts)

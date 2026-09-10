@@ -65,9 +65,9 @@ describe('useActiveRun', () => {
         seq: 1,
         ts: '2026-09-07T00:00:00Z',
         level: 'info',
-        stage: 'drafting',
+        stage: 'section',
         message: 'x',
-        payload: { nodeId: 'n-1' },
+        payload: { nodeKey: 'n-1' },
       },
       'section',
     );

@@ -1,6 +1,6 @@
-"""Walk a finished run's `out/` directory, classify every file the CLI
-produced, and upload it to object storage as a `File` (`kind=artifact`)
-indexed by a `RunArtifact` row - issue #10.
+"""Walk a run's `out/` directory, classify every file the CLI produced, and
+upload it to object storage as a `File` (`kind=artifact`) indexed by a
+`RunArtifact` row - issue #10.
 
 Only `work_dir/out/` is walked, never `work_dir` itself: `work_dir/kb/` is a
 copy of the run's downloaded sources (not an output) and `work_dir/
@@ -9,10 +9,29 @@ something the CLI produced. Within `out/`, `.kb_cache/` (BM25 pickles) and
 `*.bak` backups (`autogenbook/graph/doc_graph.py:save_graph_json`) are
 skipped - neither is a useful downloadable artifact.
 
-Re-running `upload_artifacts` for the same run is idempotent: it deletes
-whatever it previously uploaded for that run first, so a run whose work
-directory changed between two calls (there's no such case today, but retry
-safety is cheap) never accumulates duplicate rows or orphaned blobs.
+`upload_artifacts` is idempotent by *content*, not just by run (issue #129):
+re-running it for the same run diffs the current `out/` directory against
+what's already recorded (by relative path, sha256 + size) - a file that's
+unchanged since the last call is left alone (its `File`/`RunArtifact` rows
+and object-store blob untouched), a changed file replaces its old row/blob,
+and a file no longer present on disk has its row/blob removed. This is what
+lets `GenerationService` call it once at the very end of *every* run
+(`_finalize`/`_fail`) after already having incrementally uploaded most
+sections via `upload_section_artifacts` as the CLI produced them - the
+terminal call only pays for what actually changed since the last section
+event, instead of re-uploading (and generating a fresh downloadable link
+for) the whole run's output every time.
+
+`upload_section_artifacts` is the incremental counterpart (issue #129):
+called from `GenerationService`'s drain loop the moment a `"section"` run
+event arrives (`subprocess_runner._watch_structure_graph`'s per-node
+`content_file_path` watch), it uploads just that one leaf's `sections/
+<node_key>.md` and, if present, `section_reviews/<node_key>.json` - so the
+run's artifact list already shows a finished section while the run is still
+generating the next one, rather than only once the whole run reaches a
+terminal state. It shares `upload_artifacts`'s same skip-if-unchanged logic,
+so re-uploading the same section content (e.g. from a `--resume` run that
+re-announces it) is a no-op.
 """
 
 from __future__ import annotations
@@ -23,6 +42,7 @@ import logging
 import mimetypes
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
@@ -134,6 +154,162 @@ def _read_and_rewrite_author_line_sync(path: Path, authors: list[str]) -> bytes:
     return _rewrite_author_line(data.decode("utf-8", errors="replace"), authors).encode("utf-8")
 
 
+async def _load_existing_by_path(
+    run_id: uuid.UUID,
+    run_artifact_repository: RunArtifactRepository,
+    file_repository: FileRepository,
+) -> dict[str, tuple[RunArtifact, File]]:
+    """Every `RunArtifact` already recorded for `run_id`, keyed by its
+    `relative_path`, paired with the `File` row it points at - the basis
+    both `upload_artifacts` and `upload_section_artifacts` diff the current
+    `out/` directory against to decide what's unchanged, changed, or new. A
+    `RunArtifact` whose `file_id` no longer resolves (shouldn't happen -
+    `_delete_artifact` below always removes both together - but cheap to
+    guard) is simply omitted, so it's treated as "not existing" and
+    re-uploaded fresh."""
+    existing, _ = await run_artifact_repository.list(run_id, limit=10_000, offset=0)
+    if not existing:
+        return {}
+    files_by_id = await file_repository.get_many([artifact.file_id for artifact in existing])
+    return {
+        artifact.relative_path: (artifact, files_by_id[artifact.file_id])
+        for artifact in existing
+        if artifact.file_id in files_by_id
+    }
+
+
+async def _load_existing_by_paths(
+    run_id: uuid.UUID,
+    relative_paths: Sequence[str],
+    run_artifact_repository: RunArtifactRepository,
+    file_repository: FileRepository,
+) -> dict[str, tuple[RunArtifact, File]]:
+    """Same shape of result as `_load_existing_by_path`, but scoped to just
+    `relative_paths` via `RunArtifactRepository.get_many_by_paths` - the
+    incremental per-section upload path (issue #129) only ever needs to know
+    about the 1-2 paths one finished leaf touches, so it has no reason to
+    page through (and `File.get_many`-join) every artifact already recorded
+    for the whole run."""
+    if not relative_paths:
+        return {}
+    existing = await run_artifact_repository.get_many_by_paths(run_id, relative_paths)
+    if not existing:
+        return {}
+    files_by_id = await file_repository.get_many([artifact.file_id for artifact in existing])
+    return {
+        artifact.relative_path: (artifact, files_by_id[artifact.file_id])
+        for artifact in existing
+        if artifact.file_id in files_by_id
+    }
+
+
+async def _delete_artifact(
+    artifact: RunArtifact,
+    file: File,
+    file_repository: FileRepository,
+    run_artifact_repository: RunArtifactRepository,
+    storage: FileStorage,
+) -> None:
+    # `run_artifacts.file_id -> files.id` is `ON DELETE RESTRICT`, so the row
+    # that references a file must go before the file itself - then the DB
+    # row before the blob, so a row delete that fails never leaves a `files`
+    # row whose content already 404s.
+    await run_artifact_repository.delete_many([artifact.id])
+    await file_repository.delete(file)
+    await storage.delete(file.storage_key)
+
+
+async def _upsert_artifact(
+    out_dir: Path,
+    relative_path: PurePosixPath,
+    kind: ArtifactKind,
+    run_id: uuid.UUID,
+    existing_by_path: dict[str, tuple[RunArtifact, File]],
+    file_repository: FileRepository,
+    run_artifact_repository: RunArtifactRepository,
+    storage: FileStorage,
+    authors: list[str] | None,
+) -> RunArtifact | None:
+    """Upload `relative_path` if it's new or its content changed since the
+    last call; return the (possibly pre-existing, unchanged) `RunArtifact`
+    row for it, or `None` if uploading it failed (logged, never raised - one
+    bad file must never abort every other artifact in the same batch)."""
+    stream: BinaryIO | None = None
+    try:
+        absolute_path = out_dir / relative_path
+        content_type, _ = mimetypes.guess_type(absolute_path.name)
+        content_type = content_type or "application/octet-stream"
+
+        data: bytes | None = None
+        if kind is ArtifactKind.markdown and authors:
+            # `errors="replace"` (not strict `utf-8`): a single bad byte in a
+            # CLI-generated Markdown file used to raise here, and since this
+            # whole loop ran inside one `try` at the call site, that used to
+            # skip *every remaining* artifact for the run - now isolated to
+            # just this one file's `try`.
+            data = await run_in_threadpool(
+                _read_and_rewrite_author_line_sync, absolute_path, authors
+            )
+            sha256_hex, size_bytes = hashlib.sha256(data).hexdigest(), len(data)
+        else:
+            # Hashed by streaming through the file once, off the event loop
+            # (issue #55), then (if it needs uploading) streamed straight
+            # from a second handle on the same file via `storage.put` -
+            # never buffered whole in memory.
+            sha256_hex, size_bytes = await run_in_threadpool(_hash_file_sync, absolute_path)
+
+        existing = existing_by_path.get(str(relative_path))
+        if existing is not None:
+            existing_artifact, existing_file = existing
+            if existing_file.sha256 == sha256_hex and existing_file.size_bytes == size_bytes:
+                # Unchanged since the last upload (by content, not just by
+                # name) - issue #129: nothing to re-upload, no new File row,
+                # no new downloadable link. This is what makes a resumed
+                # run's terminal `upload_artifacts` call cheap once most
+                # sections were already uploaded incrementally as the CLI
+                # produced them.
+                return existing_artifact
+            # Content changed - replace the stale row/blob before uploading
+            # the new one below (same storage_key, so a new File row can't
+            # coexist with the old one under the column's unique constraint).
+            await _delete_artifact(
+                existing_artifact, existing_file, file_repository, run_artifact_repository, storage
+            )
+
+        stream = io.BytesIO(data) if data is not None else await run_in_threadpool(
+            absolute_path.open, "rb"
+        )
+        file = File(
+            id=uuid.uuid4(),
+            storage_key=f"runs/{run_id}/{relative_path}",
+            filename=absolute_path.name,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            sha256=sha256_hex,
+            kind=FileKind.artifact,
+            kb_eligible=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        await storage.put(file.storage_key, stream, file.content_type)
+        await file_repository.add(file)
+
+        return await run_artifact_repository.add(
+            RunArtifact(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                file_id=file.id,
+                kind=kind,
+                relative_path=str(relative_path),
+            )
+        )
+    except Exception:
+        logger.exception("run %s: failed to upload artifact %s, skipping it", run_id, relative_path)
+        return None
+    finally:
+        if stream is not None:
+            stream.close()
+
+
 async def upload_artifacts(
     out_dir: Path,
     run_id: uuid.UUID,
@@ -143,82 +319,95 @@ async def upload_artifacts(
     *,
     authors: list[str] | None = None,
 ) -> list[RunArtifact]:
-    existing, _ = await run_artifact_repository.list(run_id, limit=10_000, offset=0)
-    if existing:
-        # `run_artifacts.file_id -> files.id` is `ON DELETE RESTRICT`, so the
-        # rows that reference a file must go before the file itself - doing
-        # this in the opposite order (as before) works on SQLite (which
-        # never enforced the FK) but throws `ForeignKeyViolation` on
-        # Postgres for every artifact after the first.
-        await run_artifact_repository.delete_by_run(run_id)
-    for artifact in existing:
-        file = await file_repository.get(artifact.file_id)
-        if file is not None:
-            # DB row first, blob after: if the row delete ever fails, the
-            # blob is still there and the row still resolves it, instead of
-            # leaving a `files` row whose content already 404s.
-            await file_repository.delete(file)
-            await storage.delete(file.storage_key)
+    if not out_dir.is_dir():
+        return []
 
-    created: list[RunArtifact] = []
-    for relative_path, kind in collect_artifact_paths(out_dir):
-        stream: BinaryIO | None = None
-        try:
-            absolute_path = out_dir / relative_path
-            content_type, _ = mimetypes.guess_type(absolute_path.name)
-            content_type = content_type or "application/octet-stream"
+    existing_by_path = await _load_existing_by_path(run_id, run_artifact_repository, file_repository)
+    collected = collect_artifact_paths(out_dir)
+    collected_paths = {str(relative_path) for relative_path, _kind in collected}
 
-            if kind is ArtifactKind.markdown and authors:
-                # `errors="replace"` (not strict `utf-8`): a single bad byte
-                # in a CLI-generated Markdown file used to raise here, and
-                # since this whole loop ran inside one `try` at the call
-                # site, that skipped *every remaining* artifact for the run
-                # (the title-cased `<Title>.md` sorts before `sections/`) -
-                # now isolated to just this one file's `try` below too.
-                data = await run_in_threadpool(
-                    _read_and_rewrite_author_line_sync, absolute_path, authors
-                )
-                sha256_hex, size_bytes = hashlib.sha256(data).hexdigest(), len(data)
-                stream = io.BytesIO(data)
-            else:
-                # Hashed by streaming through the file once, off the event
-                # loop (issue #55), then uploaded straight from a second
-                # handle on the same file via `storage.put`'s own
-                # `upload_fileobj` - never buffered whole in memory (as a
-                # `BytesIO` built from `read_bytes()` used to, twice over:
-                # once as `data`, once again inside the `BytesIO`).
-                sha256_hex, size_bytes = await run_in_threadpool(_hash_file_sync, absolute_path)
-                stream = await run_in_threadpool(absolute_path.open, "rb")
+    # Remove whatever was previously uploaded for this run but no longer
+    # exists on disk (e.g. a `regenerate_section` rollback, or an artifact
+    # the CLI simply stopped producing) - the one case `_upsert_artifact`'s
+    # per-path diff can't catch on its own, since it never sees a path that
+    # isn't in `collected`.
+    for relative_path, (artifact, file) in existing_by_path.items():
+        if relative_path not in collected_paths:
+            await _delete_artifact(artifact, file, file_repository, run_artifact_repository, storage)
 
-            file = File(
-                id=uuid.uuid4(),
-                storage_key=f"runs/{run_id}/{relative_path}",
-                filename=absolute_path.name,
-                content_type=content_type,
-                size_bytes=size_bytes,
-                sha256=sha256_hex,
-                kind=FileKind.artifact,
-                kb_eligible=False,
-                created_at=datetime.now(timezone.utc),
-            )
-            await storage.put(file.storage_key, stream, file.content_type)
-            await file_repository.add(file)
+    result: list[RunArtifact] = []
+    for relative_path, kind in collected:
+        artifact = await _upsert_artifact(
+            out_dir,
+            relative_path,
+            kind,
+            run_id,
+            existing_by_path,
+            file_repository,
+            run_artifact_repository,
+            storage,
+            authors,
+        )
+        if artifact is not None:
+            result.append(artifact)
+    return result
 
-            saved = await run_artifact_repository.add(
-                RunArtifact(
-                    id=uuid.uuid4(),
-                    run_id=run_id,
-                    file_id=file.id,
-                    kind=kind,
-                    relative_path=str(relative_path),
-                )
-            )
-            created.append(saved)
-        except Exception:
-            logger.exception(
-                "run %s: failed to upload artifact %s, skipping it", run_id, relative_path
-            )
-        finally:
-            if stream is not None:
-                stream.close()
-    return created
+
+def _section_candidate_paths(node_key: str) -> list[tuple[PurePosixPath, ArtifactKind]]:
+    return [
+        (PurePosixPath("sections") / f"{node_key}.md", ArtifactKind.section),
+        (PurePosixPath("section_reviews") / f"{node_key}.json", ArtifactKind.section_review),
+    ]
+
+
+async def upload_section_artifacts(
+    out_dir: Path,
+    run_id: uuid.UUID,
+    node_key: str,
+    file_repository: FileRepository,
+    run_artifact_repository: RunArtifactRepository,
+    storage: FileStorage,
+) -> list[RunArtifact]:
+    """Incrementally upload one leaf section's own artifacts - `sections/
+    <node_key>.md` and, if the CLI has written one, `section_reviews/
+    <node_key>.json` - the moment it's finished, rather than waiting for the
+    whole run to reach a terminal state (issue #129). Authors are never
+    rewritten here: that only ever applies to the run's single top-level
+    `<Title>.md`, uploaded later by the terminal `upload_artifacts` call, not
+    to per-section Markdown. Shares `upload_artifacts`'s skip-if-unchanged
+    behavior, so calling this again for a section whose content hasn't
+    changed (e.g. a `--resume` run re-announcing an already-uploaded
+    section) is a no-op.
+    """
+    if not out_dir.is_dir():
+        return []
+    candidates = [
+        (relative_path, kind)
+        for relative_path, kind in _section_candidate_paths(node_key)
+        if (out_dir / relative_path).is_file()
+    ]
+    if not candidates:
+        return []
+
+    existing_by_path = await _load_existing_by_paths(
+        run_id,
+        [str(relative_path) for relative_path, _kind in candidates],
+        run_artifact_repository,
+        file_repository,
+    )
+    result: list[RunArtifact] = []
+    for relative_path, kind in candidates:
+        artifact = await _upsert_artifact(
+            out_dir,
+            relative_path,
+            kind,
+            run_id,
+            existing_by_path,
+            file_repository,
+            run_artifact_repository,
+            storage,
+            authors=None,
+        )
+        if artifact is not None:
+            result.append(artifact)
+    return result

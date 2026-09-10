@@ -7,8 +7,10 @@ from typing import Any, BinaryIO, Protocol
 from datetime import datetime
 
 from api.domain.models import (
+    ArtifactKind,
     File,
     FileKind,
+    LlmModelInfo,
     OutlineNode,
     Project,
     Run,
@@ -179,10 +181,53 @@ class RunArtifactRepository(Protocol):
     async def add(self, artifact: RunArtifact) -> RunArtifact: ...
 
     async def list(
-        self, run_id: uuid.UUID, limit: int, offset: int
-    ) -> tuple[list[RunArtifact], int]: ...
+        self, run_id: uuid.UUID, limit: int, offset: int, kind: ArtifactKind | None = None
+    ) -> tuple[list[RunArtifact], int]:
+        """`kind` (issue #129 review, fix 6) restricts the page to just that
+        `ArtifactKind` - `GET /runs/{id}/artifacts?kind=...` uses this so a
+        big book's `section_reviews/*` rows don't crowd `sections/*.md` out
+        of the default 200-row page (the repository orders by
+        `relative_path`, and `section_reviews` sorts before `sections`)."""
+        ...
+
+    async def count_by_kind(self, run_id: uuid.UUID) -> dict[ArtifactKind, int]:
+        """Every `ArtifactKind` this run has at least one artifact for, with
+        its count - backs `GET /runs/{id}/artifacts/summary`'s `countsByKind`
+        so the frontend's "N of M sections generated" counter and per-kind
+        paging don't need to fetch every artifact just to count them."""
+        ...
 
     async def delete_by_run(self, run_id: uuid.UUID) -> None: ...
+
+    async def delete_many(self, artifact_ids: Sequence[uuid.UUID]) -> None:
+        """Delete specific `RunArtifact` rows by id - the incremental-upload path
+        (issue #129) uses this to replace just the one artifact whose content
+        changed, rather than `delete_by_run`'s "delete everything for this
+        run" (which would also throw away every other already-uploaded,
+        still-unchanged section)."""
+        ...
+
+    async def get_many_by_paths(
+        self, run_id: uuid.UUID, relative_paths: Sequence[str]
+    ) -> list[RunArtifact]:
+        """Look up whichever of `relative_paths` already have a `RunArtifact`
+        row for `run_id` - the incremental per-section upload path (issue
+        #129) uses this instead of `list`'s full-run page (paired with a
+        `FileRepository.get_many` over every row) just to check the 1-2 paths
+        one finished section touches."""
+        ...
+
+
+class ModelCatalog(Protocol):
+    """Issue #128: queries the configured OpenAI-compatible LLM endpoint for the
+    models it offers. Behind a port so `SystemService` (and its tests) never talk to a real
+    network endpoint directly - `api.infrastructure.llm.model_catalog.UrllibModelCatalog` is the
+    only implementation, wrapped in `CachingModelCatalog` for the in-process ~5-minute cache."""
+
+    async def list_models(self) -> list[LlmModelInfo]:
+        """Raises on any network/HTTP/parse failure - `SystemService.list_models` is the one
+        place that catches it and degrades to an empty list plus a warning instead of a 5xx."""
+        ...
 
 
 class RunQueue(Protocol):
