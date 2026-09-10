@@ -126,6 +126,18 @@ async def export_run(
     return await run_to_schema(run)
 
 
+@router.post(
+    "/runs/{run_id}/retry", response_model=Run, status_code=status.HTTP_202_ACCEPTED
+)
+async def retry_run(
+    run_id: uuid.UUID,
+    user: User = Depends(current_user),
+    service: RunService = Depends(get_run_service),
+) -> Run:
+    run = await service.retry(run_id, started_by=user.id)
+    return await run_to_schema(run)
+
+
 @router.get("/runs/{run_id}/events", response_model=RunEventPage)
 async def list_run_events(
     run_id: uuid.UUID,

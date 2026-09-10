@@ -297,6 +297,22 @@ class SqlAlchemyRunRepository:
         )
         return [row[0] for row in result.all()]
 
+    async def list_by_work_dir(self, work_dir: str) -> list[Run]:
+        """Every run (any kind/status) sharing exactly this `work_dir` -
+        used by `RunService.retry`'s superseded-run guard: a `work_dir`
+        with an already-`succeeded` sibling means some earlier attempt
+        (the base run, or an earlier retry of it) already finished the
+        book, so a new retry would have `--resume` skip every section and
+        "succeed" having regenerated nothing."""
+        result = await self._session.execute(
+            select(RunRecord, UserRecord.display_name)
+            .outerjoin(UserRecord, UserRecord.id == RunRecord.started_by)
+            .where(RunRecord.work_dir == work_dir)
+        )
+        return [
+            run_to_domain(record, started_by_name) for record, started_by_name in result.all()
+        ]
+
     async def list_all_work_dirs(self) -> list[str]:
         """Every `work_dir` any `runs` row references, regardless of status
         - used by `sweep_orphaned_work_dirs` (issue #57) to find directories

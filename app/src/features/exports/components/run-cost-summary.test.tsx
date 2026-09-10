@@ -19,6 +19,7 @@ function makeRun(overrides: Partial<Run> = {}): Run {
     totalTokens: 128_450,
     totalCostUsd: 1.823,
     resumable: true,
+    retryable: false,
     queuedAt: '2026-09-07T10:00:00Z',
     startedAt: '2026-09-07T10:00:05Z',
     finishedAt: '2026-09-07T10:04:35Z',

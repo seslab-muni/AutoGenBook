@@ -653,6 +653,8 @@ const outlineHandlers = [
         totalTokens: null,
         totalCostUsd: null,
         resumable: true,
+        // A `regenerate_section` run is never retryable (issue #124: only `kind === 'full'` is).
+        retryable: false,
         queuedAt: db.now(),
         startedAt: null,
         finishedAt: null,
@@ -718,6 +720,8 @@ const runHandlers = [
       totalTokens: null,
       totalCostUsd: null,
       resumable: true,
+      // Just queued, not `failed`/`cancelled` yet (issue #124).
+      retryable: false,
       queuedAt: db.now(),
       startedAt: null,
       finishedAt: null,
@@ -821,6 +825,66 @@ const runHandlers = [
       totalTokens: null,
       totalCostUsd: null,
       resumable: true,
+      // An `export` run is never retryable (issue #124: only `kind === 'full'` is).
+      retryable: false,
+      queuedAt: db.now(),
+      startedAt: null,
+      finishedAt: null,
+      startedById: MOCK_USER.id,
+      startedByName: MOCK_USER.displayName,
+    };
+    db.runs.set(runId, run);
+    driveFakeRun(runId);
+    return HttpResponse.json(run, { status: 202 });
+  }),
+
+  http.post('*/api/v1/runs/:runId/retry', ({ params, request }) => {
+    const baseRun = db.runs.get(params.runId as string);
+    if (!baseRun) return notFound('Run', new URL(request.url).pathname);
+    if (baseRun.kind !== 'full') {
+      return problemResponse(
+        409,
+        'Only a full run can be resumed; re-run regenerate/export instead',
+        new URL(request.url).pathname,
+      );
+    }
+    if (baseRun.status !== 'failed' && baseRun.status !== 'cancelled') {
+      return problemResponse(
+        409,
+        baseRun.status === 'succeeded'
+          ? 'Run succeeded; nothing to resume; use export/regenerate'
+          : 'Run is still active; cancel it first',
+        new URL(request.url).pathname,
+      );
+    }
+    if (!baseRun.resumable) {
+      return problemResponse(
+        409,
+        "Run's work directory no longer exists; start a full run",
+        new URL(request.url).pathname,
+      );
+    }
+    if (hasActiveRun(baseRun.projectId)) {
+      return problemResponse(
+        409,
+        'Project already has an active run',
+        new URL(request.url).pathname,
+      );
+    }
+    const runId = db.nextId();
+    const run: Run = {
+      ...baseRun,
+      id: runId,
+      status: 'queued',
+      options: { ...baseRun.options, resume: true, exportTexOnly: false, promptModifier: null },
+      baseRunId: baseRun.id,
+      targetNodeId: null,
+      exitCode: null,
+      error: null,
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      retryable: false,
       queuedAt: db.now(),
       startedAt: null,
       finishedAt: null,

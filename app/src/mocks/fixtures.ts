@@ -260,6 +260,9 @@ function seedProject(seed: SeedProject): void {
       totalTokens: 482_311,
       totalCostUsd: 6.42,
       resumable: true,
+      // Not retryable: only a `failed`/`cancelled` full run is (issue #124) - this seed run
+      // succeeded.
+      retryable: false,
       queuedAt: seed.createdAt,
       startedAt: seed.createdAt,
       finishedAt,

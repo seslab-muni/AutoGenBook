@@ -43,6 +43,7 @@ describe('RunsPanel "Started by" column', () => {
       totalTokens: null,
       totalCostUsd: null,
       resumable: true,
+      retryable: false,
       queuedAt: '2026-09-06T00:00:00Z',
       startedAt: '2026-09-06T00:00:01Z',
       finishedAt: '2026-09-06T00:00:02Z',

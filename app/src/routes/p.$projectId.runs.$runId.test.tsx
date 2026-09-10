@@ -55,6 +55,7 @@ describe('run detail page', () => {
       totalTokens: null,
       totalCostUsd: null,
       resumable: true,
+      retryable: false,
       queuedAt: '2026-09-07T00:00:00Z',
       startedAt: '2026-09-07T00:00:01Z',
       finishedAt: '2026-09-07T00:00:02Z',
@@ -82,6 +83,7 @@ describe('run detail page', () => {
       totalTokens: null,
       totalCostUsd: null,
       resumable: true,
+      retryable: false,
       queuedAt: '2026-09-07T00:00:00Z',
       startedAt: '2026-09-07T00:00:01Z',
       finishedAt: null,
@@ -112,6 +114,7 @@ describe('run detail page', () => {
       totalTokens: 500,
       totalCostUsd: 0.02,
       resumable: true,
+      retryable: false,
       queuedAt: '2026-09-07T00:00:00Z',
       startedAt: '2026-09-07T00:00:01Z',
       finishedAt: '2026-09-07T00:00:02Z',
@@ -119,9 +122,11 @@ describe('run detail page', () => {
 
     renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
     expect(await screen.findByRole('button', { name: /regenerate again/i })).toBeInTheDocument();
+    // Not a full run - no Resume action either way.
+    expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
   });
 
-  it('renders the run error when the run failed', async () => {
+  it('renders the run error when the run failed, with no Resume action once its work dir is gone', async () => {
     const runId = 'run-failed-1';
     db.runs.set(runId, {
       id: runId,
@@ -136,6 +141,7 @@ describe('run detail page', () => {
       totalTokens: null,
       totalCostUsd: null,
       resumable: false,
+      retryable: false,
       queuedAt: '2026-09-07T00:00:00Z',
       startedAt: '2026-09-07T00:00:01Z',
       finishedAt: '2026-09-07T00:00:02Z',
@@ -144,5 +150,51 @@ describe('run detail page', () => {
     renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
     expect(await screen.findByText('CLI exited with code 1')).toBeInTheDocument();
     expect(screen.queryByText('Resumable')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
+  });
+
+  it('the seeded successful run has no Resume action (issue #124: only a failed/cancelled full run is retryable)', async () => {
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${RUN_ID}`);
+    await screen.findByText('Succeeded');
+    expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
+  });
+
+  it('resuming a retryable failed run navigates to the new run it creates', async () => {
+    const user = userEvent.setup();
+    const runId = 'run-failed-retryable';
+    db.runs.set(runId, {
+      id: runId,
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'failed',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: -9,
+      error: 'killed by API after 21600s timeout',
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      retryable: true,
+      queuedAt: '2026-09-07T00:00:00Z',
+      startedAt: '2026-09-07T00:00:01Z',
+      finishedAt: '2026-09-07T00:00:02Z',
+    });
+
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
+    await screen.findByText('killed by API after 21600s timeout');
+
+    const runsBefore = db.runs.size;
+    await user.click(screen.getByRole('button', { name: /^resume$/i }));
+    await user.click(screen.getByRole('button', { name: 'Resume run' }));
+
+    // Navigated to the newly-created run: its own page renders (a fresh
+    // `queued`/`running` run has a Cancel action; the old run's error text
+    // is gone because it's no longer the page in view).
+    await waitFor(() => expect(db.runs.size).toBe(runsBefore + 1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^cancel$/i })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('killed by API after 21600s timeout')).not.toBeInTheDocument();
   });
 });

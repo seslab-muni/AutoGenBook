@@ -47,3 +47,9 @@ def test_outline_nodes_table_no_longer_declares_dead_cli_key_index() -> None:
     # `cli_key` is never filtered on by any query - only ever read/written
     # as a plain column - so this composite index was dead weight.
     assert "ix_outline_nodes_project_id_cli_key" not in _index_names("outline_nodes")
+
+
+def test_runs_table_declares_work_dir_index() -> None:
+    # issue #124: `RunRepository.list_by_work_dir` (`RunService.retry`'s
+    # succeeded-sibling guard) filters on `work_dir` by equality.
+    assert "ix_runs_work_dir" in _index_names("runs")
