@@ -152,9 +152,10 @@ class RunService:
         project = await self._projects.get(project_id)
         if project is None:
             raise NotFound(f"project {project_id} does not exist")
+        await self._runs.lock_project_for_admission(project_id)
         lane = await self._runs.list_active_for_project(project_id)
         blocker = queue_admission_blocker(
-            RunKind.full, lane, self._settings.max_queued_runs_per_project
+            blocked_by_full_run=False, lane_runs=lane, cap=self._settings.max_queued_runs_per_project
         )
         if blocker is not None:
             raise Conflict(blocker)
@@ -377,6 +378,14 @@ class RunService:
         project = await self._projects.get(project_id)
         if project is None:
             raise NotFound(f"project {project_id} does not exist")
+        # Acquired up front, before the outline read below, not just before
+        # `list_active_for_project` - the node's `status == DRAFTING` check
+        # right below reads state this same call later writes
+        # (`self._outline.update(..., status=DRAFTING, ...)` near the end
+        # of this method), so two concurrent `regenerate` requests for the
+        # *same* node need the whole read-check-write serialized per
+        # project, not just the admission lane check (issue #134 review).
+        await self._runs.lock_project_for_admission(project_id)
 
         flat = await self._outline.list(project_id)
         flat_by_id = {n.id: n for n in flat}
@@ -396,10 +405,26 @@ class RunService:
                 f"outline node {node_id} has child sections; regenerate only "
                 "applies to leaf nodes"
             )
+        if node.status == NodeStatus.DRAFTING:
+            # Issue #134: with a project no longer limited to one
+            # queued-or-running run at a time, two `regenerate` requests for
+            # the *same* node can both pass every other guard here and both
+            # queue - the second's `target_node_previous_status` would then
+            # capture `drafting` (the first request's own in-flight status,
+            # not the node's real prior status), and whichever of the two
+            # runs finishes last wins the outline update while the other's
+            # cancel/finalize path can restore `drafting` right back onto a
+            # node with nothing left running for it, stuck there forever
+            # (the same class of bug as issues #63/#77). Reject the second
+            # request outright instead of racing it.
+            raise Conflict(
+                f"outline node {node_id} already has a regenerate queued or "
+                "running; wait for it to finish or cancel it"
+            )
 
         lane = await self._runs.list_active_for_project(project_id)
         blocker = queue_admission_blocker(
-            RunKind.regenerate_section, lane, self._settings.max_queued_runs_per_project
+            blocked_by_full_run=True, lane_runs=lane, cap=self._settings.max_queued_runs_per_project
         )
         if blocker is not None:
             raise Conflict(blocker)
@@ -503,9 +528,12 @@ class RunService:
                 f"run {run_id}'s work directory no longer exists; start a full run first"
             )
 
+        await self._runs.lock_project_for_admission(base_run.project_id)
         lane = await self._runs.list_active_for_project(base_run.project_id)
         blocker = queue_admission_blocker(
-            RunKind.export, lane, self._settings.max_queued_runs_per_project
+            blocked_by_full_run=True,
+            lane_runs=lane,
+            cap=self._settings.max_queued_runs_per_project,
         )
         if blocker is not None:
             raise Conflict(blocker)
@@ -561,9 +589,12 @@ class RunService:
         if blocker is not None:
             raise Conflict(blocker)
 
+        await self._runs.lock_project_for_admission(run.project_id)
         lane = await self._runs.list_active_for_project(run.project_id)
         blocker = queue_admission_blocker(
-            RunKind.full, lane, self._settings.max_queued_runs_per_project
+            blocked_by_full_run=True,
+            lane_runs=lane,
+            cap=self._settings.max_queued_runs_per_project,
         )
         if blocker is not None:
             raise Conflict(blocker)
@@ -682,25 +713,36 @@ def retry_blocker(run: Run) -> str | None:
     return None
 
 
-def queue_admission_blocker(kind: RunKind, lane_runs: list[Run], cap: int) -> str | None:
-    """The 409 reason a new run of `kind` should be refused given its
-    project's current lane (`lane_runs`: every queued-or-running run for the
-    project, from `RunRepository.list_active_for_project`, oldest first) and
-    `cap` (`Settings.max_queued_runs_per_project`) - `None` if admission is
+def queue_admission_blocker(
+    *, blocked_by_full_run: bool, lane_runs: list[Run], cap: int
+) -> str | None:
+    """The 409 reason a new run should be refused given its project's
+    current lane (`lane_runs`: every queued-or-running run for the project,
+    from `RunRepository.list_active_for_project`, oldest first) and `cap`
+    (`Settings.max_queued_runs_per_project`) - `None` if admission is
     allowed. Shared verbatim by every entry point that queues a new run
     (`create`, `regenerate_node`, `export`, `retry`, issue #134) so the
     admission table can't drift between them.
 
-    A `full` run reads the project and outline fresh when it *starts*
-    (`GenerationService._prepare_work_dir`), so it's always safe to queue
-    behind anything already in the lane - it only has to respect the cap.
-    `regenerate_section`/`export`/`retry` are all relative to a base run's
-    fixed work directory and `project.last_run_id`, either of which a
-    `full` run starting *after* they were queued would rewrite out from
-    under them - so any of the three is blocked outright by a `full` run
-    already queued or running. (`retry` itself creates a `kind == full`
-    run, so a queued retry blocks the same way a queued `create` does.)"""
-    if kind != RunKind.full and any(run.kind == RunKind.full for run in lane_runs):
+    `blocked_by_full_run` is the caller's own answer to "is the run I'm
+    about to queue relative to a *fixed* base work directory/
+    `project.last_run_id`, the way a later `full` run starting after it was
+    queued would rewrite out from under it?" - `create`'s `full` run always
+    reads the project/outline fresh when it *starts*
+    (`GenerationService._prepare_work_dir`), so it passes `False` and is
+    never blocked by anything already in the lane, only the cap.
+    `regenerate_node`/`export` pass `True`. `retry` also passes `True` even
+    though the run it creates is itself `kind == full`: unlike `create`'s
+    run, a retry resumes a specific existing `work_dir` (`options.resume=
+    True`, `base_run_id` pointing at the failed run) exactly the way
+    `regenerate_section`/`export` do, so it's just as vulnerable to a
+    later `full` run rewriting `project.last_run_id`/the outline out from
+    under it, or to two retries of the same failed run racing to resume the
+    same directory (issue #134 review). A queued/running `full` run in the
+    lane always blocks a `blocked_by_full_run=True` request regardless of
+    that flag - `run.kind == RunKind.full` covers a queued `retry` here too,
+    the same way it covers a queued `create`."""
+    if blocked_by_full_run and any(run.kind == RunKind.full for run in lane_runs):
         return (
             "a full run is queued or running for this project; wait for it to "
             "finish or cancel it"

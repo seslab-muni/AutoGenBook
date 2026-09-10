@@ -48,12 +48,21 @@ def upgrade() -> None:
 def downgrade() -> None:
     # `uq_runs_project_active` forbids more than one queued-or-running row
     # per project - a deployment that ran under this migration's `upgrade()`
-    # for any length of time may have accumulated several `queued` rows for
-    # one project, which would make recreating that index fail outright.
-    # Cancel every queued row but the oldest per project first (the same
-    # "oldest wins" ordering `SqlAlchemyRunQueue.claim` uses) so downgrading
-    # never leaves an ambiguous "which one do we keep" choice implicit in a
-    # failed migration.
+    # for any length of time is normally sitting in exactly the state that
+    # violates it (one `running` run plus however many `queued` ones),
+    # which would make recreating that index fail outright.
+    #
+    # Rank every *queued-or-running* row per project with the `running` row
+    # (if any) always first - `(status <> 'running')` sorts `false` (0)
+    # before `true` (1) - and queued rows after it in `queued_at` order (the
+    # same "oldest wins" tie-break `SqlAlchemyRunQueue.claim` uses when no
+    # row is running). Only ever cancel `queued` rows ranked below 1 - a
+    # `running` row always ranks first when present, so it's never a
+    # candidate, and a project with a `running` row loses *every* queued
+    # row (only the running one may remain active), while a project with
+    # none keeps its oldest queued row and loses the rest - either way
+    # exactly one queued-or-running row per project survives, satisfying
+    # the index this restores.
     bind = op.get_bind()
     result = bind.execute(
         sa.text(
@@ -61,10 +70,11 @@ def downgrade() -> None:
             WITH ranked AS (
                 SELECT id,
                        row_number() OVER (
-                           PARTITION BY project_id ORDER BY queued_at
+                           PARTITION BY project_id
+                           ORDER BY (status <> 'running'), queued_at
                        ) AS rn
                 FROM runs
-                WHERE status = 'queued'
+                WHERE status IN ('queued', 'running')
             )
             UPDATE runs
             SET status = 'cancelled',
@@ -73,7 +83,8 @@ def downgrade() -> None:
                         'run per project is allowed once uq_runs_project_active '
                         'is restored',
                 finished_at = now()
-            WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+            WHERE status = 'queued'
+              AND id IN (SELECT id FROM ranked WHERE rn > 1)
             """
         )
     )

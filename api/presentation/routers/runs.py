@@ -68,12 +68,14 @@ async def create_run(
 @router.get("/projects/{project_id}/runs", response_model=Page[Run])
 async def list_runs(
     project_id: uuid.UUID,
-    status: list[RunStatus] | None = Query(default=None),
+    # Named `run_status` (not `status`) to avoid shadowing the module-level
+    # `starlette.status` import within this function's scope.
+    run_status: list[RunStatus] | None = Query(default=None, alias="status"),
     params: PageParams = Depends(),
     service: RunService = Depends(get_run_service),
 ) -> Page[Run]:
     runs, total = await service.list(
-        project_id, limit=params.limit, offset=params.offset, statuses=status
+        project_id, limit=params.limit, offset=params.offset, statuses=run_status
     )
     return Page[Run](
         items=[

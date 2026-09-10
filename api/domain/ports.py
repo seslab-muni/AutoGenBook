@@ -141,6 +141,20 @@ class RunRepository(Protocol):
 
     async def get_active_for_project(self, project_id: uuid.UUID) -> Run | None: ...
 
+    # Issue #134 review: serializes admission for `project_id` across
+    # concurrent requests for the rest of the current transaction (a
+    # Postgres `pg_advisory_xact_lock`, released automatically at
+    # commit/rollback; a no-op on sqlite, where the test suite never runs
+    # concurrently). `RunService.create`/`regenerate_node`/`export`/`retry`
+    # each call this *before* `list_active_for_project` so two requests
+    # racing the same project's admission decision (e.g. a double-click)
+    # serialize instead of both reading an empty/under-cap lane and both
+    # being admitted - `uq_runs_project_running` only backstops "one
+    # running run", it can't catch a second `queued` row the admission
+    # rules should have refused (e.g. a `regenerate` queued alongside a
+    # `full` run).
+    async def lock_project_for_admission(self, project_id: uuid.UUID) -> None: ...
+
     # Issue #134: every queued-or-running run for `project_id`, oldest
     # first - the project's whole "lane". Unlike `get_active_for_project`
     # (still used by the outline structural-edit guard and project delete,

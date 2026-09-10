@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.errors import NotFound
@@ -13,6 +13,12 @@ from api.domain.models import Run, RunEvent, RunOptions, RunStatus
 from api.infrastructure.db.models import RunEventRecord, RunRecord, UserRecord
 
 _ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
+
+
+def _dialect_name(session: AsyncSession) -> str:
+    bind = session.bind
+    dialect = getattr(bind, "dialect", None)
+    return dialect.name if dialect is not None else "postgresql"
 
 _RUN_OPTIONS_FIELDS = {f.name for f in dataclasses.fields(RunOptions)}
 
@@ -110,6 +116,24 @@ class SqlAlchemyRunRepository:
             return None
         return await self._session.scalar(
             select(UserRecord.display_name).where(UserRecord.id == started_by)
+        )
+
+    async def lock_project_for_admission(self, project_id: uuid.UUID) -> None:
+        if _dialect_name(self._session) != "postgresql":
+            # sqlite has no advisory locks and the test suite never drives
+            # this concurrently - `pg_advisory_xact_lock` is Postgres-only
+            # the same way `SqlAlchemyRunQueue.claim`'s `FOR UPDATE SKIP
+            # LOCKED` is.
+            return
+        # `hashtext` collapses the UUID to a 32-bit key `pg_advisory_xact_
+        # lock` accepts; two different projects landing on the same key
+        # only costs those two an extra moment of serialization, it can
+        # never cause an incorrect admission decision. Transaction-scoped
+        # (`_xact_`), so it releases automatically at this request's own
+        # commit/rollback - never held past the request that acquired it.
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project_id)},
         )
 
     async def get_active_for_project(self, project_id: uuid.UUID) -> Run | None:
