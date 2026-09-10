@@ -51,6 +51,14 @@ const ARTIFACTS: RunArtifact[] = [
     sizeBytes: 300,
     contentType: 'application/json',
   },
+  {
+    kind: 'section',
+    relativePath: 'sections/1-1.md',
+    fileId: 'file-section-1-1',
+    filename: '1-1.md',
+    sizeBytes: 4096,
+    contentType: 'text/markdown',
+  },
 ];
 
 function registerFile(fileId: string, filename: string, contentType: string) {
@@ -103,7 +111,14 @@ describe('ArtifactsList', () => {
 
     // Group headings appear in the fixed `ARTIFACT_KIND_ORDER`, not fixture insertion order.
     const headings = screen.getAllByRole('heading', { level: 4 }).map((el) => el.textContent);
-    expect(headings).toEqual(['Markdown', 'BibTeX', 'LLM usage', 'Audit report', 'Log']);
+    expect(headings).toEqual([
+      'Markdown',
+      'BibTeX',
+      'Section',
+      'LLM usage',
+      'Audit report',
+      'Log',
+    ]);
 
     const markdownLink = screen.getByText('book.md').closest('li');
     expect(markdownLink).not.toBeNull();
@@ -142,5 +157,17 @@ describe('ArtifactsList', () => {
     await user.click(screen.getByRole('button', { name: /show findings/i }));
     expect(await screen.findByText('doc_kind')).toBeInTheDocument();
     expect(screen.getByText('"book"')).toBeInTheDocument();
+  });
+
+  it('expands a section artifact into a read-only Markdown preview on demand (issue #129)', async () => {
+    const user = userEvent.setup();
+    seedFiles();
+    mockFileContent('file-section-1-1', '## Chapter One\n\nGenerated body text.', 'text/markdown');
+    renderWithProviders(<ArtifactsList artifacts={ARTIFACTS} />);
+
+    expect(screen.queryByText('Generated body text.')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^preview$/i }));
+    expect(await screen.findByText('Generated body text.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Chapter One' })).toBeInTheDocument();
   });
 });

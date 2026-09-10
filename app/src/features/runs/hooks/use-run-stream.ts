@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
-import { subscribeRunEvents, type RunEventName } from '@/api/sse';
+import { subscribeRunEvents } from '@/api/sse';
 import { projectKeys, runKeys } from '@/api/queries/keys';
 import { runs } from '@/api/queries/runs';
 import type { Run, RunEvent } from '@/api/types';
@@ -87,10 +87,17 @@ function acquire(
 
   const unsubscribe = subscribeRunEvents(runId, {
     ...(lastEventId !== undefined ? { lastEventId } : {}),
-    onEvent: (event: RunEvent, name: RunEventName) => {
+    onEvent: (event: RunEvent) => {
       appendLiveEvent(queryClient, runId, event);
-      if (name === 'section') {
+      // Checked on the event's own `stage`, not the transport-level `name`
+      // SSE hands back (`name` is always `'log'` on the polling fallback -
+      // see `sse.ts`'s `pollOnce` - even though the underlying `RunEvent`
+      // still carries `stage: 'section'`), so a section landing while the
+      // stream has fallen back to polling still refreshes the artifacts
+      // list live instead of only once the run finishes (issue #129).
+      if (event.stage === 'section') {
         rememberSectionNode(queryClient, runId, event);
+        void queryClient.invalidateQueries({ queryKey: runKeys.artifacts(runId) });
         if (projectId) {
           void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
           void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectId) });

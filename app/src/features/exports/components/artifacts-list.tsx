@@ -4,6 +4,7 @@ import { ChevronRight, Download } from 'lucide-react';
 import type { RunArtifact } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/empty-state';
+import { LazyMarkdownView } from '@/features/editor/components/markdown-view-lazy';
 import { JsonTree } from '@/features/exports/components/json-tree';
 import { useFileText } from '@/features/exports/hooks/use-file-text';
 import {
@@ -72,7 +73,42 @@ function ArtifactRow({ artifact }: { artifact: RunArtifact }) {
       {artifact.kind === 'audit_report' ? <AuditReportPreview artifact={artifact} /> : null}
       {artifact.kind === 'llm_usage' ? <LlmUsageSummary artifact={artifact} /> : null}
       {artifact.kind === 'log' ? <LogPreview artifact={artifact} /> : null}
+      {artifact.kind === 'section' ? <SectionMarkdownPreview artifact={artifact} /> : null}
     </li>
+  );
+}
+
+/**
+ * A `sections/<cliKey>.md` artifact's own read-only Markdown preview,
+ * expanded on demand (issue #129) - reuses the same `LazyMarkdownView` the
+ * section editor renders live content with, so a section already shows up
+ * here (and can be read) while the run that's still generating the rest of
+ * the book is still in progress.
+ */
+function SectionMarkdownPreview({ artifact }: { artifact: RunArtifact }) {
+  const { open, toggle } = usePreviewToggle();
+  const textQuery = useFileText(artifact.fileId, { enabled: open });
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={toggle}
+        className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+      >
+        <ChevronRight className={cn('size-3 transition-transform', open && 'rotate-90')} />
+        {open ? 'Hide preview' : 'Preview'}
+      </button>
+      {open ? (
+        <div className="custom-scrollbar mt-1.5 max-h-96 overflow-auto rounded-md border bg-background p-3">
+          {textQuery.isPending ? (
+            <p className="text-[11px] text-muted-foreground">Loading…</p>
+          ) : (
+            <LazyMarkdownView markdown={textQuery.data ?? ''} />
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

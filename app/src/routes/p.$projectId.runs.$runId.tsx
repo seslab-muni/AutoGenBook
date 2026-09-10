@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowLeft, PlayCircle, RotateCw, Square } from 'lucide-r
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
+import { outline as outlineQueries } from '@/api/queries/outline';
 import { runs as runQueries, useCancelRunMutation, useRetryRunMutation } from '@/api/queries/runs';
 import type { RunEvent } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
@@ -22,6 +23,7 @@ import {
 } from '@/features/runs/lib/run-format';
 import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
+import { isLeaf } from '@/features/outline/model';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 export const Route = createFileRoute('/p/$projectId/runs/$runId')({
@@ -58,7 +60,23 @@ function RunPage() {
     [historyPage, liveEvents],
   );
 
-  const { data: artifacts } = useQuery(runQueries.artifacts(runId));
+  // `limit: 200` (the endpoint's max page size) rather than the default 50 - a full book run can
+  // produce well over 50 artifacts (one `sections/*.md` plus one `section_reviews/*.json` per
+  // leaf, plus the assembled Markdown/PDF/BibTeX/logs), and undercounting here would make the
+  // "N of M sections generated" counter below lag behind what's actually finished.
+  const { data: artifacts } = useQuery(runQueries.artifacts(runId, { limit: 200 }));
+  // Same reasoning for the outline: `limit: 5000` is the endpoint's own max, fetched once to
+  // derive the total leaf-section count the counter is "of".
+  const { data: outlineFlat } = useQuery(outlineQueries.flat(projectId, { limit: 5000 }));
+
+  const leafSectionCount = useMemo(() => {
+    const items = outlineFlat?.items ?? [];
+    return items.filter((node) => isLeaf(node.id, items)).length;
+  }, [outlineFlat]);
+  const generatedSectionCount = useMemo(
+    () => (artifacts?.items ?? []).filter((artifact) => artifact.kind === 'section').length,
+    [artifacts],
+  );
 
   const cancelMutation = useCancelRunMutation();
   const retryMutation = useRetryRunMutation(projectId);
@@ -218,13 +236,22 @@ function RunPage() {
           </div>
 
           <div className="rounded-lg border">
-            <div className="border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
-              Artifacts
+            <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
+              <span>Artifacts</span>
+              {leafSectionCount > 0 ? (
+                <span className="font-normal text-muted-foreground">
+                  {generatedSectionCount} of {leafSectionCount} sections generated
+                </span>
+              ) : null}
             </div>
             <div className="p-3">
               <ArtifactsList
                 artifacts={artifacts?.items ?? []}
-                emptyMessage="Artifacts appear here once the run produces output."
+                emptyMessage={
+                  isRunning
+                    ? 'Artifacts appear here as soon as the run finishes its first section.'
+                    : 'Artifacts appear here once the run produces output.'
+                }
               />
             </div>
           </div>
