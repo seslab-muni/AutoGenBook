@@ -22,6 +22,12 @@ from autogenbook.openrouter_usage import (
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL)
+# Per-request timeout for chat completion calls. Without this the client falls back to the
+# SDK's own default, and a connection that silently stalls (no error, no response) can block
+# an entire run indefinitely - the only other backstop is the API's CLI_RUN_TIMEOUT_S, which
+# is hours, not minutes. A stalled attempt raises openai.APITimeoutError, which
+# _is_transient_error already retries via the existing max_retries/backoff loop below.
+OPENROUTER_REQUEST_TIMEOUT_S = float(os.environ.get("OPENROUTER_REQUEST_TIMEOUT_S", "300") or 300)
 MCP_TOOL_SYSTEM_PROMPT = (
     "You can call MCP tools via the tool interface when external data is needed "
     "(web search, arXiv, paper search). Prefer paper tools such as search_papers, "
@@ -206,6 +212,7 @@ class OpenRouterLLM:
             api_key=api_key,
             base_url=base_url,
             default_headers=extra_headers or None,
+            timeout=OPENROUTER_REQUEST_TIMEOUT_S,
         )
 
     def _apply_usage(self, usage: Any, *, payload: Optional[Dict[str, Any]] = None, headers=None) -> None:
