@@ -1124,6 +1124,8 @@ export interface components {
             resumable: boolean;
             /** Retryable */
             retryable: boolean;
+            /** Queueposition */
+            queuePosition?: number | null;
             /** Startedbyid */
             startedById?: string | null;
             /** Startedbyname */
@@ -2295,6 +2297,7 @@ export interface operations {
     "runs-list_runs": {
         parameters: {
             query?: {
+                status?: components["schemas"]["RunStatus"][] | null;
                 limit?: number;
                 offset?: number;
             };

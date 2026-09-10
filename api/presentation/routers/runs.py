@@ -62,18 +62,26 @@ async def create_run(
         llm_model=body.llm_model,
         started_by=user.id,
     )
-    return await run_to_schema(run)
+    return await run_to_schema(run, queue_position=await service.queue_position(run))
 
 
 @router.get("/projects/{project_id}/runs", response_model=Page[Run])
 async def list_runs(
     project_id: uuid.UUID,
+    # Named `run_status` (not `status`) to avoid shadowing the module-level
+    # `starlette.status` import within this function's scope.
+    run_status: list[RunStatus] | None = Query(default=None, alias="status"),
     params: PageParams = Depends(),
     service: RunService = Depends(get_run_service),
 ) -> Page[Run]:
-    runs, total = await service.list(project_id, limit=params.limit, offset=params.offset)
+    runs, total = await service.list(
+        project_id, limit=params.limit, offset=params.offset, statuses=run_status
+    )
     return Page[Run](
-        items=[await run_to_schema(run) for run in runs],
+        items=[
+            await run_to_schema(run, queue_position=await service.queue_position(run))
+            for run in runs
+        ],
         total=total,
         limit=params.limit,
         offset=params.offset,
@@ -95,7 +103,7 @@ async def regenerate_node(
     run = await service.regenerate_node(
         project_id, node_id, prompt_modifier=body.prompt_modifier, started_by=user.id
     )
-    return await run_to_schema(run)
+    return await run_to_schema(run, queue_position=await service.queue_position(run))
 
 
 @router.get("/runs/{run_id}", response_model=Run)
@@ -103,7 +111,7 @@ async def get_run(
     run_id: uuid.UUID, service: RunService = Depends(get_run_service)
 ) -> Run:
     run = await service.get(run_id)
-    return await run_to_schema(run)
+    return await run_to_schema(run, queue_position=await service.queue_position(run))
 
 
 @router.post(
@@ -113,7 +121,7 @@ async def cancel_run(
     run_id: uuid.UUID, service: RunService = Depends(get_run_service)
 ) -> Run:
     run = await service.cancel(run_id)
-    return await run_to_schema(run)
+    return await run_to_schema(run, queue_position=await service.queue_position(run))
 
 
 @router.post(
@@ -126,7 +134,7 @@ async def export_run(
     service: RunService = Depends(get_run_service),
 ) -> Run:
     run = await service.export(run_id, output_format=body.format, started_by=user.id)
-    return await run_to_schema(run)
+    return await run_to_schema(run, queue_position=await service.queue_position(run))
 
 
 @router.post(
@@ -138,7 +146,7 @@ async def retry_run(
     service: RunService = Depends(get_run_service),
 ) -> Run:
     run = await service.retry(run_id, started_by=user.id)
-    return await run_to_schema(run)
+    return await run_to_schema(run, queue_position=await service.queue_position(run))
 
 
 @router.get("/runs/{run_id}/events", response_model=RunEventPage)

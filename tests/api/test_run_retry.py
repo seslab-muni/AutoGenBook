@@ -395,6 +395,13 @@ async def test_retry_409_when_project_has_an_active_run(
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
 ) -> None:
+    """Issue #134: `retry` creates a `kind == full` run, but - unlike
+    `create`'s run, which always reads the project/outline fresh when it
+    starts - it resumes a *fixed* existing `work_dir` (`options.resume=
+    True`), exactly the way `regenerate_section`/`export` do. So it's
+    admitted the same way they are: blocked outright by another full run
+    already queued/running for the project, not just subject to the queue
+    cap."""
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
@@ -409,6 +416,7 @@ async def test_retry_409_when_project_has_an_active_run(
 
     response = await authed_client.post(f"/api/v1/runs/{base_run['id']}/retry")
     assert response.status_code == 409
+    assert "full run" in response.json()["detail"]
 
 
 async def test_retry_409_when_work_dir_was_swept(

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -27,7 +28,6 @@ from api.infrastructure.cli.book_command import OUT_DIRNAME
 from api.infrastructure.db.models import RunRecord
 from api.infrastructure.db.run_repository import run_to_domain
 
-_ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
 _STRUCTURE_GRAPH_FILENAME = "structure_graph.json"
 
 
@@ -42,9 +42,24 @@ class SqlAlchemyRunQueue:
         self._session = session
 
     async def claim(self, worker_id: str) -> Run | None:
+        # Issue #134: skip a queued run whose project already has a
+        # `running` run - "one running run per project" is a *lane* gate,
+        # not "only the oldest run overall", so a project mid-run never
+        # blocks every *other* project's queued runs from being claimed.
+        # `NOT IN (SELECT ... WHERE status = 'running')` is logically the
+        # same uncorrelated-per-row filter as a `NOT EXISTS` correlated on
+        # `project_id` here (never `NULL`), and - unlike a correlated
+        # `EXISTS` on the same table - is never itself covered by this
+        # statement's own `FOR UPDATE`, so it can't self-lock.
+        running_project_ids = select(RunRecord.project_id).where(
+            RunRecord.status == RunStatus.running
+        )
         candidate_stmt = (
             select(RunRecord.id)
-            .where(RunRecord.status == RunStatus.queued)
+            .where(
+                RunRecord.status == RunStatus.queued,
+                RunRecord.project_id.not_in(running_project_ids),
+            )
             .order_by(RunRecord.queued_at)
             .limit(1)
         )
@@ -56,17 +71,27 @@ class SqlAlchemyRunQueue:
             return None
 
         now = datetime.now(timezone.utc)
-        result = await self._session.execute(
-            update(RunRecord)
-            .where(RunRecord.id == candidate_id, RunRecord.status == RunStatus.queued)
-            .values(
-                status=RunStatus.running,
-                locked_by=worker_id,
-                started_at=now,
-                heartbeat_at=now,
+        try:
+            result = await self._session.execute(
+                update(RunRecord)
+                .where(RunRecord.id == candidate_id, RunRecord.status == RunStatus.queued)
+                .values(
+                    status=RunStatus.running,
+                    locked_by=worker_id,
+                    started_at=now,
+                    heartbeat_at=now,
+                )
             )
-        )
-        await self._session.commit()
+            await self._session.commit()
+        except IntegrityError:
+            # Two slots can still pass the NOT-IN gate above for two queued
+            # runs of the *same* project in the same instant (only possible
+            # under real concurrency, i.e. Postgres) - the second `UPDATE`
+            # here then violates `uq_runs_project_running`. Roll back and
+            # return `None` so this slot just retries on its next poll; the
+            # winner already committed its own claim.
+            await self._session.rollback()
+            return None
         if result.rowcount == 0:
             # Lost the race to another worker between the SELECT and UPDATE
             # (only possible without SKIP LOCKED, i.e. on sqlite in tests).

@@ -951,6 +951,16 @@ paths:
           type: string
           format: uuid
           title: Project Id
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: array
+            items:
+              $ref: '#/components/schemas/RunStatus'
+          - type: 'null'
+          title: Status
       - name: limit
         in: query
         required: false
@@ -2569,6 +2579,11 @@ components:
         retryable:
           type: boolean
           title: Retryable
+        queuePosition:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Queueposition
         startedById:
           anyOf:
           - type: string

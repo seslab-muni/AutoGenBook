@@ -5,15 +5,20 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import case, func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.errors import Conflict, NotFound
+from api.core.errors import NotFound
 from api.domain.models import Run, RunEvent, RunOptions, RunStatus
 from api.infrastructure.db.models import RunEventRecord, RunRecord, UserRecord
 
 _ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
+
+
+def _dialect_name(session: AsyncSession) -> str:
+    bind = session.bind
+    dialect = getattr(bind, "dialect", None)
+    return dialect.name if dialect is not None else "postgresql"
 
 _RUN_OPTIONS_FIELDS = {f.name for f in dataclasses.fields(RunOptions)}
 
@@ -113,6 +118,24 @@ class SqlAlchemyRunRepository:
             select(UserRecord.display_name).where(UserRecord.id == started_by)
         )
 
+    async def lock_project_for_admission(self, project_id: uuid.UUID) -> None:
+        if _dialect_name(self._session) != "postgresql":
+            # sqlite has no advisory locks and the test suite never drives
+            # this concurrently - `pg_advisory_xact_lock` is Postgres-only
+            # the same way `SqlAlchemyRunQueue.claim`'s `FOR UPDATE SKIP
+            # LOCKED` is.
+            return
+        # `hashtext` collapses the UUID to a 32-bit key `pg_advisory_xact_
+        # lock` accepts; two different projects landing on the same key
+        # only costs those two an extra moment of serialization, it can
+        # never cause an incorrect admission decision. Transaction-scoped
+        # (`_xact_`), so it releases automatically at this request's own
+        # commit/rollback - never held past the request that acquired it.
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project_id)},
+        )
+
     async def get_active_for_project(self, project_id: uuid.UUID) -> Run | None:
         record = await self._session.scalar(
             select(RunRecord)
@@ -125,18 +148,35 @@ class SqlAlchemyRunRepository:
         )
         return run_to_domain(record) if record is not None else None
 
+    async def list_active_for_project(self, project_id: uuid.UUID) -> list[Run]:
+        result = await self._session.execute(
+            select(RunRecord)
+            .where(
+                RunRecord.project_id == project_id,
+                RunRecord.status.in_(_ACTIVE_STATUSES),
+            )
+            .order_by(RunRecord.queued_at)
+        )
+        return [run_to_domain(record) for record in result.scalars().all()]
+
     async def list(
-        self, project_id: uuid.UUID, limit: int, offset: int
+        self,
+        project_id: uuid.UUID,
+        limit: int,
+        offset: int,
+        *,
+        statuses: Sequence[RunStatus] | None = None,
     ) -> tuple[list[Run], int]:
+        conditions = [RunRecord.project_id == project_id]
+        if statuses:
+            conditions.append(RunRecord.status.in_(statuses))
         total = await self._session.scalar(
-            select(func.count())
-            .select_from(RunRecord)
-            .where(RunRecord.project_id == project_id)
+            select(func.count()).select_from(RunRecord).where(*conditions)
         )
         result = await self._session.execute(
             select(RunRecord, UserRecord.display_name)
             .outerjoin(UserRecord, UserRecord.id == RunRecord.started_by)
-            .where(RunRecord.project_id == project_id)
+            .where(*conditions)
             .order_by(RunRecord.queued_at.desc())
             .limit(limit)
             .offset(offset)
@@ -144,6 +184,20 @@ class SqlAlchemyRunRepository:
         return [
             run_to_domain(record, started_by_name) for record, started_by_name in result.all()
         ], total or 0
+
+    async def queue_position(self, run: Run) -> int | None:
+        if run.status != RunStatus.queued:
+            return None
+        ahead = await self._session.scalar(
+            select(func.count())
+            .select_from(RunRecord)
+            .where(
+                RunRecord.project_id == run.project_id,
+                RunRecord.status == RunStatus.queued,
+                RunRecord.queued_at < run.queued_at,
+            )
+        )
+        return (ahead or 0) + 1
 
     async def rollback(self) -> None:
         """Recover the shared session from a poisoned ("pending rollback")
@@ -155,21 +209,21 @@ class SqlAlchemyRunRepository:
         await self._session.rollback()
 
     async def add(self, run: Run) -> Run:
+        # Issue #134: `uq_runs_project_running` only constrains `running`
+        # rows, and `add` only ever inserts a brand-new row as `queued` (a
+        # worker transitions a row to `running` through `SqlAlchemyRunQueue.
+        # claim`'s own targeted `UPDATE`, never through here) - so this
+        # insert can no longer violate that index the way it could violate
+        # its predecessor `uq_runs_project_active`. A violation here now
+        # means an actual bug (e.g. a caller passing `status=running`
+        # directly), not a benign concurrent-request race - let it surface
+        # as the unhandled-exception 500 it actually is, the same way any
+        # other unexpected `IntegrityError` would, instead of being
+        # silently reinterpreted as a routine 409.
         record = RunRecord(id=run.id)
         _apply_domain_to_record(run, record)
         self._session.add(record)
-        try:
-            await self._session.commit()
-        except IntegrityError as exc:
-            # `uq_runs_project_active` is the backstop for the
-            # check-then-insert race in `RunService.create` (two concurrent
-            # requests can both pass its `get_active_for_project` check
-            # before either commits) - translate the resulting constraint
-            # violation into the same `Conflict` that check itself raises.
-            await self._session.rollback()
-            raise Conflict(
-                f"project {run.project_id} already has an active run"
-            ) from exc
+        await self._session.commit()
         await self._session.refresh(record)
         started_by_name = await self._started_by_name(record.started_by)
         return run_to_domain(record, started_by_name)
