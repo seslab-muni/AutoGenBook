@@ -20,6 +20,7 @@ import { outline, useRegenerateOutlineNodeMutation } from '@/api/queries/outline
 import type { Project, Run } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { isLeaf } from '@/features/outline/model';
 import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
 import { RunEventLog } from '@/features/runs/components/run-event-log';
@@ -119,11 +120,19 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
   const isBusy = activeRun !== undefined;
   const hasCliKey = Boolean(node?.cliKey);
   const hasResumableBaseRun = project.lastRunId != null;
-  const canRegenerate = Boolean(node) && hasCliKey && hasResumableBaseRun && !isBusy;
+  // Only leaf sections ever get LLM-generated content (book_builder.py's generate_contents walks
+  // leaves only); the API rejects a regenerate targeting a non-leaf with a 409 (issue #77), so
+  // gate it here too rather than letting the user submit and hit that as a generic error.
+  const nodeIsLeaf = node ? isLeaf(node.id, flat) : false;
+  const canRegenerate =
+    Boolean(node) && nodeIsLeaf && hasCliKey && hasResumableBaseRun && !isBusy;
 
   let disabledReason: string | null = null;
   if (node) {
-    if (!hasCliKey) {
+    if (!nodeIsLeaf) {
+      disabledReason =
+        'This is a container node — only leaf sections can be generated. Select a leaf section below it.';
+    } else if (!hasCliKey) {
       disabledReason = 'This section has no CLI key yet — it appears after the next full run.';
     } else if (!hasResumableBaseRun) {
       disabledReason = 'No successful prior run to resume from — start a full run first.';
