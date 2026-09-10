@@ -560,7 +560,14 @@ async def test_execute_on_a_reclaimed_run_does_not_collide_on_seq_or_hang(
 async def test_execute_marks_cancelled_when_cancel_requested_mid_run(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
 ) -> None:
+    # Slow the fake CLI down so there is a real mid-run window to cancel in.
+    # The value only reaches the child if it is on `ENV_ALLOWLIST` (issue
+    # #129's incremental uploads exposed that this test used to race the
+    # default 0.05s/step CLI instead).
     monkeypatch.setenv("FAKE_CLI_STEP_SLEEP_S", "1.0")
+    monkeypatch.setattr(
+        book_command, "ENV_ALLOWLIST", book_command.ENV_ALLOWLIST + ("FAKE_CLI_STEP_SLEEP_S",)
+    )
 
     # Two independent sessions, mirroring production: the worker's
     # `GenerationService` holds its own session for the run's whole
