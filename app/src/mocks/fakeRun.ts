@@ -131,14 +131,20 @@ function buildTimeline(run: Run): TimelineEntry[] {
   }
 
   if (run.kind === 'export') {
+    // Shorter than the other timelines below (still two visibly distinct steps for anyone
+    // driving this by hand against the mocks in `pnpm dev`) - `export-dialog.test.tsx`'s own
+    // "swaps to a download link" test has to sit through this real delay plus a couple of the
+    // dialog's 400ms `refetchInterval` polls on top, entirely on real timers (issue #124 PR
+    // #125/#126's CI-only flake), so keeping it short buys real margin against a slow runner
+    // without proportionally shrinking every other timeline's pacing too.
     return [
       {
-        delayMs: 400,
+        delayMs: 150,
         status: 'running',
         event: { name: 'stage', stage: 'export', message: 'Rendering LaTeX/PDF export.' },
       },
       {
-        delayMs: 900,
+        delayMs: 350,
         status: 'succeeded',
         event: { name: 'done', stage: 'export', message: 'Export succeeded.' },
         onComplete: () => appendExportArtifact(run),
