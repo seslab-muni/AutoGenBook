@@ -17,12 +17,14 @@ interface SourcePickerProps {
   onChange: (next: PendingSource[]) => void;
   /** Test seam, forwarded to `UploadDropzone`. */
   createXhr?: () => XMLHttpRequest;
+  /** Forwarded to `UploadDropzone` — the shorter dropzone for a narrow column. */
+  compact?: boolean;
 }
 
 /** Upload-and-attach step for the new-project wizard — no project exists yet, so uploaded files
  * are held here as `PendingSource`s and only become real `Source`s inside `ProjectCreate.sources`
  * once the project is created (issue #17's wizard deferred this; see `pending-source.ts`). */
-export function SourcePicker({ value, onChange, createXhr }: SourcePickerProps) {
+export function SourcePicker({ value, onChange, createXhr, compact }: SourcePickerProps) {
   function handleUploaded(file: FileDto) {
     onChange([
       ...value,
@@ -47,7 +49,11 @@ export function SourcePicker({ value, onChange, createXhr }: SourcePickerProps) 
 
   return (
     <div className="space-y-2">
-      <UploadDropzone onUploaded={handleUploaded} {...(createXhr ? { createXhr } : {})} />
+      <UploadDropzone
+        onUploaded={handleUploaded}
+        {...(createXhr ? { createXhr } : {})}
+        {...(compact ? { compact } : {})}
+      />
 
       {value.length > 0 ? (
         <ul className="space-y-1.5">

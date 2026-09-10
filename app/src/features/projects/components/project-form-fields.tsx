@@ -25,15 +25,8 @@ interface ProjectFormFieldsProps {
   idPrefix: string;
 }
 
-/** Metadata fields shared by the new-project dialog and the project settings dialog. */
-export function ProjectFormFields({ values, onChange, idPrefix }: ProjectFormFieldsProps) {
-  // `ModelSelect` is wrapped in `memo` (issue #128 review) precisely so that typing in an
-  // unrelated field here (title, topic, ...) doesn't re-render it and rebuild its
-  // hundreds-of-entries `<datalist>` on every keystroke - that only holds if this handler's own
-  // identity stays stable across those re-renders too, which requires `onChange` itself (passed
-  // in by the dialog that owns the form's state) to be a stable reference.
-  const handleModelChange = useCallback((value: string) => onChange({ llmModel: value }), [onChange]);
-
+/** Title / subtitle / topic / authors — what the book *is*. */
+export function ProjectBasicsFields({ values, onChange, idPrefix }: ProjectFormFieldsProps) {
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
@@ -88,7 +81,21 @@ export function ProjectFormFields({ values, onChange, idPrefix }: ProjectFormFie
           required
         />
       </div>
+    </div>
+  );
+}
 
+/** Audience / format / budgets / depth / context flags — how the book is *generated*. */
+export function ProjectGenerationFields({ values, onChange, idPrefix }: ProjectFormFieldsProps) {
+  // `ModelSelect` is wrapped in `memo` (issue #128 review) precisely so that typing in an
+  // unrelated field here (title, topic, ...) doesn't re-render it and rebuild its
+  // hundreds-of-entries `<datalist>` on every keystroke - that only holds if this handler's own
+  // identity stays stable across those re-renders too, which requires `onChange` itself (passed
+  // in by the dialog that owns the form's state) to be a stable reference.
+  const handleModelChange = useCallback((value: string) => onChange({ llmModel: value }), [onChange]);
+
+  return (
+    <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <label className="text-xs font-semibold text-foreground" htmlFor={`${idPrefix}-audience`}>
@@ -224,6 +231,17 @@ export function ProjectFormFields({ values, onChange, idPrefix }: ProjectFormFie
           Pass preceding section context to the writer agent
         </label>
       </div>
+    </div>
+  );
+}
+
+/** All metadata fields in one column — the project settings dialog. The new-project dialog
+ * places `ProjectBasicsFields` and `ProjectGenerationFields` side by side instead. */
+export function ProjectFormFields(props: ProjectFormFieldsProps) {
+  return (
+    <div className="space-y-4">
+      <ProjectBasicsFields {...props} />
+      <ProjectGenerationFields {...props} />
     </div>
   );
 }
