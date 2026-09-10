@@ -1,9 +1,22 @@
 import '@testing-library/jest-dom/vitest';
+import { configure } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 
 import { resetFakeRuns } from '@/mocks/fakeRun';
 import { seedDatabase } from '@/mocks/fixtures';
 import { server } from '@/mocks/server';
+
+/**
+ * Testing Library's default `waitFor`/`findBy*` budget is 1000ms - comfortable in an idle
+ * environment, but every implicit async query in the suite (not just the few spots with an
+ * explicit `{ timeout }` override) shares that one global default, and a CI runner under load can
+ * occasionally shave enough off a full render + MSW round trip to blow it even for an ordinary
+ * page mount (`p.$projectId.runs.$runId.test.tsx`'s very first assertion has now failed this way
+ * more than once - see issue #124 PR #125/#126/#127's investigation). Raising the default rather
+ * than annotating individual assertions covers the whole suite against the same class of flake,
+ * not just the handful of spots that have already been caught failing.
+ */
+configure({ asyncUtilTimeout: 5000 });
 
 /** jsdom has no `matchMedia`; `next-themes` (system theme detection) queries it on mount. */
 if (typeof window.matchMedia !== 'function') {
