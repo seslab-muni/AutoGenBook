@@ -65,6 +65,7 @@ export function RunsPanel({ projectId }: RunsPanelProps) {
           <col className="w-24" />
           <col className="w-32" />
           <col className="w-28" />
+          <col className="w-32" />
           <col className="w-20" />
           <col className="w-24" />
           <col className="w-24" />
@@ -75,6 +76,7 @@ export function RunsPanel({ projectId }: RunsPanelProps) {
             <th className="py-1.5 font-semibold">Status</th>
             <th className="py-1.5 font-semibold">Started</th>
             <th className="py-1.5 font-semibold">Started by</th>
+            <th className="py-1.5 font-semibold">Model</th>
             <th className="py-1.5 font-semibold">Duration</th>
             <th className="py-1.5 font-semibold">Tokens</th>
             <th className="py-1.5 pr-1 font-semibold">Cost</th>
@@ -143,6 +145,9 @@ function RunRow({
       </td>
       <td className="truncate py-1.5 text-xs text-muted-foreground">
         {run.startedByName ?? '—'}
+      </td>
+      <td className="truncate py-1.5 font-mono text-xs text-muted-foreground">
+        {run.options.llmModel}
       </td>
       <td className="py-1.5 text-xs text-muted-foreground">{duration ?? '—'}</td>
       <td className="py-1.5 text-xs text-muted-foreground">

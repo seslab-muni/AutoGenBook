@@ -46,6 +46,10 @@ export type ProjectSummary = components['schemas']['ProjectSummary'];
 export type ProjectCreate = components['schemas']['ProjectCreate'];
 export type ProjectUpdate = components['schemas']['ProjectUpdate'];
 
+/** `GET /system/models`'s response — the models the configured LLM endpoint offers. */
+export type ModelInfo = components['schemas']['ModelInfo'];
+export type ModelList = components['schemas']['ModelList'];
+
 export type SourceType = components['schemas']['SourceType'];
 export type SourceStatus = components['schemas']['SourceStatus'];
 export type Source = components['schemas']['Source'];

@@ -41,6 +41,11 @@ class Project:
     output_format: OutputFormat
     max_outline_levels: int
     additional_requirements: str | None
+    # Issue #128: always a concrete model id, never `None` - `ProjectService.create`
+    # initializes it from `AUTOGENBOOK_LLM_MODEL` (or `FALLBACK_LLM_MODEL`) when the caller
+    # doesn't supply one, and the migration backfilling this column did the same for every
+    # pre-existing row. `RunOptions.llm_model` falls back to this when a run doesn't override it.
+    llm_model: str
     last_run_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
@@ -253,6 +258,14 @@ class RunOptions:
     # sends the writer agent as `section_summary`. Ignored for every other
     # run kind.
     prompt_modifier: str | None = None
+    # Issue #128: resolved at run-creation time by `RunService` to the request's own
+    # `llmModel` if given, else the project's `llm_model` - `book_command.build_command` sets
+    # `AUTOGENBOOK_LLM_MODEL` in the CLI subprocess env from this, overriding any parent-provided
+    # value. `None` only for a run row persisted before this field existed (tolerated by
+    # `_run_options_from_json`'s dataclass-default fallback) - `RunService`'s read paths
+    # (`get`/`list`) backfill it from the project/deployment default before it ever reaches a
+    # client, so `RunOptionsOut.llmModel` is always a concrete string on the wire.
+    llm_model: str | None = None
 
 
 @dataclass
@@ -335,3 +348,14 @@ class Run:
     # Derived, never persisted - see `Project.owner_name`'s docstring; joined
     # in by `SqlAlchemyRunRepository`.
     started_by_name: str | None = None
+
+
+@dataclass
+class LlmModelInfo:
+    """One model the configured LLM endpoint's `GET /models` offers (issue #128) -
+    `id` is what a project/run's `llm_model` actually stores and what
+    `AUTOGENBOOK_LLM_MODEL` is set to; `name` is a human-readable label some
+    endpoints (e.g. OpenRouter) also return, `None` on ones that don't."""
+
+    id: str
+    name: str | None = None

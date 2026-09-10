@@ -57,6 +57,7 @@ async def create_run(
         audit_book_mode=body.audit_book_mode,
         legacy_tex=body.legacy_tex,
         fail_fast_schema=body.fail_fast_schema,
+        llm_model=body.llm_model,
         started_by=user.id,
     )
     return await run_to_schema(run)

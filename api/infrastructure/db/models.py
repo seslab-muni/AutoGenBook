@@ -103,6 +103,10 @@ class ProjectRecord(Base):
     )
     max_outline_levels: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     additional_requirements: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Issue #128: always a concrete model id - `ProjectService.create` resolves it from
+    # `AUTOGENBOOK_LLM_MODEL`/`FALLBACK_LLM_MODEL` when the caller doesn't supply one, and
+    # migration `0017_projects_llm_model` backfilled every pre-existing row the same way.
+    llm_model: Mapped[str] = mapped_column(sa.Text, nullable=False)
     last_run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False

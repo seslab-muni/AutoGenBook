@@ -13,4 +13,5 @@ export const DEFAULT_RUN_OPTIONS: RunOptionsOut = {
   failFastSchema: false,
   resume: false,
   exportTexOnly: false,
+  llmModel: 'openai/gpt-5-mini',
 };

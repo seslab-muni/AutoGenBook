@@ -65,4 +65,33 @@ describe('StartRunDialog', () => {
     const matches = await screen.findAllByText('Project already has a queued or running run');
     expect(matches.length).toBeGreaterThan(0);
   });
+
+  it('defaults the model field to the project\'s own model', async () => {
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    useUiStore.setState({ activeModal: 'start-run' });
+    await screen.findByRole('heading', { name: 'Start a run' });
+
+    expect(screen.getByLabelText(/llm model/i)).toHaveValue('openai/gpt-5-mini');
+  });
+
+  it('starting a run with an overridden model shows it on the run detail page', async () => {
+    const user = userEvent.setup();
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    useUiStore.setState({ activeModal: 'start-run' });
+    await screen.findByRole('heading', { name: 'Start a run' });
+
+    const modelInput = screen.getByLabelText(/llm model/i);
+    await user.clear(modelInput);
+    await user.type(modelInput, 'anthropic/claude-3.5-sonnet');
+    await user.click(screen.getByRole('button', { name: 'Start run' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Start a run' })).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText('anthropic/claude-3.5-sonnet')).toBeInTheDocument();
+  });
 });

@@ -9,6 +9,7 @@ from datetime import datetime
 from api.domain.models import (
     File,
     FileKind,
+    LlmModelInfo,
     OutlineNode,
     Project,
     Run,
@@ -190,6 +191,18 @@ class RunArtifactRepository(Protocol):
         changed, rather than `delete_by_run`'s "delete everything for this
         run" (which would also throw away every other already-uploaded,
         still-unchanged section)."""
+        ...
+
+
+class ModelCatalog(Protocol):
+    """Issue #128: queries the configured OpenAI-compatible LLM endpoint for the
+    models it offers. Behind a port so `SystemService` (and its tests) never talk to a real
+    network endpoint directly - `api.infrastructure.llm.model_catalog.UrllibModelCatalog` is the
+    only implementation, wrapped in `CachingModelCatalog` for the in-process ~5-minute cache."""
+
+    async def list_models(self) -> list[LlmModelInfo]:
+        """Raises on any network/HTTP/parse failure - `SystemService.list_models` is the one
+        place that catches it and degrades to an empty list plus a warning instead of a 5xx."""
         ...
 
 

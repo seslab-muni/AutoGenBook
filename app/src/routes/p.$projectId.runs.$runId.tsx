@@ -162,7 +162,8 @@ function RunPage() {
             <p className="truncate text-xs text-muted-foreground">
               {run.targetNodeId ? `Target node ${run.targetNodeId} · ` : ''}
               Queued {new Date(run.queuedAt).toLocaleString()} · Started by{' '}
-              {run.startedByName ?? '—'}
+              {run.startedByName ?? '—'} · Model{' '}
+              <span className="font-mono">{run.options.llmModel}</span>
             </p>
           </div>
         </div>

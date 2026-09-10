@@ -619,6 +619,7 @@ async def test_sweep_stale_work_dirs_keeps_the_dir_while_a_retry_is_queued(
                 output_format=OutputFormat.MARKDOWN,
                 max_outline_levels=3,
                 additional_requirements=None,
+                llm_model="openai/gpt-5-mini",
                 last_run_id=None,
                 created_at=now,
                 updated_at=now,

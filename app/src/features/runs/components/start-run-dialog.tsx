@@ -9,6 +9,7 @@ import { useCreateRunMutation } from '@/api/queries/runs';
 import type { AuditMode, OutputFormat, Project, RunOptionsIn } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ModelSelect } from '@/components/model-select';
 import {
   Dialog,
   DialogContent,
@@ -66,6 +67,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>(project.outputFormat);
   const [allowSubdivision, setAllowSubdivision] = useState(false);
   const [auditBookMode, setAuditBookMode] = useState<AuditMode>('warn');
+  const [llmModel, setLlmModel] = useState(project.llmModel);
 
   const createMutation = useCreateRunMutation(project.id);
 
@@ -76,6 +78,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
       setOutputFormat(project.outputFormat);
       setAllowSubdivision(false);
       setAuditBookMode('warn');
+      setLlmModel(project.llmModel);
     }
   }
 
@@ -85,6 +88,9 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
       outputFormat,
       allowSubdivision,
       auditBookMode,
+      ...(llmModel.trim() && llmModel.trim() !== project.llmModel
+        ? { llmModel: llmModel.trim() }
+        : {}),
     };
     createMutation.mutate(body, {
       onSuccess: (run) => {
@@ -167,6 +173,13 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground" htmlFor="start-run-model">
+              LLM model
+            </label>
+            <ModelSelect id="start-run-model" value={llmModel} onChange={setLlmModel} />
           </div>
 
           <div className="space-y-1.5">
