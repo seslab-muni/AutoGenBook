@@ -9,7 +9,7 @@ import { renderWithProviders } from '@/test/component-test-utils';
 
 import { CopilotDrawer } from './copilot-drawer';
 
-// See `use-run-stream.test.ts` for why SSE is mocked wherever `useRunStream`/`useActiveRun` mount
+// See `use-run-stream.test.ts` for why SSE is mocked wherever `useRunStream`/`useProjectRuns` mount
 // (as they do here, transitively, via the `copilot` tab's `CopilotPanel`).
 vi.mock('@/api/sse', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/sse')>();

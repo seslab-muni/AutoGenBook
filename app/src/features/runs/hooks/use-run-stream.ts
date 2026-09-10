@@ -9,7 +9,7 @@ import type { Run, RunEvent } from '@/api/types';
 
 /**
  * One real subscription per `runId`, shared by every `useRunStream` caller
- * (Copilot panel, run detail page, `useActiveRun`'s app-wide safety net) —
+ * (Copilot panel, run detail page, `useProjectRuns`'s app-wide safety net) —
  * ref-counted so mounting the same run in multiple places never opens more
  * than one SSE connection, and the underlying connection survives as long
  * as at least one consumer is mounted.
@@ -36,9 +36,7 @@ function rememberSectionNode(queryClient: QueryClient, runId: string, event: Run
   // marked every leaf as still generating. Keep reading `nodeId`/`cliKey` too
   // since it costs nothing, in case either is ever added later.
   const payload = event.payload as
-    | { nodeKey?: unknown; nodeId?: unknown; cliKey?: unknown }
-    | null
-    | undefined;
+    { nodeKey?: unknown; nodeId?: unknown; cliKey?: unknown } | null | undefined;
   const nodeKey = typeof payload?.nodeKey === 'string' ? payload.nodeKey : undefined;
   const nodeId = typeof payload?.nodeId === 'string' ? payload.nodeId : undefined;
   const cliKey = typeof payload?.cliKey === 'string' ? payload.cliKey : undefined;
@@ -157,7 +155,7 @@ const EMPTY_SECTION_IDS: string[] = [];
  * Subscribes to `runId`'s live progress (SSE, falling back to polling — see
  * `subscribeRunEvents`) and mirrors it into shared query-cache state so every
  * caller observing the same run (the Copilot panel, the run detail page,
- * `useActiveRun`'s header/outline wiring) sees the same deduped event log
+ * `useProjectRuns`'s header/outline wiring) sees the same deduped event log
  * without opening more than one connection. No-ops (returns empty state)
  * when `runId` is undefined or already cached as terminal.
  */

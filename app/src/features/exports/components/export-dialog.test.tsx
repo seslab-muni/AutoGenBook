@@ -148,7 +148,9 @@ describe('ExportDialog', () => {
     // Scoped to the dialog itself: the same problem title also surfaces as a global toast
     // (`createQueryClient`'s `MutationCache.onError`), a second, unrelated match for the text.
     const dialog = screen.getByRole('dialog');
-    expect(await within(dialog).findByText(/already has an active run/i)).toBeInTheDocument();
+    expect(
+      await within(dialog).findByText(/a full run is queued or running for this project/i),
+    ).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /start a full run/i })).toBeInTheDocument();
     // The build button is still there and clickable - no stuck spinner left behind.
     expect(within(dialog).getByRole('button', { name: 'Build PDF' })).toBeEnabled();

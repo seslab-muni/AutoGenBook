@@ -206,4 +206,96 @@ describe('run detail page', () => {
     );
     expect(screen.queryByText('killed by API after 21600s timeout')).not.toBeInTheDocument();
   });
+
+  it('Resume stays enabled while only a regenerate is queued for the project (issue #134 admission table)', async () => {
+    const runId = 'run-failed-retryable-2';
+    db.runs.set(runId, {
+      id: runId,
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'failed',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: -9,
+      error: 'killed by API after 21600s timeout',
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      retryable: true,
+      queuedAt: '2026-09-07T00:00:00Z',
+      startedAt: '2026-09-07T00:00:01Z',
+      finishedAt: '2026-09-07T00:00:02Z',
+    });
+    db.runs.set('run-regenerate-queued', {
+      id: 'run-regenerate-queued',
+      projectId: PROJECT_ID,
+      kind: 'regenerate_section',
+      status: 'queued',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: RUN_ID,
+      targetNodeId: 'sec-1-1',
+      exitCode: null,
+      error: null,
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      retryable: false,
+      queuedAt: '2026-09-07T00:00:03Z',
+      startedAt: null,
+      finishedAt: null,
+    });
+
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
+    await screen.findByText('killed by API after 21600s timeout');
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^resume$/i })).not.toBeDisabled(),
+    );
+  });
+
+  it('Resume is disabled while a full run is queued or running for the project (issue #134)', async () => {
+    const runId = 'run-failed-retryable-3';
+    db.runs.set(runId, {
+      id: runId,
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'failed',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: -9,
+      error: 'killed by API after 21600s timeout',
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      retryable: true,
+      queuedAt: '2026-09-07T00:00:00Z',
+      startedAt: '2026-09-07T00:00:01Z',
+      finishedAt: '2026-09-07T00:00:02Z',
+    });
+    db.runs.set('run-full-queued', {
+      id: 'run-full-queued',
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'queued',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: null,
+      error: null,
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      retryable: false,
+      queuedAt: '2026-09-07T00:00:03Z',
+      startedAt: null,
+      finishedAt: null,
+    });
+
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
+    await screen.findByText('killed by API after 21600s timeout');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^resume$/i })).toBeDisabled());
+  });
 });

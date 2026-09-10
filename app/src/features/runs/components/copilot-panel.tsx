@@ -21,7 +21,7 @@ import type { Project, Run } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { isLeaf } from '@/features/outline/model';
-import { useActiveRun } from '@/features/runs/hooks/use-active-run';
+import { useProjectRuns } from '@/features/runs/hooks/use-project-runs';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
 import { RunEventLog } from '@/features/runs/components/run-event-log';
 import {
@@ -81,7 +81,7 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
   const node = selectedNodeId ? (flat.find((item) => item.id === selectedNodeId) ?? null) : null;
 
   const openModal = useUiStore((state) => state.openModal);
-  const { activeRun } = useActiveRun(projectId);
+  const { runningRun, queuedRuns } = useProjectRuns(projectId);
 
   const [instruction, setInstruction] = useState('');
   const [trackedRunId, setTrackedRunId] = useState<string | undefined>(undefined);
@@ -103,13 +103,19 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
 
   const regenerateMutation = useRegenerateOutlineNodeMutation(projectId, node?.id ?? '');
 
-  // An active run only drives this node's live view when it's a full run (touches every leaf)
-  // or a regenerate_section targeting this exact node — an active run for a sibling node stays
-  // out of this footer/log, which instead falls back to the project's last known run.
+  // A queued regenerate targeting this exact node (issue #134: several runs can be queued at
+  // once, so this is no longer necessarily the same run as `runningRun`).
+  const queuedRunForNode = queuedRuns.find(
+    (run) => run.kind === 'regenerate_section' && run.targetNodeId === node?.id,
+  );
+  // The running run only drives this node's live view when it's a full run (touches every leaf)
+  // or a regenerate_section targeting this exact node — a running run for a sibling node stays
+  // out of this footer/log. A queued regenerate for this node has no events yet, but still shows
+  // its `queued` status here rather than falling back to the project's last known run.
   const relevantActiveRun =
-    activeRun && (activeRun.kind === 'full' || activeRun.targetNodeId === node?.id)
-      ? activeRun
-      : undefined;
+    runningRun && (runningRun.kind === 'full' || runningRun.targetNodeId === node?.id)
+      ? runningRun
+      : queuedRunForNode;
   const effectiveRunId = relevantActiveRun?.id ?? trackedRunId ?? project.lastRunId ?? undefined;
   const { data: trackedRun } = useQuery({
     ...runQueries.detail(effectiveRunId ?? ''),
@@ -117,15 +123,16 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
   });
   const { events, currentStage } = useRunStream(effectiveRunId, projectId);
 
-  const isBusy = activeRun !== undefined;
+  // The project's single running slot is occupied (regardless of what it's running), or this
+  // node specifically already has a regenerate queued behind it.
+  const isBusy = runningRun !== undefined || queuedRunForNode !== undefined;
   const hasCliKey = Boolean(node?.cliKey);
   const hasResumableBaseRun = project.lastRunId != null;
   // Only leaf sections ever get LLM-generated content (book_builder.py's generate_contents walks
   // leaves only); the API rejects a regenerate targeting a non-leaf with a 409 (issue #77), so
   // gate it here too rather than letting the user submit and hit that as a generic error.
   const nodeIsLeaf = node ? isLeaf(node.id, flat) : false;
-  const canRegenerate =
-    Boolean(node) && nodeIsLeaf && hasCliKey && hasResumableBaseRun && !isBusy;
+  const canRegenerate = Boolean(node) && nodeIsLeaf && hasCliKey && hasResumableBaseRun && !isBusy;
 
   let disabledReason: string | null = null;
   if (node) {
@@ -136,8 +143,10 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
       disabledReason = 'This section has no CLI key yet — it appears after the next full run.';
     } else if (!hasResumableBaseRun) {
       disabledReason = 'No successful prior run to resume from — start a full run first.';
+    } else if (queuedRunForNode) {
+      disabledReason = 'This section already has a regenerate queued.';
     } else if (isBusy) {
-      disabledReason = 'A run is already active for this project.';
+      disabledReason = 'A run is currently running for this project.';
     }
   }
 

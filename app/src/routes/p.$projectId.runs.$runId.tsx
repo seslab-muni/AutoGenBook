@@ -21,7 +21,7 @@ import {
   RUN_STATUS_CLASSES,
   RUN_STATUS_LABELS,
 } from '@/features/runs/lib/run-format';
-import { useActiveRun } from '@/features/runs/hooks/use-active-run';
+import { useProjectRuns } from '@/features/runs/hooks/use-project-runs';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
 import { isLeaf } from '@/features/outline/model';
 import { useDocumentTitle } from '@/lib/use-document-title';
@@ -108,11 +108,16 @@ function RunPage() {
   // the same outline, just picking up sections a previous attempt already finished, so the
   // fraction is still meaningful - it just shouldn't be read as "the run is this done" the way
   // it might for a fresh run, since a resumed run can start already partway there.
-  const showSectionDenominator = !run?.options.legacyTex && generatedSectionCount <= leafSectionCount;
+  const showSectionDenominator =
+    !run?.options.legacyTex && generatedSectionCount <= leafSectionCount;
 
   const cancelMutation = useCancelRunMutation();
   const retryMutation = useRetryRunMutation(projectId);
-  const { activeRun } = useActiveRun(projectId);
+  const { activeRuns } = useProjectRuns(projectId);
+  // Matches the admission table (issue #134): `retry` creates a `full` run, so it's blocked
+  // only by another queued/running `full` run in the lane, not by any active run in general —
+  // a queued/running `regenerate_section`/`export` for this project doesn't stop it.
+  const blockingFullRun = activeRuns.find((run) => run.kind === 'full');
 
   function handleCancel() {
     if (!run) return;
@@ -223,8 +228,12 @@ function RunPage() {
               type="button"
               variant="outline"
               size="sm"
-              disabled={Boolean(activeRun)}
-              title={activeRun ? 'Another run is already active for this project' : undefined}
+              disabled={Boolean(blockingFullRun)}
+              title={
+                blockingFullRun
+                  ? 'A full run is already queued or running for this project'
+                  : undefined
+              }
               onClick={() => setConfirmResumeOpen(true)}
             >
               <PlayCircle />

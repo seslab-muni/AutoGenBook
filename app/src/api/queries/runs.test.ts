@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
+import { db } from '@/mocks/db';
 import { renderWithQueryClient, waitFor } from '@/test/query-test-utils';
+import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
 import { runKeys } from './keys';
 import { runs, useCancelRunMutation, useCreateRunMutation } from './runs';
@@ -23,26 +25,60 @@ describe('runs queries', () => {
     expect(result.current.artifacts.data?.items.some((a) => a.kind === 'markdown')).toBe(true);
   });
 
-  it('creating a run rejects with 409 while one is already active, and invalidates the run list otherwise', async () => {
+  it('a second full run queues behind an already-queued one instead of 409ing, and the run list picks it up (issue #134)', async () => {
     const { result } = renderWithQueryClient(() => ({
       list: useQuery(runs.list(PROJECT_ID)),
       create: useCreateRunMutation(PROJECT_ID),
     }));
     await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
 
-    result.current.create.mutate({});
-    await waitFor(() => expect(result.current.create.isSuccess).toBe(true));
-
-    expect(result.current.create.data?.kind).toBe('full');
-    expect(result.current.create.data?.status).toBe('queued');
-    const createdRunId = result.current.create.data?.id;
+    const first = await result.current.create.mutateAsync({});
+    expect(first.kind).toBe('full');
+    expect(first.status).toBe('queued');
     await waitFor(() =>
-      expect(result.current.list.data?.items.some((run) => run.id === createdRunId)).toBe(true),
+      expect(result.current.list.data?.items.some((run) => run.id === first.id)).toBe(true),
     );
 
-    // A second run while the first is still queued/running must be rejected.
-    result.current.create.mutate({});
-    await waitFor(() => expect(result.current.create.isError).toBe(true));
+    // A second run while the first is still queued/running now queues behind it (position 2)
+    // rather than being rejected — only `MAX_QUEUED_RUNS_PER_PROJECT` queued runs are refused.
+    const second = await result.current.create.mutateAsync({});
+    expect(second.status).toBe('queued');
+    expect(second.id).not.toBe(first.id);
+    await waitFor(() =>
+      expect(result.current.list.data?.items.some((run) => run.id === second.id)).toBe(true),
+    );
+  });
+
+  it("rejects a full run once the project's run queue is full (issue #134)", async () => {
+    // Occupies the running slot for the whole test so every run created here stays `queued`
+    // deterministically, rather than racing the mock's own ~300ms claim timer.
+    db.runs.set('run-already-running', {
+      id: 'run-already-running',
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'running',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: null,
+      error: null,
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: true,
+      retryable: false,
+      queuedAt: '2026-09-06T00:00:00Z',
+      startedAt: '2026-09-06T00:00:01Z',
+      finishedAt: null,
+    });
+
+    const { result } = renderWithQueryClient(() => useCreateRunMutation(PROJECT_ID));
+
+    // `MAX_QUEUED_RUNS_PER_PROJECT` (5, `mocks/handlers.ts`) queued runs are all admitted.
+    for (let i = 0; i < 5; i += 1) {
+      await result.current.mutateAsync({});
+    }
+
+    await expect(result.current.mutateAsync({})).rejects.toThrow();
   });
 
   it('cancelling a run updates its own cache entry', async () => {

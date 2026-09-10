@@ -94,7 +94,8 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
     };
     createMutation.mutate(body, {
       onSuccess: (run) => {
-        toast.success('Run queued');
+        const position = run.queuePosition ?? 1;
+        toast.success(`Queued, position ${position} of ${position}`);
         closeModal();
         void navigate({
           to: '/p/$projectId/runs/$runId',
@@ -103,10 +104,10 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
       },
       onError: (error) => {
         if (error instanceof ApiError && error.status === 409) {
-          toast.error(error.problem?.title ?? 'A run is already active for this project', {
+          toast.error(error.problem?.title ?? 'Could not queue this run', {
             description: error.problem?.detail ?? undefined,
             action: {
-              label: 'View it',
+              label: 'View queue',
               onClick: () => {
                 closeModal();
                 openModal('run-history');
@@ -127,8 +128,8 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
         <DialogHeader>
           <DialogTitle>Start a run</DialogTitle>
           <DialogDescription>
-            Runs the CLI over this project's current outline and sources. Only one run can be active
-            per project at a time.
+            Runs the CLI over this project's current outline and sources. Only one run executes at a
+            time per project; further runs queue behind it.
           </DialogDescription>
         </DialogHeader>
 
