@@ -62,7 +62,8 @@ class _FakeSession:
     """Stands in for an `AsyncSession`: the repositories the worker
     constructs around it (`SqlAlchemyRunRepository(session)`, etc.) just
     store the reference without touching it, since `GenerationService`
-    itself is monkeypatched out in every test below."""
+    itself (and, for the sweeps, the run queue/repository) is monkeypatched
+    out in every test below."""
 
     async def __aenter__(self) -> "_FakeSession":
         return self
@@ -73,6 +74,61 @@ class _FakeSession:
 
 def _fake_session_factory() -> _FakeSession:
     return _FakeSession()
+
+
+class _FakeDialect:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeConnection:
+    """Stands in for the Core `Connection` `_run_housekeeping_sweeps` gets
+    from `engine.connect()` to hold the housekeeping advisory lock on -
+    deliberately a *separate* fake from `_FakeSession` above, matching the
+    real code's split between the lock's own dedicated connection and the
+    ORM sessions the three sweeps use (issue #134 review: the first version
+    of this held the lock on an `AsyncSession`, whose internal `commit()`
+    calls can transparently swap out the underlying pooled connection -
+    exactly the bug this split fixes)."""
+
+    def __init__(self, dialect_name: str = "sqlite", *, lock_acquired: bool = True) -> None:
+        self.dialect = _FakeDialect(dialect_name)
+        self.lock_acquired = lock_acquired
+        self.scalar_calls: list[str] = []
+        self.execute_calls: list[str] = []
+        self.commit_calls = 0
+
+    async def __aenter__(self) -> "_FakeConnection":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    async def scalar(self, stmt, params=None):
+        self.scalar_calls.append(str(stmt))
+        return self.lock_acquired
+
+    async def execute(self, stmt, params=None):
+        self.execute_calls.append(str(stmt))
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+
+class _FakeEngine:
+    def __init__(self, connection: _FakeConnection) -> None:
+        self._connection = connection
+
+    def connect(self) -> _FakeConnection:
+        return self._connection
+
+
+def _fake_engine(dialect_name: str = "sqlite", *, lock_acquired: bool = True) -> _FakeEngine:
+    """Default `sqlite` dialect - `_run_housekeeping_sweeps`'s advisory-lock
+    path is Postgres-only, so with this every test below except the ones
+    specifically exercising the lock gets the same "sweeps just run
+    unconditionally, no lock involved" behavior sqlite has in reality."""
+    return _FakeEngine(_FakeConnection(dialect_name, lock_acquired=lock_acquired))
 
 
 class _FakeRunQueue:
@@ -220,7 +276,9 @@ async def test_worker_slot_stops_immediately_when_stop_event_already_set(
     stop_event = asyncio.Event()
     stop_event.set()
 
-    await worker_main._worker_slot(0, _fake_session_factory, None, _settings(), stop_event)
+    await worker_main._worker_slot(
+        0, _fake_engine(), _fake_session_factory, None, _settings(), stop_event
+    )
 
     assert calls == []
 
@@ -249,7 +307,9 @@ async def test_worker_slot_zero_sweeps_stale_runs_and_work_dirs_when_idle(
 
     monkeypatch.setattr(worker_main, "_claim_and_execute", _fake_claim_and_execute)
 
-    await worker_main._worker_slot(0, _fake_session_factory, None, _settings(), stop_event)
+    await worker_main._worker_slot(
+        0, _fake_engine(), _fake_session_factory, None, _settings(), stop_event
+    )
 
     assert fake_queue.requeue_calls == [300]
     assert sweep_calls == [30]
@@ -281,7 +341,7 @@ async def test_worker_slot_zero_sweeps_orphaned_work_dirs_when_idle(
     monkeypatch.setattr(worker_main, "_claim_and_execute", _fake_claim_and_execute)
 
     await worker_main._worker_slot(
-        0, _fake_session_factory, None, _settings(runs_dir="/app/runs"), stop_event
+        0, _fake_engine(), _fake_session_factory, None, _settings(runs_dir="/app/runs"), stop_event
     )
 
     assert orphan_calls == ["/app/runs"]
@@ -310,7 +370,9 @@ async def test_worker_slot_nonzero_never_sweeps(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(worker_main, "_claim_and_execute", _fake_claim_and_execute)
 
     # Slot 1 (not the designated sweeper slot 0).
-    await worker_main._worker_slot(1, _fake_session_factory, None, _settings(), stop_event)
+    await worker_main._worker_slot(
+        1, _fake_engine(), _fake_session_factory, None, _settings(), stop_event
+    )
 
     assert fake_queue.requeue_calls == []
 
@@ -339,8 +401,14 @@ async def test_worker_slot_survives_requeue_stale_exception(
     monkeypatch.setattr(worker_main, "_claim_and_execute", _fake_claim_and_execute)
 
     # Must not raise even though `requeue_stale` blew up - and the work-dir
-    # sweep (a separate try/except in `_worker_slot`) still runs afterward.
-    await worker_main._worker_slot(0, _fake_session_factory, None, _settings(), stop_event)
+    # sweep (its own try/except inside `_run_housekeeping_sweeps`, on its
+    # own independent session) still runs afterward, since each sweep is
+    # deliberately kept on a separate transaction from the others (issue
+    # #134 review: sharing one transaction meant a failure here would abort
+    # it, silently failing every sweep after it too, not just this one).
+    await worker_main._worker_slot(
+        0, _fake_engine(), _fake_session_factory, None, _settings(), stop_event
+    )
 
     assert sweep_calls == [1]
 
@@ -368,11 +436,135 @@ async def test_worker_slot_claims_repeatedly_until_stop_event(
 
     monkeypatch.setattr(worker_main, "_claim_and_execute", _fake_claim_and_execute)
 
-    await worker_main._worker_slot(0, _fake_session_factory, None, _settings(), stop_event)
+    await worker_main._worker_slot(
+        0, _fake_engine(), _fake_session_factory, None, _settings(), stop_event
+    )
 
     assert call_count == 3
     # `claimed=True` every cycle, so the slot-0 sweep never had a reason to run.
     assert fake_queue.requeue_calls == []
+
+
+# --------------------------------------------------------------------------
+# _run_housekeeping_sweeps: the housekeeping advisory lock (issue #134 phase 3)
+# --------------------------------------------------------------------------
+
+
+async def test_housekeeping_sweeps_skip_when_advisory_lock_not_acquired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Another replica already holds the housekeeping lock this cycle -
+    this replica must not touch the DB/filesystem at all, not even attempt
+    the unlock (it never acquired anything to release)."""
+    fake_queue = _FakeRunQueue(claim_return=None, requeue_return=5)
+    _patch_queue(monkeypatch, fake_queue)
+
+    async def _fail_if_called(*args, **kwargs):
+        raise AssertionError("sweeps must not run when another replica holds the lock")
+
+    monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fail_if_called)
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fail_if_called)
+
+    engine = _fake_engine("postgresql", lock_acquired=False)
+
+    await worker_main._run_housekeeping_sweeps(0, engine, _fake_session_factory, _settings())
+
+    conn = engine._connection
+    assert fake_queue.requeue_calls == []
+    assert conn.scalar_calls == ["SELECT pg_try_advisory_lock(:key)"]
+    assert conn.execute_calls == []
+    assert conn.commit_calls == 0
+
+
+async def test_housekeeping_sweeps_run_and_unlock_when_lock_acquired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_queue = _FakeRunQueue(claim_return=None, requeue_return=3)
+    _patch_queue(monkeypatch, fake_queue)
+
+    stale_calls: list[float] = []
+    orphan_calls: list[str] = []
+
+    async def _fake_stale_sweep(run_repository, retention_days):
+        stale_calls.append(retention_days)
+        return 0
+
+    async def _fake_orphan_sweep(run_repository, runs_dir):
+        orphan_calls.append(runs_dir)
+        return 0
+
+    monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fake_stale_sweep)
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fake_orphan_sweep)
+
+    engine = _fake_engine("postgresql", lock_acquired=True)
+
+    await worker_main._run_housekeeping_sweeps(0, engine, _fake_session_factory, _settings())
+
+    conn = engine._connection
+    assert fake_queue.requeue_calls == [300]
+    assert stale_calls == [30]
+    assert orphan_calls == ["/app/runs"]
+    assert conn.execute_calls == ["SELECT pg_advisory_unlock(:key)"]
+    assert conn.commit_calls == 1
+
+
+async def test_housekeeping_sweeps_still_unlock_when_a_sweep_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #134 review: with each sweep on its own independent session,
+    one sweep raising must not poison the lock connection's own
+    transaction - the unlock (on that separate connection) still has to
+    fire, or the lock leaks until this replica's connection dies."""
+    fake_queue = _FakeRunQueue(claim_return=None)
+    fake_queue.requeue_exception = RuntimeError("db hiccup")
+    _patch_queue(monkeypatch, fake_queue)
+
+    orphan_calls: list[str] = []
+
+    async def _fake_orphan_sweep(run_repository, runs_dir):
+        orphan_calls.append(runs_dir)
+        return 0
+
+    async def _fail_sweep(run_repository, retention_days):
+        raise RuntimeError("stale-sweep hiccup")
+
+    monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fail_sweep)
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fake_orphan_sweep)
+
+    engine = _fake_engine("postgresql", lock_acquired=True)
+
+    await worker_main._run_housekeeping_sweeps(0, engine, _fake_session_factory, _settings())
+
+    conn = engine._connection
+    # Both the requeue and the stale-dir sweep blew up, but the orphan sweep
+    # (a separate try/except, its own session) still ran, and the lock was
+    # still released.
+    assert orphan_calls == ["/app/runs"]
+    assert conn.execute_calls == ["SELECT pg_advisory_unlock(:key)"]
+    assert conn.commit_calls == 1
+
+
+async def test_housekeeping_sweeps_skip_the_lock_entirely_on_sqlite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_queue = _FakeRunQueue(claim_return=None, requeue_return=1)
+    _patch_queue(monkeypatch, fake_queue)
+
+    async def _fake_sweep(run_repository, retention_days):
+        return 0
+
+    monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fake_sweep)
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fake_sweep)
+
+    engine = _fake_engine("sqlite")
+
+    await worker_main._run_housekeeping_sweeps(0, engine, _fake_session_factory, _settings())
+
+    conn = engine._connection
+    assert fake_queue.requeue_calls == [300]
+    assert conn.scalar_calls == []
+    assert conn.execute_calls == []
+    assert conn.commit_calls == 0
 
 
 # --------------------------------------------------------------------------
@@ -390,6 +582,7 @@ async def test_main_stops_gracefully_on_sigterm(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fake_sweep)
     monkeypatch.setattr(worker_main, "get_settings", lambda: _settings(worker_concurrency=2))
+    monkeypatch.setattr(worker_main, "get_engine", lambda: _fake_engine())
     monkeypatch.setattr(worker_main, "get_sessionmaker", lambda: _fake_session_factory)
     monkeypatch.setattr(worker_main, "S3FileStorage", lambda settings: None)
 
