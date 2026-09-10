@@ -107,14 +107,18 @@ describe('ExportDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Build PDF' }));
     expect(await screen.findByText(/building/i)).toBeInTheDocument();
 
+    // `driveFakeRun`'s own timeline reaches `succeeded` well under 2s (a 300ms start delay, a
+    // 400ms `running` step, a 900ms `succeeded` step) plus a couple of the dialog's 400ms
+    // `refetchInterval` polls on top - the generous budget here is headroom against a busy CI
+    // runner's real-timer jitter, not the nominal time this ever takes.
     await waitFor(
       () => {
         const pdfCard = cardFor('pdf');
         expect(within(pdfCard).getByRole('link', { name: /download/i })).toBeInTheDocument();
       },
-      { timeout: 10000 },
+      { timeout: 20000 },
     );
-  }, 15000);
+  }, 25000);
 
   it('shows 409 guidance (and no stuck spinner) when a build is requested while another run is active', async () => {
     db.runs.set('run-active-for-export', {

@@ -2,6 +2,38 @@ import { db } from './db';
 import type { Run, RunArtifact } from '@/api/types';
 
 /**
+ * Every real `setTimeout` handle any in-flight `driveFakeRun` chain is
+ * currently waiting on. A test whose assertions stop watching a run before
+ * its timeline finishes (e.g. one that only checks the transient "queued"/
+ * "drafting" state, or one that fails/times out mid-`waitFor`) used to leave
+ * that chain's remaining callbacks armed on the real timer queue with
+ * nothing left to cancel them - each is a cheap no-op once `db.reset()`
+ * (`seedDatabase`, called in every test's `beforeEach`) makes `db.runs.get`
+ * return `undefined` for a run id from a torn-down test, but they still
+ * occupy the same real event-loop `setTimeout` queue every *other* real
+ * timer in the process shares (React Query's own `refetchInterval` polling
+ * included), so they were a source of CI-only flakiness under load rather
+ * than a hazard to any single test's own correctness. `resetFakeRuns`
+ * (called from `src/test/setup.ts`'s `afterEach`) clears them all between
+ * tests so no test ever starts with the previous one's leftovers still
+ * ticking.
+ */
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+export function resetFakeRuns(): void {
+  for (const timer of pendingTimers) clearTimeout(timer);
+  pendingTimers.clear();
+}
+
+function scheduleFakeRunStep(callback: () => void, delayMs: number): void {
+  const timer = setTimeout(() => {
+    pendingTimers.delete(timer);
+    callback();
+  }, delayMs);
+  pendingTimers.add(timer);
+}
+
+/**
  * Drives a queued `Run` through `queued -> running -> succeeded`, emitting
  * `stage`/`log`/`section`/`done` events like the real worker + CLI would
  * (`api/worker`, `autogenbook/orchestrator.py`), and mutates the target
@@ -51,11 +83,11 @@ export function driveFakeRun(runId: string): void {
     }
 
     if (index < timeline.length) {
-      setTimeout(step, entry.delayMs);
+      scheduleFakeRunStep(step, entry.delayMs);
     }
   }
 
-  setTimeout(step, 300);
+  scheduleFakeRunStep(step, 300);
 }
 
 interface TimelineEntry {

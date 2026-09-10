@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 
+import { resetFakeRuns } from '@/mocks/fakeRun';
 import { seedDatabase } from '@/mocks/fixtures';
 import { server } from '@/mocks/server';
 
@@ -75,5 +76,13 @@ if (typeof document.createRange === 'function') {
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 beforeEach(() => seedDatabase());
-afterEach(() => server.resetHandlers());
+afterEach(() => {
+  server.resetHandlers();
+  // Cancels any `driveFakeRun` timeline this test started but didn't wait out (a test that only
+  // asserts a transient "queued"/"drafting" state, or one that failed/timed out mid-`waitFor`) -
+  // otherwise its remaining real `setTimeout`s stay armed on the same queue every later test's
+  // own timers (React Query's `refetchInterval` polling included) share, a source of CI-only
+  // flakiness under load rather than a correctness issue for any one test.
+  resetFakeRuns();
+});
 afterAll(() => server.close());
