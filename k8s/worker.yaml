@@ -13,6 +13,17 @@ spec:
   # now 2.5 CPU / 5 Gi requested, 10 CPU / 20 Gi at the limit - size the
   # node pool accordingly.
   replicas: 5
+  # Pinned explicitly (issue #134 review) rather than left at the default
+  # `RollingUpdate` 25%/25% - that default would let a redeploy briefly run
+  # up to 7 pods (`ceil(5 * 1.25)`), pushing the aggregate footprint to
+  # 3.5 CPU / 7 Gi requested against the 2.5 CPU / 5 Gi documented above,
+  # which a namespace `ResourceQuota` sized to the documented figure would
+  # reject (`kubectl describe limitrange`/`resourcequota` per
+  # `docs/DEPLOY_GUIDE.md`). `maxUnavailable: 1, maxSurge: 0` never exceeds
+  # 5 pods and replaces them one at a time - the literal "drains one pod at
+  # a time" this Deployment's own comment above claims.
+  strategy:
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
   selector:
     matchLabels: {app: worker}
   template:

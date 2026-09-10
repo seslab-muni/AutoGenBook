@@ -7,9 +7,10 @@ import signal
 import socket
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from api.application.runs import GenerationService, sweep_orphaned_work_dirs, sweep_stale_work_dirs
-from api.core.db import get_sessionmaker
+from api.core.db import get_engine, get_sessionmaker
 from api.core.settings import get_settings
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
@@ -30,14 +31,12 @@ WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 
 # Issue #134 phase 3: arbitrary constant `pg_try_advisory_lock`/`pg_advisory_
 # unlock` key for the housekeeping sweep below - shared by every worker
-# replica so at most one of them runs it per poll cycle. Session-scoped
-# (not `_xact_`): `requeue_stale` commits internally, and an `_xact_` lock
-# would release the moment that commit ends its transaction, leaving the
-# two sweeps still to come unprotected. Picking a fixed literal risks a
-# collision with `SqlAlchemyRunRepository.lock_project_for_admission`'s own
-# `hashtext(project_id)` keys only astronomically rarely, and even then the
-# worst case is one poll cycle's extra wait, never an incorrect result.
-_SWEEP_ADVISORY_LOCK_KEY = 134_000_001
+# replica so at most one of them runs it per poll cycle. Chosen outside
+# `hashtext()`'s int4 range so it can never collide with `SqlAlchemyRun
+# Repository.lock_project_for_admission`'s own `hashtext(project_id)` keys
+# (issue #134 review) - a collision there would block an admission request
+# on this sweep's lock, not just cost it a poll cycle.
+_SWEEP_ADVISORY_LOCK_KEY = 2**40 + 134
 
 
 async def _claim_and_execute(
@@ -83,65 +82,102 @@ async def _claim_and_execute(
     return True
 
 
-def _dialect_name(session) -> str:
-    bind = session.bind
+def _dialect_name(bind) -> str:
     dialect = getattr(bind, "dialect", None)
     return dialect.name if dialect is not None else "postgresql"
 
 
-async def _run_housekeeping_sweeps(slot: int, session_factory, settings) -> None:
+async def _run_housekeeping_sweeps(slot: int, engine: AsyncEngine, session_factory, settings) -> None:
     """Requeue stale runs and sweep stale/orphaned work directories - issue
     #134 phase 3: with `replicas: 5` (`WORKER_CONCURRENCY=1` each), every
     pod's own slot 0 used to run this every cycle, all five racing the same
     rows/directories. Each sweep already tolerates that on its own
     (`requeue_stale` is a guarded `UPDATE`, both `rmtree` calls pass
     `ignore_errors=True`), so this was wasted work, not a correctness bug -
-    a session-scoped `pg_try_advisory_lock` (Postgres only; sqlite has no
-    advisory locks and the test suite never drives this concurrently
-    anyway) lets exactly one replica actually run the sweep per cycle; the
-    rest see the lock held, skip this cycle, and try again next poll."""
-    async with session_factory() as session:
-        is_postgres = _dialect_name(session) == "postgresql"
+    a `pg_try_advisory_lock`/`pg_advisory_unlock` pair (Postgres only;
+    sqlite has no advisory locks and the test suite never drives this
+    concurrently anyway) lets exactly one replica actually run the sweep
+    per cycle; the rest see the lock held, skip this cycle, and try again
+    next poll.
+
+    The lock is held on its own dedicated Core `Connection`
+    (`engine.connect()`), obtained once and kept open for this whole call -
+    deliberately *not* one of the ORM `AsyncSession`s the three sweeps use
+    below. A first version of this held the lock on an `AsyncSession` and
+    called it "session-scoped" to distinguish it from `pg_advisory_xact_
+    lock`, but an ORM `Session.commit()` (which `requeue_stale` calls
+    internally) returns its checked-out connection to the pool - the next
+    statement on that same `Session` can transparently reacquire a
+    *different* physical connection once the pool holds more than one idle
+    connection (exactly the shape `WORKER_CONCURRENCY>1` warms up), at
+    which point `pg_advisory_unlock` executes on the wrong connection,
+    returns `false`, and the lock leaks on the original one until that
+    pooled connection is eventually closed - permanently starving every
+    other replica's housekeeping (issue #134 review). A plain `Connection`
+    has no such rebinding: it owns one physical connection for its entire
+    `async with` block, so the lock and its eventual unlock are
+    guaranteed to hit the same backend. Each sweep keeps its own
+    independent `session_factory()` session/transaction (as before this
+    lock existed) rather than sharing `engine.connect()`'s connection too -
+    otherwise a DB error in one sweep leaves that shared transaction
+    aborted, silently failing the sweeps after it *and* the final unlock
+    (also issue #134 review)."""
+    async with engine.connect() as lock_conn:
+        is_postgres = _dialect_name(lock_conn) == "postgresql"
         if is_postgres:
-            acquired = await session.scalar(
+            acquired = await lock_conn.scalar(
                 text("SELECT pg_try_advisory_lock(:key)"), {"key": _SWEEP_ADVISORY_LOCK_KEY}
             )
             if not acquired:
                 return
         try:
             try:
-                requeued = await SqlAlchemyRunQueue(session).requeue_stale(settings.worker_stale_s)
+                async with session_factory() as session:
+                    requeued = await SqlAlchemyRunQueue(session).requeue_stale(settings.worker_stale_s)
                 if requeued:
                     logger.info("requeued %s stale run(s)", requeued)
             except Exception:  # noqa: BLE001
                 logger.exception("worker slot %s: error while requeuing stale runs", slot)
 
             try:
-                removed = await sweep_stale_work_dirs(
-                    SqlAlchemyRunRepository(session), settings.runs_retention_days
-                )
+                async with session_factory() as session:
+                    removed = await sweep_stale_work_dirs(
+                        SqlAlchemyRunRepository(session), settings.runs_retention_days
+                    )
                 if removed:
                     logger.info("removed %s stale work dir(s)", removed)
             except Exception:  # noqa: BLE001
                 logger.exception("worker slot %s: error while sweeping stale work dirs", slot)
 
             try:
-                orphaned = await sweep_orphaned_work_dirs(
-                    SqlAlchemyRunRepository(session), settings.runs_dir
-                )
+                async with session_factory() as session:
+                    orphaned = await sweep_orphaned_work_dirs(
+                        SqlAlchemyRunRepository(session), settings.runs_dir
+                    )
                 if orphaned:
                     logger.info("removed %s orphaned work dir(s)", orphaned)
             except Exception:  # noqa: BLE001
                 logger.exception("worker slot %s: error while sweeping orphaned work dirs", slot)
         finally:
             if is_postgres:
-                await session.execute(
-                    text("SELECT pg_advisory_unlock(:key)"), {"key": _SWEEP_ADVISORY_LOCK_KEY}
-                )
-                await session.commit()
+                try:
+                    await lock_conn.execute(
+                        text("SELECT pg_advisory_unlock(:key)"), {"key": _SWEEP_ADVISORY_LOCK_KEY}
+                    )
+                    await lock_conn.commit()
+                except Exception:  # noqa: BLE001 - best-effort; a dead connection
+                    # releases every session-level advisory lock it held on
+                    # the Postgres side regardless (issue #134 review), so a
+                    # failure to unlock explicitly here is not a permanent
+                    # leak - just noisier than a clean release.
+                    logger.exception(
+                        "worker slot %s: failed to release housekeeping advisory lock", slot
+                    )
 
 
-async def _worker_slot(slot: int, session_factory, storage, settings, stop_event: asyncio.Event) -> None:
+async def _worker_slot(
+    slot: int, engine: AsyncEngine, session_factory, storage, settings, stop_event: asyncio.Event
+) -> None:
     worker_id = f"{WORKER_ID}:{slot}"
     while not stop_event.is_set():
         try:
@@ -155,7 +191,7 @@ async def _worker_slot(slot: int, session_factory, storage, settings, stop_event
         # `_run_housekeeping_sweeps` lets only one actually run it.
         if slot == 0 and not claimed:
             try:
-                await _run_housekeeping_sweeps(slot, session_factory, settings)
+                await _run_housekeeping_sweeps(slot, engine, session_factory, settings)
             except Exception:  # noqa: BLE001 - a lock/DB hiccup shouldn't kill the slot
                 logger.exception("worker slot %s: error while running housekeeping sweeps", slot)
 
@@ -175,6 +211,7 @@ async def main() -> None:
         settings.worker_poll_interval_s,
     )
 
+    engine = get_engine()
     session_factory = get_sessionmaker()
     storage = S3FileStorage(settings)
 
@@ -187,7 +224,7 @@ async def main() -> None:
             pass
 
     slots = [
-        _worker_slot(slot, session_factory, storage, settings, stop_event)
+        _worker_slot(slot, engine, session_factory, storage, settings, stop_event)
         for slot in range(max(1, settings.worker_concurrency))
     ]
     await asyncio.gather(*slots)

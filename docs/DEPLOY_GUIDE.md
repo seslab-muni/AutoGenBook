@@ -528,8 +528,9 @@ spec:
 ```
 
 Only one replica: migrations run in the container's own startup command (same as
-`docker-compose.yml`), and `api`/`worker`'s in-repo assumptions are single-process
-(`docs/OPERATIONS.md`'s "Scaling guidance").
+`docker-compose.yml`), and `api` itself has no multi-instance coordination of its own
+(no shared cache/session store beyond the database) - unlike `worker`, which now runs 5
+replicas (see below), `api` stays single-instance.
 
 ## 9. Worker
 
