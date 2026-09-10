@@ -1116,6 +1116,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/runs/{run_id}/retry:
+    post:
+      tags:
+      - runs
+      summary: Retry Run
+      operationId: runs-retry_run
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/runs/{run_id}/events:
     get:
       tags:
@@ -2429,6 +2458,9 @@ components:
         resumable:
           type: boolean
           title: Resumable
+        retryable:
+          type: boolean
+          title: Retryable
         startedById:
           anyOf:
           - type: string
@@ -2457,6 +2489,7 @@ components:
       - startedAt
       - finishedAt
       - resumable
+      - retryable
       title: Run
     RunArtifact:
       properties:

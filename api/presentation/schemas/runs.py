@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import ConfigDict
 from starlette.concurrency import run_in_threadpool
 
+from api.application.runs import retry_blocker
 from api.domain.models import ArtifactKind
 from api.domain.models import File as FileDomain
 from api.domain.models import Run as RunDomain
@@ -30,7 +31,10 @@ class RunOptionsIn(BaseSchema):
     A fresh `full` run always starts a brand-new work directory, so
     `resume=True` would resume nothing, `exportTexOnly=True` has no base
     Markdown to skip regenerating, and `rebuildKb` has no pre-existing index
-    to force a rebuild of."""
+    to force a rebuild of. Resuming a `failed`/`cancelled` `full` run's own
+    work directory (issue #124) goes through `POST /runs/{id}/retry`
+    instead, which sets `resume=True` on the new run itself - there is no
+    way to request it through this body."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -95,6 +99,16 @@ class Run(BaseSchema):
     # after the run finished) - a `regenerate`/`export` run (issue #11) can
     # no longer reuse this run as its base.
     resumable: bool
+    # `True` iff `POST /runs/{id}/retry` would pass its *intrinsic*
+    # preconditions (`kind == full`, `status` in `{failed, cancelled}`,
+    # work dir + `structure_graph.json` both present) - shares its
+    # definition with the endpoint via `retry_blocker` so the two can't
+    # drift apart (issue #124). Deliberately excludes the endpoint's other,
+    # transient/project-level guards (another active run, outline drift, a
+    # succeeded sibling on the same work dir) - those still 409 with a
+    # user-facing message, the same contract `resumable` already has for
+    # export/regenerate.
+    retryable: bool
     started_by_id: uuid.UUID | None = None
     started_by_name: str | None = None
 
@@ -127,6 +141,7 @@ async def run_to_schema(run: RunDomain) -> Run:
     # directly on the loop for every row instead of handed to the
     # threadpool the way every other filesystem touch in this codebase is.
     resumable = await run_in_threadpool(Path(run.work_dir).is_dir)
+    retryable = (await run_in_threadpool(retry_blocker, run)) is None
     return Run(
         id=run.id,
         project_id=run.project_id,
@@ -143,6 +158,7 @@ async def run_to_schema(run: RunDomain) -> Run:
         started_at=run.started_at,
         finished_at=run.finished_at,
         resumable=resumable,
+        retryable=retryable,
         started_by_id=run.started_by,
         started_by_name=run.started_by_name,
     )

@@ -117,3 +117,25 @@ export function useExportRunMutation(runId: string, projectId: string) {
     },
   });
 }
+
+/**
+ * Resumes a failed/cancelled full run from its existing work dir (issue #124): `POST
+ * /runs/{id}/retry` creates a new `full` run sharing the old one's work directory. On success,
+ * seeds the new run's detail cache directly (the caller navigates straight there) and
+ * invalidates the project's run list and detail so `useActiveRun`'s poll picks up the new
+ * active run right away, the same as `useCreateRunMutation`.
+ */
+export function useRetryRunMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) =>
+      unwrap(
+        apiClient.POST('/api/v1/runs/{run_id}/retry', { params: { path: { run_id: runId } } }),
+      ),
+    onSuccess: (newRun) => {
+      queryClient.setQueryData(runKeys.detail(newRun.id), newRun);
+      void queryClient.invalidateQueries({ queryKey: projectKeys.runs(projectId) });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
+    },
+  });
+}

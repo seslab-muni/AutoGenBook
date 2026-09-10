@@ -374,6 +374,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Run */
+        post: operations["runs-retry_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/events": {
         parameters: {
             query?: never;
@@ -1045,6 +1062,8 @@ export interface components {
             finishedAt: string | null;
             /** Resumable */
             resumable: boolean;
+            /** Retryable */
+            retryable: boolean;
             /** Startedbyid */
             startedById?: string | null;
             /** Startedbyname */
@@ -2374,6 +2393,37 @@ export interface operations {
                 "application/json": components["schemas"]["ExportRequestIn"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "runs-retry_run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             202: {

@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { AlertTriangle, ArrowLeft, RotateCw, Square } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, PlayCircle, RotateCw, Square } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
-import { runs as runQueries, useCancelRunMutation } from '@/api/queries/runs';
+import { runs as runQueries, useCancelRunMutation, useRetryRunMutation } from '@/api/queries/runs';
 import type { RunEvent } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ import {
   RUN_STATUS_CLASSES,
   RUN_STATUS_LABELS,
 } from '@/features/runs/lib/run-format';
+import { useActiveRun } from '@/features/runs/hooks/use-active-run';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
@@ -40,6 +41,7 @@ function RunPage() {
   const { projectId, runId } = Route.useParams();
   const navigate = useNavigate();
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  const [confirmResumeOpen, setConfirmResumeOpen] = useState(false);
 
   const { data: run, isPending } = useQuery(runQueries.detail(runId));
   useDocumentTitle(run ? `${RUN_KIND_LABELS[run.kind]} · Run` : `Run ${runId}`);
@@ -59,6 +61,8 @@ function RunPage() {
   const { data: artifacts } = useQuery(runQueries.artifacts(runId));
 
   const cancelMutation = useCancelRunMutation();
+  const retryMutation = useRetryRunMutation(projectId);
+  const { activeRun } = useActiveRun(projectId);
 
   function handleCancel() {
     if (!run) return;
@@ -71,6 +75,25 @@ function RunPage() {
         const problem = error instanceof ApiError ? error.problem : undefined;
         toast.error(problem?.detail ?? problem?.title ?? 'Could not cancel the run');
         setConfirmCancelOpen(false);
+      },
+    });
+  }
+
+  function handleResume() {
+    if (!run) return;
+    retryMutation.mutate(run.id, {
+      onSuccess: (newRun) => {
+        toast.success('Run resumed');
+        setConfirmResumeOpen(false);
+        void navigate({
+          to: '/p/$projectId/runs/$runId',
+          params: { projectId, runId: newRun.id },
+        });
+      },
+      onError: (error) => {
+        const problem = error instanceof ApiError ? error.problem : undefined;
+        toast.error(problem?.detail ?? problem?.title ?? 'Could not resume the run');
+        setConfirmResumeOpen(false);
       },
     });
   }
@@ -144,6 +167,19 @@ function RunPage() {
               Regenerate again
             </Button>
           ) : null}
+          {run.retryable ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={Boolean(activeRun)}
+              title={activeRun ? 'Another run is already active for this project' : undefined}
+              onClick={() => setConfirmResumeOpen(true)}
+            >
+              <PlayCircle />
+              Resume
+            </Button>
+          ) : null}
           {isRunning ? (
             <Button
               type="button"
@@ -203,6 +239,16 @@ function RunPage() {
         confirmLabel="Cancel run"
         cancelLabel="Keep running"
         onConfirm={handleCancel}
+      />
+
+      <ConfirmDialog
+        open={confirmResumeOpen}
+        onOpenChange={setConfirmResumeOpen}
+        title="Resume this run?"
+        description="Starts a new run that continues from the sections this run already generated; already-finished sections are not regenerated."
+        confirmLabel="Resume run"
+        cancelLabel="Cancel"
+        onConfirm={handleResume}
       />
     </div>
   );

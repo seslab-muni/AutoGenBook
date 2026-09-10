@@ -293,9 +293,9 @@ Source (all six): `api/application/outline.py:OutlineService`, `api/domain/outli
 
 ## Runs
 
-Generation runs: driving the CLI as a subprocess, streaming its progress, and syncing its output back into outline nodes/files. `RunService` (API-side: create/list/get/cancel/export/regenerate/events) is called from the routers below; `GenerationService` (worker-side, `api/worker/__main__.py`) is a separate process that actually claims queued runs and executes them — the two never run in the same process.
+Generation runs: driving the CLI as a subprocess, streaming its progress, and syncing its output back into outline nodes/files. `RunService` (API-side: create/list/get/cancel/export/regenerate/retry/events) is called from the routers below; `GenerationService` (worker-side, `api/worker/__main__.py`) is a separate process that actually claims queued runs and executes them — the two never run in the same process.
 
-`Run` fields: `id`, `projectId`, `kind` (`full|regenerate_section|export`), `status` (`queued|running|succeeded|failed|cancelled`), `options` (the request options echoed back, plus `promptModifier` for a `regenerate_section` run), `baseRunId`/`targetNodeId` (nullable — set for `regenerate_section`/`export`), `exitCode`, `error`, `totalTokens`/`totalCostUsd` (nullable, summed from the CLI's `run_meta.json`), `queuedAt`/`startedAt`/`finishedAt`, `resumable` (`false` once the run's work directory has been swept, `RUNS_RETENTION_DAYS` after it finished — a swept run can no longer be the base of a `regenerate`/`export`).
+`Run` fields: `id`, `projectId`, `kind` (`full|regenerate_section|export`), `status` (`queued|running|succeeded|failed|cancelled`), `options` (the request options echoed back, plus `promptModifier` for a `regenerate_section` run), `baseRunId`/`targetNodeId` (nullable — set for `regenerate_section`/`export`, and for a `full` run created by `POST /runs/{id}/retry` (issue #124)), `exitCode`, `error`, `totalTokens`/`totalCostUsd` (nullable, summed from the CLI's `run_meta.json`), `queuedAt`/`startedAt`/`finishedAt`, `resumable` (`false` once the run's work directory has been swept, `RUNS_RETENTION_DAYS` after it finished — a swept run can no longer be the base of a `regenerate`/`export`/`retry`), `retryable` (`true` iff `POST /runs/{id}/retry` would pass its *intrinsic* preconditions on this run: `kind == full`, `status` in `{failed, cancelled}`, and its work directory plus `structure_graph.json` both still on disk — computed by the same `retry_blocker` helper the endpoint itself validates with, so the two can never drift apart; deliberately excludes the endpoint's other, transient 409 guards — another active run, outline drift, a succeeded sibling on the same work directory).
 
 Only one active (`queued`/`running`) run per project at a time; every create/regenerate/export endpoint below returns `409` if the project already has one.
 
@@ -348,6 +348,16 @@ Re-runs the CLI with `--resume --export-tex-only` against a succeeded run's work
 Status codes: `202`; `404` if the run doesn't exist; `409` if the base run didn't succeed, its work directory no longer exists (swept, `resumable=false`), or the project already has another active run.
 
 Source: `api/application/runs.py:RunService.export`
+
+#### `POST /api/v1/runs/{runId}/retry`
+
+Resumes a `failed`/`cancelled` `full` run from its own work directory (issue #124): creates a new `full` run, `options.resume=True`, sharing the old run's work directory (`baseRunId` pointing at the run being resumed) — the same `regenerate`/`export` pattern of a new row over the old one's directory, scoped to `full` runs only (a `regenerate_section`/`export` run is already re-triggerable by clicking the same action again). No request body. The old run's row is left completely untouched — it stays the historical record of that attempt, and `project.lastRunId` is not touched until the new run actually succeeds.
+
+Guards, in order (all `409` unless noted): `kind != full`; `status` not in `{failed, cancelled}`; the work directory or its `structure_graph.json` is missing (both surfaced up front as `retryable=false`, see above); the project already has another active run; the current project/outline, re-rendered and hashed the same way `regenerate`'s drift check works, no longer matches the `input_sha256` the failed run's `structure_graph.json` recorded (catches an edit made between the failure and the retry — the CLI's own `--resume` short-circuit would otherwise silently start over from scratch at full cost instead of erroring); another run already sharing this work directory has `status=succeeded` (nothing left to resume). The worker itself re-checks the work directory/graph exist right before it starts the CLI subprocess, closing the window where the retention sweep removes the directory between queuing and claiming.
+
+Status codes: `202`; `404` if the run doesn't exist; `409` per the guards above.
+
+Source: `api/application/runs.py:RunService.retry`, `api/application/runs.py:retry_blocker`
 
 #### `GET /api/v1/runs/{runId}/events`
 

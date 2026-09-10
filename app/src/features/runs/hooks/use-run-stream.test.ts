@@ -40,6 +40,7 @@ function seedRun(runId: string, projectId: string, status: 'queued' | 'running' 
     totalTokens: null,
     totalCostUsd: null,
     resumable: true,
+    retryable: false,
     queuedAt: '2026-09-07T00:00:00Z',
     startedAt: '2026-09-07T00:00:01Z',
     finishedAt: null,

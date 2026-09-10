@@ -494,6 +494,126 @@ class RunService:
         )
         return await self._runs.add(run)
 
+    async def retry(self, run_id: uuid.UUID, *, started_by: uuid.UUID | None = None) -> Run:
+        """Resume a `failed`/`cancelled` `full` run from its own `work_dir`
+        (issue #124): a new `full` run, `options.resume=True`, sharing the
+        old run's `work_dir` - exactly the `regenerate_node`/`export`
+        pattern (new row, same directory, `base_run_id` pointing at the
+        run being resumed), scoped to `full` only. The failed/cancelled row
+        itself is left completely untouched - it stays the historical
+        record of that attempt."""
+        run = await self._get(run_id)
+
+        blocker = await run_in_threadpool(retry_blocker, run)
+        if blocker is not None:
+            raise Conflict(blocker)
+
+        active = await self._runs.get_active_for_project(run.project_id)
+        if active is not None:
+            raise Conflict(
+                f"project {run.project_id} already has an active run ({active.id}, "
+                f"status={active.status.value})"
+            )
+
+        project = await self._projects.get(run.project_id)
+        if project is None:
+            raise NotFound(f"project {run.project_id} does not exist")
+
+        # Outline-drift guard (required, not optional - see issue #124):
+        # `book_pipeline.py`'s own `--resume` short-circuit compares the
+        # `input_sha256` recorded in `structure_graph.json` against the
+        # current `book_input.txt`, and on a mismatch silently starts a
+        # brand-new run from scratch at full LLM cost instead of resuming -
+        # the worst possible outcome for a "resume" action. Since
+        # `_prepare_work_dir` re-renders `book_input.txt` from the current
+        # project/outline on every `full` run, any edit since this run
+        # failed would trigger exactly that. `outline: "generate"` renders
+        # only the project header (`include_outline=False`) regardless of
+        # outline edits, so hashing it still catches a title/author/topic
+        # edit - the only kind of drift that can matter when a retry
+        # resumes the whole graph rather than one node.
+        flat = await self._outline.list(run.project_id)
+        outline_tree = build_tree(flat)
+        include_outline = run.options.outline == "project"
+        current_txt = SpecRenderer.render(project, outline_tree, include_outline=include_outline)
+        current_sha256 = hashlib.sha256(current_txt.encode("utf-8")).hexdigest()
+        stored_sha256 = await run_in_threadpool(_read_graph_input_sha256, run.work_dir)
+        if stored_sha256 and stored_sha256 != current_sha256:
+            raise Conflict("the project or outline has changed since this run; start a full run")
+
+        # A `work_dir` with an already-`succeeded` sibling (the base run
+        # itself, or an earlier retry of it) means the book is already
+        # done there - `--resume` would skip every section and "succeed"
+        # having regenerated nothing, the same wasted-run class as issue
+        # #77.
+        siblings = await self._runs.list_by_work_dir(run.work_dir)
+        if any(sibling.id != run.id and sibling.status == RunStatus.succeeded for sibling in siblings):
+            raise Conflict(
+                f"run {run.id}'s work directory already has a succeeded run on it; "
+                "nothing to resume"
+            )
+
+        now = datetime.now(timezone.utc)
+        options = dataclass_replace(
+            run.options, resume=True, export_tex_only=False, prompt_modifier=None
+        )
+        new_run = Run(
+            id=uuid.uuid4(),
+            project_id=run.project_id,
+            kind=RunKind.full,
+            status=RunStatus.queued,
+            options=options,
+            base_run_id=run.id,
+            target_node_id=None,
+            target_node_previous_status=None,
+            work_dir=run.work_dir,
+            exit_code=None,
+            error=None,
+            cancel_requested=False,
+            locked_by=None,
+            heartbeat_at=None,
+            queued_at=now,
+            started_at=None,
+            finished_at=None,
+            total_tokens=None,
+            total_cost_usd=None,
+            started_by=started_by,
+        )
+        created = await self._runs.add(new_run)
+
+        # `last_run_id` is deliberately left untouched, same reasoning as
+        # `create()` (issue #66): this run hasn't succeeded yet. Only the
+        # activity-ordering `updated_at` bump happens here.
+        project.updated_at = now
+        await self._projects.update(project, fields=("last_run_id",))
+        return created
+
+
+def retry_blocker(run: Run) -> str | None:
+    """The 409 reason `POST /runs/{id}/retry` would raise for `run`'s
+    *intrinsic* preconditions - `kind == full`, `status` terminal in a
+    resumable way, work dir present, `structure_graph.json` present - or
+    `None` if they all hold. Shared verbatim by `RunService.retry` (which
+    layers its own transient/project-level guards - active run, outline
+    drift, a succeeded sibling - on top as additional 409s) and
+    `run_to_schema`'s `retryable` flag (issue #124), so the flag can never
+    say "retryable" for a run the endpoint would actually reject on these
+    grounds. Kind/status are checked before either `stat(2)` so a list of
+    runs only pays the filesystem cost for `full` runs that are actually
+    `failed`/`cancelled`."""
+    if run.kind != RunKind.full:
+        return "only a full run can be resumed; re-run regenerate/export instead"
+    if run.status == RunStatus.succeeded:
+        return f"run {run.id} succeeded; nothing to resume; use export/regenerate"
+    if run.status in (RunStatus.queued, RunStatus.running):
+        return f"run {run.id} is still active; cancel it first"
+    work_dir = Path(run.work_dir)
+    if not work_dir.is_dir():
+        return f"run {run.id}'s work directory no longer exists; start a full run"
+    if not (work_dir / book_command.OUT_DIRNAME / "structure_graph.json").is_file():
+        return f"run {run.id} never produced a structure graph; start a full run"
+    return None
+
 
 def build_done_event(run: Run, seq: int) -> RunEvent:
     """The terminal SSE event both `GenerationService._emit_done` (a run
@@ -683,6 +803,24 @@ class GenerationService:
         self._lease_lost = False
         try:
             if run.kind == RunKind.full:
+                if run.options.resume and run.base_run_id is not None:
+                    # A retry (issue #124): closes the TOCTOU window
+                    # between `RunService.retry` validating the work dir
+                    # and this worker actually claiming the run -
+                    # `sweep_stale_work_dirs` could have `rmtree`'d it in
+                    # between. Without this check, `_prepare_work_dir`
+                    # below would silently `mkdir` a fresh directory and
+                    # the "resume" would become a full-cost run with no
+                    # warning.
+                    work_dir = Path(run.work_dir)
+                    graph_path = work_dir / book_command.OUT_DIRNAME / "structure_graph.json"
+                    resumable = await run_in_threadpool(
+                        lambda: work_dir.is_dir() and graph_path.is_file()
+                    )
+                    if not resumable:
+                        raise RuntimeError(
+                            "work directory no longer exists; start a full run"
+                        )
                 flat_nodes = await self._outline.list(run.project_id)
                 outline_tree = build_tree(flat_nodes)
                 await self._prepare_work_dir(run, project, outline_tree)
