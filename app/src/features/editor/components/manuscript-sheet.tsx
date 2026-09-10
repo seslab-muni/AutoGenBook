@@ -22,6 +22,7 @@ import { isUnsavedStatus } from '@/features/editor/lib/save-status';
 import { wordCount } from '@/features/editor/lib/word-count';
 import { findSectionArtifact } from '@/features/exports/lib/artifacts';
 import { fileContentUrl } from '@/features/exports/lib/file-url';
+import { isLeaf } from '@/features/outline/model';
 import { useEditorStore, useEditorView } from '@/stores/editor-store';
 
 interface ManuscriptSheetProps {
@@ -104,6 +105,11 @@ export function ManuscriptSheet({
 
   const equationCount = countDisplayEquations(draft);
   const isDirty = isUnsavedStatus(status);
+  // Non-leaf nodes (chapters/parts with children) never get LLM-generated content — only leaf
+  // sections do (book_builder.py's generate_contents walks leaves only) — so the empty-state
+  // copy and the Copilot's regenerate action must not offer generation for them (issue #77's
+  // 409 guard covers the API side; this covers the UI so the offer isn't made in the first place).
+  const nodeIsLeaf = isLeaf(node.id, flatNodes);
 
   // Blocks in-app navigation (and warns on tab close) while there's an unsaved edit the
   // 800ms debounce hasn't flushed yet — `flush()` on blur/unmount/Ctrl-S covers the rest.
@@ -189,8 +195,9 @@ export function ManuscriptSheet({
 
               {draft.trim().length === 0 ? (
                 <p className="text-center text-sm text-muted-foreground italic">
-                  This section is empty. Switch to Source to write it, or use the Copilot to
-                  generate it.
+                  {nodeIsLeaf
+                    ? 'This section is empty. Switch to Source to write it, or use the Copilot to generate it.'
+                    : 'This is a container node — it only has the outline summary shown in the assembled document. Content is generated per leaf section; select a leaf section below it to write or generate text.'}
                 </p>
               ) : (
                 <LazyMarkdownView markdown={draft} citations={parseRagCitations(node.ragCitations)} />
