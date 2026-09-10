@@ -54,6 +54,13 @@ export default defineConfig({
     setupFiles: ['./src/test/msw-polyfills.ts', './src/test/setup.ts'],
     css: true,
     exclude: ['node_modules', 'dist', 'e2e'],
+    // Above Vitest's own 5000ms default so a busy CI runner has room to actually honor the
+    // `asyncUtilTimeout` bump in `src/test/setup.ts` (a test with a couple of sequential async
+    // queries, each individually still under that budget, could otherwise still hit Vitest's own
+    // per-test wall clock first). A handful of tests with an unusually long real-timer critical
+    // path (e.g. `export-dialog.test.tsx`'s "builds a PDF..." test) still set their own higher
+    // per-test override where even this isn't enough headroom.
+    testTimeout: 15000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
