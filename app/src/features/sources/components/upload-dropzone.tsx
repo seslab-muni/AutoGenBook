@@ -53,12 +53,16 @@ interface UploadDropzoneProps {
   disabled?: boolean;
   /** Test seam, forwarded to `uploadFile` via `useUploadQueue`. */
   createXhr?: () => XMLHttpRequest;
+  /** Narrow-column variant (the sources dialog's rail, the new-project dialog's sources column):
+   * a shorter drop target with the extension list as its only hint, and the not-yet-available
+   * ingest methods as a row of small chips *below* it instead of a tab strip above. */
+  compact?: boolean;
 }
 
 /** Drag-drop/picker upload with per-file progress, cancel, and eligibility warnings. The other
  * ingest methods from the mock (arXiv, BibTeX, URL) are shown as disabled tabs, not built — the
  * backend has no endpoints for them yet (issue #5 explicitly defers them). */
-export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzoneProps) {
+export function UploadDropzone({ onUploaded, disabled, createXhr, compact }: UploadDropzoneProps) {
   const [dragOver, setDragOver] = useState(false);
   const { items, enqueue, cancel, dismiss } = useUploadQueue({
     onUploaded: (file) => {
@@ -79,23 +83,32 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
     handleFiles(event.dataTransfer.files);
   }
 
+  const disabledIngestTabs = DISABLED_INGEST_TABS.map((label) => (
+    <Tooltip key={label}>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            'cursor-not-allowed rounded-md text-muted-foreground/60',
+            compact ? 'px-1.5 py-0.5 text-[11px]' : 'px-2.5 py-1',
+          )}
+        >
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Not available yet</TooltipContent>
+    </Tooltip>
+  ));
+
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-1 text-xs">
-        <span className="rounded-md bg-muted px-2.5 py-1 font-semibold text-foreground">
-          File upload
-        </span>
-        {DISABLED_INGEST_TABS.map((label) => (
-          <Tooltip key={label}>
-            <TooltipTrigger asChild>
-              <span className="cursor-not-allowed rounded-md px-2.5 py-1 text-muted-foreground/60">
-                {label}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Not available yet</TooltipContent>
-          </Tooltip>
-        ))}
-      </div>
+      {!compact ? (
+        <div className="flex items-center gap-1 text-xs">
+          <span className="rounded-md bg-muted px-2.5 py-1 font-semibold text-foreground">
+            File upload
+          </span>
+          {disabledIngestTabs}
+        </div>
+      ) : null}
 
       {/* A `<label>`, not a `role="button"` div: it wraps the real `<input type="file">` below,
           so a click anywhere in it natively delegates to the input - no manual click/keydown
@@ -111,7 +124,8 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
         className={cn(
-          'flex flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed p-6 text-center transition-colors',
+          'flex flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed text-center transition-colors',
+          compact ? 'p-4' : 'p-6',
           disabled
             ? 'cursor-not-allowed opacity-60'
             : 'cursor-pointer hover:border-primary/50 hover:bg-muted/30',
@@ -119,10 +133,18 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
         )}
       >
         <Upload className="size-5 text-muted-foreground" />
-        <p className="text-xs font-medium text-foreground">Drop files here or click to browse</p>
+        <p className="text-xs font-medium text-foreground">
+          {compact ? 'Drop files or browse' : 'Drop files here or click to browse'}
+        </p>
         <p className="text-[11px] text-muted-foreground">
-          Eligible for RAG indexing: {ELIGIBLE_EXTENSIONS_LABEL}. Other files upload but can&apos;t
-          be attached as sources.
+          {compact ? (
+            ELIGIBLE_EXTENSIONS_LABEL
+          ) : (
+            <>
+              Eligible for RAG indexing: {ELIGIBLE_EXTENSIONS_LABEL}. Other files upload but
+              can&apos;t be attached as sources.
+            </>
+          )}
         </p>
         <input
           type="file"
@@ -136,6 +158,10 @@ export function UploadDropzone({ onUploaded, disabled, createXhr }: UploadDropzo
           }}
         />
       </label>
+
+      {compact ? (
+        <div className="flex flex-wrap items-center gap-1 text-xs">{disabledIngestTabs}</div>
+      ) : null}
 
       {items.length > 0 ? (
         <ul className="space-y-1.5">

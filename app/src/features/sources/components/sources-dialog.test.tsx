@@ -21,19 +21,23 @@ function openDialog(createXhr?: () => XMLHttpRequest) {
   );
 }
 
+/** The `<tr>` holding a source, found by its (unique) file name. */
+function rowOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('tr');
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
+}
+
 describe('SourcesDialog', () => {
   it("lists the project's sources with type, status, and citation count", async () => {
     openDialog();
 
-    const card = await screen.findByText('Lamport_1982_ByzantineGenerals.pdf');
-    const cardContainer = card.closest('[data-slot="card"]');
-    expect(cardContainer).not.toBeNull();
-    expect(within(cardContainer as HTMLElement).getByText('PDF')).toBeInTheDocument();
-    expect(
-      within(cardContainer as HTMLElement).getByText(/Indexed \(\d+ chunks\)/),
-    ).toBeInTheDocument();
+    await screen.findByText('Lamport_1982_ByzantineGenerals.pdf');
+    const row = rowOf('Lamport_1982_ByzantineGenerals.pdf');
+    expect(within(row).getByText('PDF')).toBeInTheDocument();
+    expect(within(row).getByText(/Indexed \(\d+ chunks\)/)).toBeInTheDocument();
     // One `ragCitations` entry points at this source in the fixture outline.
-    expect(within(cardContainer as HTMLElement).getByText('1')).toBeInTheDocument();
+    expect(within(row).getByText('1')).toBeInTheDocument();
   });
 
   it('filters by search text', async () => {
@@ -47,25 +51,33 @@ describe('SourcesDialog', () => {
     expect(screen.queryByText('Lamport_1982_ByzantineGenerals.pdf')).not.toBeInTheDocument();
   });
 
-  it('filters by type', async () => {
+  it('filters by type from the rail, showing a per-type count', async () => {
     const user = userEvent.setup();
     openDialog();
 
     await screen.findByText('Lamport_1982_ByzantineGenerals.pdf');
-    await user.click(screen.getByRole('button', { name: 'Slides' }));
+    const slidesFilter = screen.getByRole('button', { name: /^Slides/ });
+    expect(slidesFilter).toHaveTextContent('1');
+    await user.click(slidesFilter);
 
+    expect(slidesFilter).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('MIT_6.824_Distributed_Systems_Slides.pptx')).toBeInTheDocument();
     expect(screen.queryByText('Lamport_1982_ByzantineGenerals.pdf')).not.toBeInTheDocument();
   });
 
-  it('switches to the list view', async () => {
+  it('sorts by name when the Source column header is clicked', async () => {
     const user = userEvent.setup();
     openDialog();
 
     await screen.findByText('Lamport_1982_ByzantineGenerals.pdf');
-    await user.click(screen.getByRole('button', { name: 'List view' }));
+    await user.click(screen.getByRole('button', { name: 'Source' }));
 
-    expect(screen.getByRole('columnheader', { name: 'Source' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Source' })).toHaveAttribute(
+      'aria-sort',
+      'ascending',
+    );
+    const [firstRow] = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(firstRow).toHaveTextContent('BFT_Surface_Code_Syndrome_Specs.md');
   });
 
   it("edits a source's metadata", async () => {
@@ -100,6 +112,26 @@ describe('SourcesDialog', () => {
     await waitFor(() =>
       expect(screen.queryByText('Lamport_1982_ByzantineGenerals.pdf')).not.toBeInTheDocument(),
     );
+  });
+
+  it('detaches several selected sources at once', async () => {
+    const user = userEvent.setup();
+    openDialog();
+
+    await screen.findByText('Lamport_1982_ByzantineGenerals.pdf');
+    await user.click(screen.getByLabelText('Select Lamport_1982_ByzantineGenerals.pdf'));
+    await user.click(screen.getByLabelText('Select Castro_Liskov_PBFT_TOCS.pdf'));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^detach$/i }));
+    const confirm = await screen.findByRole('alertdialog', { name: /detach 2 sources/i });
+    await user.click(within(confirm).getByRole('button', { name: /^detach$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Lamport_1982_ByzantineGenerals.pdf')).not.toBeInTheDocument();
+      expect(screen.queryByText('Castro_Liskov_PBFT_TOCS.pdf')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
   });
 
   it('attaches a newly uploaded eligible file as a source', async () => {
