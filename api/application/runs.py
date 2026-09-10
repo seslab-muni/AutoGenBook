@@ -152,12 +152,12 @@ class RunService:
         project = await self._projects.get(project_id)
         if project is None:
             raise NotFound(f"project {project_id} does not exist")
-        active = await self._runs.get_active_for_project(project_id)
-        if active is not None:
-            raise Conflict(
-                f"project {project_id} already has an active run ({active.id}, "
-                f"status={active.status.value})"
-            )
+        lane = await self._runs.list_active_for_project(project_id)
+        blocker = queue_admission_blocker(
+            RunKind.full, lane, self._settings.max_queued_runs_per_project
+        )
+        if blocker is not None:
+            raise Conflict(blocker)
 
         resolved_output_format = output_format or project.output_format.value
         # Both combinations "succeed" with no useful output instead of
@@ -245,12 +245,25 @@ class RunService:
         return await self._get(run_id)
 
     async def list(
-        self, project_id: uuid.UUID, *, limit: int, offset: int
+        self,
+        project_id: uuid.UUID,
+        *,
+        limit: int,
+        offset: int,
+        statuses: list[RunStatus] | None = None,
     ) -> tuple[list[Run], int]:
         if await self._projects.get(project_id) is None:
             raise NotFound(f"project {project_id} does not exist")
-        runs, total = await self._runs.list(project_id, limit, offset)
+        runs, total = await self._runs.list(project_id, limit, offset, statuses=statuses)
         return [await self._fill_llm_model(run) for run in runs], total
+
+    async def queue_position(self, run: Run) -> int | None:
+        """1-based position of `run` among its project's other `queued`
+        runs, or `None` once it's running/terminal (issue #134). Thin
+        pass-through kept on the service (rather than read straight off the
+        repository by routers) so it goes through the same layer every
+        other run read does."""
+        return await self._runs.queue_position(run)
 
     async def cancel(self, run_id: uuid.UUID) -> Run:
         run = await self._get(run_id)
@@ -384,12 +397,12 @@ class RunService:
                 "applies to leaf nodes"
             )
 
-        active = await self._runs.get_active_for_project(project_id)
-        if active is not None:
-            raise Conflict(
-                f"project {project_id} already has an active run ({active.id}, "
-                f"status={active.status.value})"
-            )
+        lane = await self._runs.list_active_for_project(project_id)
+        blocker = queue_admission_blocker(
+            RunKind.regenerate_section, lane, self._settings.max_queued_runs_per_project
+        )
+        if blocker is not None:
+            raise Conflict(blocker)
 
         base_run = await self._resolvable_base_run(project_id, project.last_run_id)
 
@@ -490,12 +503,12 @@ class RunService:
                 f"run {run_id}'s work directory no longer exists; start a full run first"
             )
 
-        active = await self._runs.get_active_for_project(base_run.project_id)
-        if active is not None:
-            raise Conflict(
-                f"project {base_run.project_id} already has an active run ({active.id}, "
-                f"status={active.status.value})"
-            )
+        lane = await self._runs.list_active_for_project(base_run.project_id)
+        blocker = queue_admission_blocker(
+            RunKind.export, lane, self._settings.max_queued_runs_per_project
+        )
+        if blocker is not None:
+            raise Conflict(blocker)
 
         project = await self._projects.get(base_run.project_id)
         fallback_llm_model = (
@@ -548,12 +561,12 @@ class RunService:
         if blocker is not None:
             raise Conflict(blocker)
 
-        active = await self._runs.get_active_for_project(run.project_id)
-        if active is not None:
-            raise Conflict(
-                f"project {run.project_id} already has an active run ({active.id}, "
-                f"status={active.status.value})"
-            )
+        lane = await self._runs.list_active_for_project(run.project_id)
+        blocker = queue_admission_blocker(
+            RunKind.full, lane, self._settings.max_queued_runs_per_project
+        )
+        if blocker is not None:
+            raise Conflict(blocker)
 
         project = await self._projects.get(run.project_id)
         if project is None:
@@ -666,6 +679,35 @@ def retry_blocker(run: Run) -> str | None:
         # to prevent. Block it here too, rather than only catching drift
         # once there's a hash to compare against.
         return f"run {run.id}'s structure graph has no recorded input hash; start a full run"
+    return None
+
+
+def queue_admission_blocker(kind: RunKind, lane_runs: list[Run], cap: int) -> str | None:
+    """The 409 reason a new run of `kind` should be refused given its
+    project's current lane (`lane_runs`: every queued-or-running run for the
+    project, from `RunRepository.list_active_for_project`, oldest first) and
+    `cap` (`Settings.max_queued_runs_per_project`) - `None` if admission is
+    allowed. Shared verbatim by every entry point that queues a new run
+    (`create`, `regenerate_node`, `export`, `retry`, issue #134) so the
+    admission table can't drift between them.
+
+    A `full` run reads the project and outline fresh when it *starts*
+    (`GenerationService._prepare_work_dir`), so it's always safe to queue
+    behind anything already in the lane - it only has to respect the cap.
+    `regenerate_section`/`export`/`retry` are all relative to a base run's
+    fixed work directory and `project.last_run_id`, either of which a
+    `full` run starting *after* they were queued would rewrite out from
+    under them - so any of the three is blocked outright by a `full` run
+    already queued or running. (`retry` itself creates a `kind == full`
+    run, so a queued retry blocks the same way a queued `create` does.)"""
+    if kind != RunKind.full and any(run.kind == RunKind.full for run in lane_runs):
+        return (
+            "a full run is queued or running for this project; wait for it to "
+            "finish or cancel it"
+        )
+    queued = sum(1 for run in lane_runs if run.status == RunStatus.queued)
+    if queued >= cap:
+        return f"project's run queue is full ({cap} queued); wait for one to start or cancel one"
     return None
 
 

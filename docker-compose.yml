@@ -110,6 +110,9 @@ services:
       AUTH_TOKEN_TTL_H: ${AUTH_TOKEN_TTL_H:-24}
       AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-autogenbook_session}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-1}
+      # Issue #134: how many `queued` runs one project may hold at once (`RunService`'s
+      # `queue_admission_blocker`) - `api`-only, the worker never admits runs itself.
+      MAX_QUEUED_RUNS_PER_PROJECT: ${MAX_QUEUED_RUNS_PER_PROJECT:-5}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     expose:
       - "8000"

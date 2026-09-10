@@ -388,13 +388,18 @@ async def test_retry_409_when_still_queued(
     assert response.status_code == 409
 
 
-async def test_retry_409_when_project_has_an_active_run(
+async def test_retry_202_when_project_has_a_queued_full_run_under_the_cap(
     app,
     authed_client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     file_storage: InMemoryFileStorage,
     tmp_path: Path,
 ) -> None:
+    """Issue #134: retry itself creates a `kind == full` run, and a `full`
+    run is always safe to queue behind anything else in the lane (it reads
+    the project/outline fresh when it starts) - it only has to respect
+    `MAX_QUEUED_RUNS_PER_PROJECT`. This used to 409 under the old "one
+    active run per project" rule; queuing it now succeeds."""
     settings = _settings(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
 
@@ -404,11 +409,12 @@ async def test_retry_409_when_project_has_an_active_run(
     base_run = await _run_full(authed_client, project_id, session_factory, file_storage, settings)
     await _fail_run(session_factory, base_run["id"])
 
-    # A second run left queued (never driven) is still "active".
+    # A second run left queued (never driven).
     await authed_client.post(f"/api/v1/projects/{project_id}/runs", json={"outline": "project"})
 
     response = await authed_client.post(f"/api/v1/runs/{base_run['id']}/retry")
-    assert response.status_code == 409
+    assert response.status_code == 202
+    assert response.json()["queuePosition"] == 2
 
 
 async def test_retry_409_when_work_dir_was_swept(

@@ -384,6 +384,118 @@ async def test_requeue_stale_does_not_flip_resume_without_a_structure_graph(
     assert refreshed.options.resume is False
 
 
+async def test_claim_skips_a_queued_run_whose_project_already_has_a_running_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Issue #134: a project can now hold several `queued` rows at once
+    (`uq_runs_project_running` only constrains `running` rows), so `claim`
+    itself has to enforce "one running run per project" via its own
+    NOT-IN-running-projects gate rather than relying on there only ever
+    being one queued-or-running row to begin with."""
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        queue = SqlAlchemyRunQueue(session)
+        await repo.add(_run(project_id, queued_at=datetime.now(timezone.utc) - timedelta(minutes=5)))
+        second = await repo.add(_run(project_id))
+
+        first_claim = await queue.claim("worker-1")
+        second_claim = await queue.claim("worker-2")
+
+    assert first_claim is not None
+    assert second_claim is None
+    async with session_factory() as session:
+        still_queued = await SqlAlchemyRunRepository(session).get(second.id)
+    assert still_queued is not None
+    assert still_queued.status == RunStatus.queued
+
+
+async def test_claim_picks_oldest_eligible_run_across_projects(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A project already `running` doesn't block *other* projects' queued
+    runs from being claimed, even when its own queued backlog is older."""
+    async with session_factory() as session:
+        busy_project_id = await _seed_project(session)
+        other_project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        queue = SqlAlchemyRunQueue(session)
+
+        await repo.add(
+            _run(busy_project_id, queued_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+        )
+        await queue.claim("worker-1")  # busy_project_id's only run is now running
+        await repo.add(
+            _run(busy_project_id, queued_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+        )
+        other_run = await repo.add(_run(other_project_id))
+
+        claimed = await queue.claim("worker-2")
+
+    assert claimed is not None
+    assert claimed.id == other_run.id
+
+
+async def test_claim_picks_the_next_queued_run_once_the_running_one_finishes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        queue = SqlAlchemyRunQueue(session)
+        await repo.add(_run(project_id, queued_at=datetime.now(timezone.utc) - timedelta(minutes=5)))
+        second = await repo.add(_run(project_id))
+
+        running = await queue.claim("worker-1")
+        assert running is not None
+        assert await queue.claim("worker-2") is None
+
+        finished = dataclasses.replace(
+            running, status=RunStatus.succeeded, finished_at=datetime.now(timezone.utc)
+        )
+        await repo.update(finished)
+
+        claimed = await queue.claim("worker-2")
+
+    assert claimed is not None
+    assert claimed.id == second.id
+
+
+@requires_postgres
+async def test_two_concurrent_workers_racing_the_same_project_claim_exactly_one(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Postgres-only regression for issue #134: two workers each see a
+    queued run of the *same* project pass the NOT-IN-running-projects gate
+    (both projects are pre-seeded with no running run), race the claiming
+    `UPDATE`, and `uq_runs_project_running` must let exactly one through -
+    the loser's `IntegrityError` is caught and rolled back inside `claim`
+    itself, never raised out to the caller."""
+    async with session_factory() as session:
+        project_id = await _seed_project(session)
+        repo = SqlAlchemyRunRepository(session)
+        first = await repo.add(
+            _run(project_id, queued_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+        )
+        second = await repo.add(_run(project_id))
+
+    async def claim(worker_id: str) -> Run | None:
+        async with session_factory() as session:
+            return await SqlAlchemyRunQueue(session).claim(worker_id)
+
+    results = await asyncio.gather(claim("worker-a"), claim("worker-b"))
+    claimed = [run for run in results if run is not None]
+    assert len(claimed) == 1
+    assert claimed[0].id in (first.id, second.id)
+
+    async with session_factory() as session:
+        repo = SqlAlchemyRunRepository(session)
+        first_after = await repo.get(first.id)
+        second_after = await repo.get(second.id)
+    statuses = {first_after.status, second_after.status}
+    assert statuses == {RunStatus.running, RunStatus.queued}
+
+
 @requires_postgres
 async def test_two_concurrent_workers_never_claim_the_same_run(
     session_factory: async_sessionmaker[AsyncSession],

@@ -16,6 +16,7 @@ from api.domain.models import (
     Run,
     RunArtifact,
     RunEvent,
+    RunStatus,
     Source,
     User,
 )
@@ -140,9 +141,29 @@ class RunRepository(Protocol):
 
     async def get_active_for_project(self, project_id: uuid.UUID) -> Run | None: ...
 
+    # Issue #134: every queued-or-running run for `project_id`, oldest
+    # first - the project's whole "lane". Unlike `get_active_for_project`
+    # (still used by the outline structural-edit guard and project delete,
+    # whose semantics are unchanged), this can return more than one run
+    # once a project may hold several `queued` runs at once; it backs both
+    # `queue_admission_blocker` (the caller passes its own about-to-create
+    # run's `kind` plus this list) and `RunService.queue_position`.
+    async def list_active_for_project(self, project_id: uuid.UUID) -> list[Run]: ...
+
     async def list(
-        self, project_id: uuid.UUID, limit: int, offset: int
+        self,
+        project_id: uuid.UUID,
+        limit: int,
+        offset: int,
+        *,
+        statuses: Sequence[RunStatus] | None = None,
     ) -> tuple[list[Run], int]: ...
+
+    # 1-based position of `run` among its project's other `queued` runs,
+    # ordered by `queued_at` - `None` for a run that isn't `queued` (a
+    # `running` run has no "position", it's already executing; a terminal
+    # run never had one to report).
+    async def queue_position(self, run: Run) -> int | None: ...
 
     async def add(self, run: Run) -> Run: ...
 

@@ -310,9 +310,20 @@ Source (all six): `api/application/outline.py:OutlineService`, `api/domain/outli
 
 Generation runs: driving the CLI as a subprocess, streaming its progress, and syncing its output back into outline nodes/files. `RunService` (API-side: create/list/get/cancel/export/regenerate/retry/events) is called from the routers below; `GenerationService` (worker-side, `api/worker/__main__.py`) is a separate process that actually claims queued runs and executes them — the two never run in the same process.
 
-`Run` fields: `id`, `projectId`, `kind` (`full|regenerate_section|export`), `status` (`queued|running|succeeded|failed|cancelled`), `options` (the request options echoed back, plus `promptModifier` for a `regenerate_section` run, and `llmModel` — issue #128, always a concrete model id: resolved at creation from the request's own `llmModel` else the project's, and backfilled from the project/deployment default on read for a run row that predates this field), `baseRunId`/`targetNodeId` (nullable — set for `regenerate_section`/`export`, and for a `full` run created by `POST /runs/{id}/retry` (issue #124)), `exitCode`, `error`, `totalTokens`/`totalCostUsd` (nullable, summed from the CLI's `run_meta.json`), `queuedAt`/`startedAt`/`finishedAt`, `resumable` (`false` once the run's work directory has been swept, `RUNS_RETENTION_DAYS` after it finished — a swept run can no longer be the base of a `regenerate`/`export`/`retry`), `retryable` (`true` iff `POST /runs/{id}/retry` would pass its *intrinsic* preconditions on this run: `kind == full`, `status` in `{failed, cancelled}`, and its work directory plus `structure_graph.json` both still on disk — computed by the same `retry_blocker` helper the endpoint itself validates with, so the two can never drift apart; deliberately excludes the endpoint's other, transient 409 guards — another active run, outline drift, a succeeded sibling on the same work directory).
+`Run` fields: `id`, `projectId`, `kind` (`full|regenerate_section|export`), `status` (`queued|running|succeeded|failed|cancelled`), `options` (the request options echoed back, plus `promptModifier` for a `regenerate_section` run, and `llmModel` — issue #128, always a concrete model id: resolved at creation from the request's own `llmModel` else the project's, and backfilled from the project/deployment default on read for a run row that predates this field), `baseRunId`/`targetNodeId` (nullable — set for `regenerate_section`/`export`, and for a `full` run created by `POST /runs/{id}/retry` (issue #124)), `exitCode`, `error`, `totalTokens`/`totalCostUsd` (nullable, summed from the CLI's `run_meta.json`), `queuedAt`/`startedAt`/`finishedAt`, `resumable` (`false` once the run's work directory has been swept, `RUNS_RETENTION_DAYS` after it finished — a swept run can no longer be the base of a `regenerate`/`export`/`retry`), `retryable` (`true` iff `POST /runs/{id}/retry` would pass its *intrinsic* preconditions on this run: `kind == full`, `status` in `{failed, cancelled}`, and its work directory plus `structure_graph.json` both still on disk — computed by the same `retry_blocker` helper the endpoint itself validates with, so the two can never drift apart; deliberately excludes the endpoint's other, transient 409 guards — a queued full run ahead of it, outline drift, a succeeded sibling on the same work directory), `queuePosition` (nullable int, issue #134 — 1-based position among the project's other `queued` runs; `null` once the run is `running` or terminal).
 
-Only one active (`queued`/`running`) run per project at a time; every create/regenerate/export endpoint below returns `409` if the project already has one.
+**Run queue (issue #134):** a project may hold **one `running` run** plus up to `MAX_QUEUED_RUNS_PER_PROJECT` (default 5, env `MAX_QUEUED_RUNS_PER_PROJECT`) **`queued`** runs at once — queueing several runs no longer requires waiting for each to finish first. Admission is decided by `queue_admission_blocker(kind, laneRuns, cap)` (`api/application/runs.py`), called by every endpoint that queues a new run:
+
+| New run | Blocked by | Result |
+|---|---|---|
+| `full` (`create`, `retry`) | nothing but the cap | `202` queued behind anything already in the lane |
+| `regenerate_section` / `export` | a `full` run already `queued` or `running` for the project | `409` ("a full run is queued or running…") |
+| `regenerate_section` / `export` | only `regenerate_section`/`export` runs ahead of it | `202` queued — executes sequentially against the shared work directory |
+| any kind | the project's lane already has `cap` `queued` runs | `409` ("project's run queue is full…") |
+
+`regenerate_section`/`export`/`retry` are blocked by a queued/running `full` run (not the reverse) because they resume a fixed base work directory and `project.lastRunId`, both of which a `full` run starting later would rewrite out from under them; a `full` run itself never depends on either, so it only has to respect the cap. `GET /projects/{projectId}/runs`'s `status` query param (below) is the way to fetch just a project's current lane (`queued`+`running`) instead of paging through its whole history.
+
+The outline structural-edit guard (`OutlineService._reject_if_run_active`) and `DELETE /projects/{projectId}` are unchanged: both still `409` while the project has *any* `queued` or `running` run, not just a `running` one — a structural edit or project delete is unsafe for a run that hasn't started yet either.
 
 #### `POST /api/v1/projects/{projectId}/runs`
 
@@ -320,13 +331,13 @@ Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use th
 
 `legacyTex` and `auditBook` both require the resolved `outputFormat` (the explicit body value, or the project's own if omitted) to be `latex` or `pdf` — with `markdown`, `legacyTex` would otherwise "succeed" with no document assembled at all, and `auditBook` would silently be a no-op (both need a `tex_path` the markdown-only assembly path never produces).
 
-Status codes: `202`; `404` if the project doesn't exist; `409` if it already has an active run; `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format.
+Status codes: `202`; `404` if the project doesn't exist; `409` if the project's queue is full (`MAX_QUEUED_RUNS_PER_PROJECT` queued runs already); `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format.
 
 Source: `api/application/runs.py:RunService.create`
 
 #### `GET /api/v1/projects/{projectId}/runs`
 
-Query: `limit` (default 50, max 200), `offset` (default 0). Returns `Page<Run>`.
+Query: `status` (repeatable, e.g. `?status=queued&status=running` — omit for full history), `limit` (default 50, max 200), `offset` (default 0). Returns `Page<Run>`.
 
 Status codes: `200`; `404` if the project doesn't exist.
 
@@ -338,7 +349,7 @@ Re-runs the CLI with `--resume` against the project's last succeeded `full`/`reg
 
 The node must already have a `cliKey` (i.e. was produced by a prior run). Before queuing, the current project/outline is re-rendered to the same spec text the base run would have produced and hashed; if that hash doesn't match what the base run actually saw (`structure_graph.json`'s `input_sha256`), the outline has drifted structurally since — the endpoint rejects with `409` rather than let a `--resume` desync from a `structure_graph.json` it can no longer trust.
 
-Status codes: `202`; `404` if the project/node doesn't exist; `409` if the node has no `cliKey`, there's no resumable base run, or the outline has drifted since the base run; `422` on request validation.
+Status codes: `202`; `404` if the project/node doesn't exist; `409` if a `full` run is already queued/running for the project, the project's queue is full, the node has no `cliKey`, there's no resumable base run, or the outline has drifted since the base run; `422` on request validation.
 
 Source: `api/application/runs.py:RunService.regenerate_node`, `api/application/runs.py:GenerationService._prepare_regenerate`
 
@@ -360,7 +371,7 @@ Source: `api/application/runs.py:RunService.cancel`
 
 Re-runs the CLI with `--resume --export-tex-only` against a succeeded run's work directory, without touching any section, to (re)produce a LaTeX/PDF artifact in a different format (`kind=export`). Body: `format` (`latex|pdf`, required).
 
-Status codes: `202`; `404` if the run doesn't exist; `409` if the base run didn't succeed, its work directory no longer exists (swept, `resumable=false`), or the project already has another active run.
+Status codes: `202`; `404` if the run doesn't exist; `409` if the base run didn't succeed, its work directory no longer exists (swept, `resumable=false`), a `full` run is already queued/running for the project, or the project's queue is full.
 
 Source: `api/application/runs.py:RunService.export`
 
@@ -368,7 +379,7 @@ Source: `api/application/runs.py:RunService.export`
 
 Resumes a `failed`/`cancelled` `full` run from its own work directory (issue #124): creates a new `full` run, `options.resume=True`, sharing the old run's work directory (`baseRunId` pointing at the run being resumed) — the same `regenerate`/`export` pattern of a new row over the old one's directory, scoped to `full` runs only (a `regenerate_section`/`export` run is already re-triggerable by clicking the same action again). No request body. The old run's row is left completely untouched — it stays the historical record of that attempt, and `project.lastRunId` is not touched until the new run actually succeeds.
 
-Guards, in order (all `409` unless noted): `kind != full`; `status` not in `{failed, cancelled}`; the work directory or its `structure_graph.json` is missing (both surfaced up front as `retryable=false`, see above); the project already has another active run; the current project/outline, re-rendered and hashed the same way `regenerate`'s drift check works, no longer matches the `input_sha256` the failed run's `structure_graph.json` recorded (catches an edit made between the failure and the retry — the CLI's own `--resume` short-circuit would otherwise silently start over from scratch at full cost instead of erroring); another run already sharing this work directory has `status=succeeded` (nothing left to resume). The worker itself re-checks the work directory/graph exist right before it starts the CLI subprocess, closing the window where the retention sweep removes the directory between queuing and claiming.
+Guards, in order (all `409` unless noted): `kind != full`; `status` not in `{failed, cancelled}`; the work directory or its `structure_graph.json` is missing (both surfaced up front as `retryable=false`, see above); the project's queue is full (retry itself creates a `kind=full` run, so — like `create` — it's only ever blocked by the cap, never by another queued/running run of any kind); the current project/outline, re-rendered and hashed the same way `regenerate`'s drift check works, no longer matches the `input_sha256` the failed run's `structure_graph.json` recorded (catches an edit made between the failure and the retry — the CLI's own `--resume` short-circuit would otherwise silently start over from scratch at full cost instead of erroring); another run already sharing this work directory has `status=succeeded` (nothing left to resume). The worker itself re-checks the work directory/graph exist right before it starts the CLI subprocess, closing the window where the retention sweep removes the directory between queuing and claiming.
 
 Status codes: `202`; `404` if the run doesn't exist; `409` per the guards above.
 

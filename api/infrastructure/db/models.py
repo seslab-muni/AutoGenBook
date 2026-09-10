@@ -345,25 +345,34 @@ class RunRecord(Base):
     __table_args__ = (
         # The queue claim query (`SqlAlchemyRunQueue.claim`) and the "does
         # this project already have an active run" check
-        # (`RunRepository.get_active_for_project`) both filter on this;
-        # partial so the index stays small as terminal runs accumulate.
+        # (`RunRepository.get_active_for_project`, still used by the outline
+        # structural-edit guard and project delete - see `uq_runs_project_
+        # running` below for why queueing itself no longer reads this) both
+        # filter on this; partial so the index stays small as terminal runs
+        # accumulate.
         sa.Index(
             "ix_runs_status_active",
             "status",
             postgresql_where=sa.text("status IN ('queued', 'running')"),
             sqlite_where=sa.text("status IN ('queued', 'running')"),
         ),
-        # Backstop for "one active run per project" under concurrent
-        # requests: `RunService.create`'s own check-then-insert has a TOCTOU
-        # gap between two racing requests, so the invariant is enforced here
-        # instead - `SqlAlchemyRunRepository.add` turns the resulting
-        # `IntegrityError` into a `Conflict`.
+        # Issue #134: backstop for "one *running* run per project" under
+        # concurrent claims - `SqlAlchemyRunQueue.claim`'s own
+        # NOT-EXISTS-gated `SELECT ... FOR UPDATE SKIP LOCKED` can still let
+        # two slots pass the gate for two queued runs of the same project in
+        # the same instant; the second `UPDATE ... SET status='running'`
+        # then violates this index and `claim` catches the resulting
+        # `IntegrityError` and returns `None` for that slot. Unlike its
+        # predecessor `uq_runs_project_active`, this only constrains
+        # `running` rows - a project may hold several `queued` rows at once
+        # (`MAX_QUEUED_RUNS_PER_PROJECT`), enforced by `queue_admission_
+        # blocker` in `api/application/runs.py`, not by a unique index.
         sa.Index(
-            "uq_runs_project_active",
+            "uq_runs_project_running",
             "project_id",
             unique=True,
-            postgresql_where=sa.text("status IN ('queued', 'running')"),
-            sqlite_where=sa.text("status IN ('queued', 'running')"),
+            postgresql_where=sa.text("status = 'running'"),
+            sqlite_where=sa.text("status = 'running'"),
         ),
         # `SqlAlchemyRunRepository.list` (the full run-history list, not
         # just active runs) filters on `project_id` and orders by

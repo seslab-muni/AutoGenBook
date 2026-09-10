@@ -117,6 +117,12 @@ class Run(BaseSchema):
     # user-facing message, the same contract `resumable` already has for
     # export/regenerate.
     retryable: bool
+    # 1-based position among the project's other `queued` runs; `null` once
+    # this run is `running` or terminal (issue #134). Populated by the
+    # router from `RunService.queue_position`, not derived here - unlike
+    # `resumable`/`retryable` this depends on sibling rows, not anything
+    # `run_to_schema` can compute from `run` alone.
+    queue_position: int | None = None
     started_by_id: uuid.UUID | None = None
     started_by_name: str | None = None
 
@@ -146,7 +152,7 @@ def _resumable_and_retryable(run: RunDomain) -> tuple[bool, bool]:
     return Path(run.work_dir).is_dir(), retry_blocker(run) is None
 
 
-async def run_to_schema(run: RunDomain) -> Run:
+async def run_to_schema(run: RunDomain, *, queue_position: int | None = None) -> Run:
     # Off the event loop (issue #55): `Path.is_dir()` is a `stat(2)` against
     # the shared `runs_data` volume, done once per run in a list response -
     # cheap on a healthy local disk, but still a blocking syscall issued
@@ -174,6 +180,7 @@ async def run_to_schema(run: RunDomain) -> Run:
         finished_at=run.finished_at,
         resumable=resumable,
         retryable=retryable,
+        queue_position=queue_position,
         started_by_id=run.started_by,
         started_by_name=run.started_by_name,
     )

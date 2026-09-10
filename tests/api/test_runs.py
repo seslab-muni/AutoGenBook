@@ -97,12 +97,29 @@ async def test_create_run_404_for_missing_project(authed_client: AsyncClient) ->
     assert response.status_code == 404
 
 
-async def test_create_run_409_when_project_already_has_active_run(authed_client: AsyncClient) -> None:
+async def test_create_run_202_and_queued_when_project_already_has_a_queued_run(
+    authed_client: AsyncClient,
+) -> None:
+    """Issue #134: a project may hold several `queued` `full` runs at once
+    now - only `uq_runs_project_running`/the queue's own admission cap
+    still gate it, not "one active run per project"."""
     project = await _create_project(authed_client)
-    await _create_run(authed_client, project["id"])
+    first = await _create_run(authed_client, project["id"])
+    assert first["queuePosition"] == 1
+
+    second = await _create_run(authed_client, project["id"])
+    assert second["queuePosition"] == 2
+
+
+async def test_create_run_409_once_the_project_queue_is_full(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    # Default MAX_QUEUED_RUNS_PER_PROJECT is 5.
+    for _ in range(5):
+        await _create_run(authed_client, project["id"])
 
     response = await authed_client.post(f"/api/v1/projects/{project['id']}/runs", json={})
     assert response.status_code == 409
+    assert "queue is full" in response.json()["detail"]
 
 
 async def test_create_run_rejects_legacy_tex_with_markdown_output(authed_client: AsyncClient) -> None:

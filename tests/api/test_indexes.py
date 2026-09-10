@@ -53,3 +53,12 @@ def test_runs_table_declares_work_dir_index() -> None:
     # issue #124: `RunRepository.list_by_work_dir` (`RunService.retry`'s
     # succeeded-sibling guard) filters on `work_dir` by equality.
     assert "ix_runs_work_dir" in _index_names("runs")
+
+
+def test_runs_table_declares_project_running_index_not_active() -> None:
+    # Issue #134: `uq_runs_project_active` (queued-or-running) was replaced
+    # by `uq_runs_project_running` (running only) so a project can hold
+    # several queued runs at once.
+    names = _index_names("runs")
+    assert "uq_runs_project_running" in names
+    assert "uq_runs_project_active" not in names

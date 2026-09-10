@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     # that happens to attach the same source file (see `rag_kb.py`'s extraction cache).
     kb_extract_cache_dir: str = Field(default="/app/kb_cache", alias="KB_EXTRACT_CACHE_DIR")
 
+    # Issue #134: caps how many `queued` runs one project may hold at once -
+    # `queue_admission_blocker` (`api/application/runs.py`) is the only
+    # enforcement point; there is no schema-level backstop for this cap the
+    # way `uq_runs_project_running` backstops "one running run per project",
+    # since queueing several runs for one project is the whole point of the
+    # feature, not a race to prevent.
+    max_queued_runs_per_project: int = Field(default=5, alias="MAX_QUEUED_RUNS_PER_PROJECT")
+
     worker_concurrency: int = Field(default=1, alias="WORKER_CONCURRENCY")
     worker_poll_interval_s: float = Field(default=2.0, alias="WORKER_POLL_INTERVAL_S")
     worker_stale_s: int = Field(default=300, alias="WORKER_STALE_S")
