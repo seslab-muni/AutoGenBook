@@ -37,7 +37,7 @@ export const MOCK_USER_PASSWORD = 'correcthorsebatterystaple';
 /** Every seeded project's `llmModel` and the `GET /system/models`/`ModelSelect` fallback default (issue #128) — mirrors the CLI's own `openrouter_llm.py:default_model_name` fallback. */
 export const DEFAULT_MOCK_LLM_MODEL = 'openai/gpt-5-mini';
 
-/** `GET /system/models`'s mock catalog — enough variety to exercise `ModelSelect`'s datalist. */
+/** `GET /system/models`'s mock catalog — enough variety to exercise `ModelSelect`'s combobox. */
 export const MOCK_MODELS: { id: string; name: string | null }[] = [
   { id: 'openai/gpt-5-mini', name: 'GPT-5 mini' },
   { id: 'openai/gpt-5', name: 'GPT-5' },
