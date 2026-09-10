@@ -19,6 +19,9 @@ export interface ProjectFormValues {
   maxOutlineLevels: number;
   doConsiderOutline: boolean;
   doConsiderPreviousSections: boolean;
+  /** Empty string on a brand-new (not-yet-created) project — the server resolves the deployment
+   *  default at creation time, so the wizard never needs to know it up front. */
+  llmModel: string;
 }
 
 export const DEFAULT_PROJECT_FORM_VALUES: ProjectFormValues = {
@@ -33,6 +36,7 @@ export const DEFAULT_PROJECT_FORM_VALUES: ProjectFormValues = {
   maxOutlineLevels: 3,
   doConsiderOutline: true,
   doConsiderPreviousSections: true,
+  llmModel: '',
 };
 
 export function projectToFormValues(project: Project): ProjectFormValues {
@@ -48,6 +52,7 @@ export function projectToFormValues(project: Project): ProjectFormValues {
     maxOutlineLevels: project.maxOutlineLevels,
     doConsiderOutline: project.doConsiderOutline,
     doConsiderPreviousSections: project.doConsiderPreviousSections,
+    llmModel: project.llmModel,
   };
 }
 
@@ -81,6 +86,10 @@ function sharedFields(values: ProjectFormValues) {
     maxOutlineLevels: values.maxOutlineLevels,
     doConsiderOutline: values.doConsiderOutline,
     doConsiderPreviousSections: values.doConsiderPreviousSections,
+    // Omitted (not sent as `""`) when blank — the server rejects a blank `llmModel` (it must be
+    // non-empty when present at all) and, on create, resolving it from the deployment default is
+    // exactly what an unset wizard field should do anyway.
+    ...(values.llmModel.trim() ? { llmModel: values.llmModel.trim() } : {}),
   };
 }
 

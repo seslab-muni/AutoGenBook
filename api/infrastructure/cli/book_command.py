@@ -196,6 +196,11 @@ def build_command(
     # Content-hash-keyed cache of extracted (pre-chunking) document text, shared across
     # every run/project on this deployment; see `rag_kb.py`'s `extract_cache_dir`.
     env["AUTOGENBOOK_KB_EXTRACT_CACHE_DIR"] = settings.kb_extract_cache_dir
+    # Issue #128: per-project/per-run model selection - this run's own resolved
+    # `options.llm_model` always wins over whatever `AUTOGENBOOK_LLM_MODEL` the ENV_ALLOWLIST
+    # loop above may have copied from the parent (API/worker) process's environment.
+    if options.llm_model:
+        env["AUTOGENBOOK_LLM_MODEL"] = options.llm_model
     if author.strip():
         # Issue #78: `project.authors` was never reaching the CLI -
         # `book_pipeline.py` only ever reads `g.graph["author"]` (empty for a

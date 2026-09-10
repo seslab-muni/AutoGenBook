@@ -1,6 +1,7 @@
 import type { AudienceLevel, OutputFormat } from '@/api/types';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { ModelSelect } from '@/components/model-select';
 import {
   Select,
   SelectContent,
@@ -121,6 +122,18 @@ export function ProjectFormFields({ values, onChange, idPrefix }: ProjectFormFie
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs font-semibold text-foreground" htmlFor={`${idPrefix}-model`}>
+          LLM model
+        </label>
+        <ModelSelect
+          id={`${idPrefix}-model`}
+          value={values.llmModel}
+          onChange={(value) => onChange({ llmModel: value })}
+          placeholder="Deployment default"
+        />
       </div>
 
       <div className="grid grid-cols-3 gap-3">

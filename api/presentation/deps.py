@@ -10,11 +10,12 @@ from api.application.auth import AuthService
 from api.application.files import FileService
 from api.application.outline import OutlineService
 from api.application.runs import RunService
+from api.application.system import SystemService
 from api.core.db import get_session
 from api.core.errors import Forbidden, Unauthorized
 from api.core.settings import Settings, get_settings
 from api.domain.models import User
-from api.domain.ports import FileStorage
+from api.domain.ports import FileStorage, ModelCatalog
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
@@ -24,6 +25,7 @@ from api.infrastructure.db.run_repository import (
     SqlAlchemyRunRepository,
 )
 from api.infrastructure.db.user_repository import SqlAlchemyUserRepository
+from api.infrastructure.llm.model_catalog import CachingModelCatalog, UrllibModelCatalog
 from api.infrastructure.storage.s3 import S3FileStorage
 
 # Requests with one of these methods carry no state-changing intent, so the
@@ -76,6 +78,20 @@ async def require_csrf_header(request: Request) -> None:
 @lru_cache
 def get_file_storage() -> FileStorage:
     return S3FileStorage(get_settings())
+
+
+@lru_cache
+def get_model_catalog() -> ModelCatalog:
+    """A process-wide singleton (same pattern as `get_file_storage` above) so
+    `CachingModelCatalog`'s ~5-minute cache is actually shared across requests instead of each
+    getting a fresh, empty one from a per-request dependency."""
+    return CachingModelCatalog(UrllibModelCatalog(get_settings()))
+
+
+def get_system_service(
+    catalog: ModelCatalog = Depends(get_model_catalog),
+) -> SystemService:
+    return SystemService(catalog)
 
 
 def get_file_service(

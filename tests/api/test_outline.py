@@ -253,6 +253,7 @@ def _domain_project_for_outline_repo_test():
         output_format=OutputFormat.MARKDOWN,
         max_outline_levels=3,
         additional_requirements=None,
+        llm_model="openai/gpt-5-mini",
         last_run_id=None,
         created_at=now,
         updated_at=now,

@@ -80,6 +80,7 @@ def create_app() -> FastAPI:
     guarded_router.include_router(sources.router)
     guarded_router.include_router(outline.router)
     guarded_router.include_router(runs.router)
+    guarded_router.include_router(system.guarded_router)
 
     app.include_router(public_router)
     app.include_router(guarded_router)

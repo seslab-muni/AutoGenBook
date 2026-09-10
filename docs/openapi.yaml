@@ -1265,6 +1265,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/system/models:
+    get:
+      tags:
+      - system
+      summary: List Models
+      operationId: system-list_models
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+      security:
+      - cookieAuth: []
 components:
   schemas:
     ArtifactKind:
@@ -1467,6 +1482,46 @@ components:
       - formal_proof
       - applied
       title: MathLevel
+    ModelInfo:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+      type: object
+      required:
+      - id
+      title: ModelInfo
+    ModelList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ModelInfo'
+          type: array
+          title: Items
+        warning:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Warning
+      type: object
+      required:
+      - items
+      title: ModelList
+      description: '`GET /api/v1/system/models`''s response. `warning` is set (and
+        `items` empty) when the
+
+        configured LLM endpoint''s model list couldn''t be fetched - degrades gracefully
+        instead of a
+
+        5xx (issue #128), so callers should still render a picker (falling back to
+        free text) rather
+
+        than treat this as a hard error.'
     NodeStatus:
       type: string
       enum:
@@ -2118,6 +2173,9 @@ components:
           - type: string
           - type: 'null'
           title: Additionalrequirements
+        llmModel:
+          type: string
+          title: Llmmodel
         sources:
           items:
             $ref: '#/components/schemas/Source'
@@ -2156,6 +2214,7 @@ components:
       - doConsiderPreviousSections
       - outputFormat
       - maxOutlineLevels
+      - llmModel
       - createdAt
       - updatedAt
       title: Project
@@ -2215,6 +2274,12 @@ components:
           - type: string
           - type: 'null'
           title: Additionalrequirements
+        llmModel:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Llmmodel
         sources:
           anyOf:
           - items:
@@ -2377,6 +2442,12 @@ components:
           - type: string
           - type: 'null'
           title: Additionalrequirements
+        llmModel:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Llmmodel
       additionalProperties: false
       type: object
       title: ProjectUpdate
@@ -2636,6 +2707,12 @@ components:
           type: boolean
           title: Failfastschema
           default: false
+        llmModel:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Llmmodel
       additionalProperties: false
       type: object
       title: RunOptionsIn
@@ -2720,6 +2797,9 @@ components:
           - type: string
           - type: 'null'
           title: Promptmodifier
+        llmModel:
+          type: string
+          title: Llmmodel
       type: object
       required:
       - outline
@@ -2733,6 +2813,7 @@ components:
       - failFastSchema
       - resume
       - exportTexOnly
+      - llmModel
       title: RunOptionsOut
     RunStatus:
       type: string

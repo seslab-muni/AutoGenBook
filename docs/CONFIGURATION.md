@@ -133,3 +133,18 @@ See `docs/API_REFERENCE.md` for the full CLI reference. (`docs/API_REFERENCE.md`
 ## Web service (`api`/`worker`) configuration
 
 The tables above cover the CLI (`main.py`) itself. The separate FastAPI service and generation worker under `api/` have their own configuration surface (`api/core/settings.py:Settings`, environment-variable driven, injected by `docker-compose.yml`'s `x-app-env`/`worker` blocks and sourced from `.env`/`.env.example`) plus a test-only `TEST_DATABASE_URL` and Alembic's `DATABASE_URL`-driven migrations. It reuses several of the CLI variables above (`OPENROUTER_API_KEY`, `AUTOGENBOOK_LLM_*`, `TAVILY_API_KEY`, `MCP_GATEWAY_ENABLE`, `AUTOGENBOOK_KB_OCR*`) by passing them through to the CLI subprocess the worker launches. See `docs/OPERATIONS.md` for the full `api`/`worker` variable list and `docs/DEVELOPER_GUIDE.md` for the `pytest`/Alembic workflow.
+
+**`AUTOGENBOOK_LLM_MODEL` on the web stack (issue #128):** unlike every other CLI variable this
+reuses verbatim, this one is now only a deployment-wide *default*, not a value the worker forwards
+into every run unchanged. `ProjectService.create` reads it (falling back to `openai/gpt-5-mini` if
+also unset) exactly once, to initialize a new project's own `llmModel` column - from then on that
+column, and optionally a per-run `llmModel` override (`POST /projects/{id}/runs`), is what
+`api/infrastructure/cli/book_command.py:build_command` actually sets `AUTOGENBOOK_LLM_MODEL` to in
+the CLI subprocess env, regardless of what this variable is set to on the `api`/`worker`
+containers. Changing it after projects already exist only affects *new* projects going forward.
+The web UI's model pickers (project settings, start-run dialog) are fed by
+`GET /api/v1/system/models`, which queries the same endpoint `AUTOGENBOOK_LLM_BASE_URL`/
+`OPENROUTER_BASE_URL` points at for its available models. `AUTOGENBOOK_LLM_MINI_MODEL`/
+`AUTOGENBOOK_FORCE_MINI_MODEL` are unaffected by any of this - they stay a CLI-only,
+deployment-level knob the API/UI don't expose; a user who wants a cheap run simply picks a
+cheap model in the picker instead.

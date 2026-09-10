@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from api.core.errors import Conflict, NotFound, ValidationFailed
+from api.core.settings import Settings, default_llm_model
 from api.domain.models import OutputFormat, Project, ProjectSummary, TargetAudience
 from api.domain.outline import max_depth
 from api.domain.ports import OutlineRepository, ProjectRepository, RunRepository
@@ -16,10 +17,12 @@ class ProjectService:
         repository: ProjectRepository,
         run_repository: RunRepository,
         outline_repository: OutlineRepository,
+        settings: Settings,
     ) -> None:
         self._repository = repository
         self._run_repository = run_repository
         self._outline_repository = outline_repository
+        self._settings = settings
 
     async def create(
         self,
@@ -37,8 +40,14 @@ class ProjectService:
         output_format: OutputFormat,
         max_outline_levels: int,
         additional_requirements: str | None,
+        llm_model: str | None = None,
     ) -> Project:
         now = datetime.now(timezone.utc)
+        # Issue #128: a project always has a concrete `llm_model` - if the caller
+        # (`ProjectCreate.llmModel`) didn't supply one, it's initialized from the deployment's
+        # `AUTOGENBOOK_LLM_MODEL` (or the hardcoded fallback) *once*, here. From then on this
+        # column - never the env var - is what every run for this project resolves against.
+        resolved_llm_model = (llm_model or "").strip() or default_llm_model(self._settings)
         project = Project(
             id=uuid.uuid4(),
             owner_id=owner_id,
@@ -54,6 +63,7 @@ class ProjectService:
             output_format=output_format,
             max_outline_levels=max_outline_levels,
             additional_requirements=additional_requirements,
+            llm_model=resolved_llm_model,
             last_run_id=None,
             created_at=now,
             updated_at=now,
@@ -158,6 +168,9 @@ class ProjectService:
             output_format=source.output_format,
             max_outline_levels=source.max_outline_levels,
             additional_requirements=source.additional_requirements,
+            # The original's model, not the deployment default (issue #128) - a duplicate is a
+            # copy of everything about the source project, `llm_model` included.
+            llm_model=source.llm_model,
             last_run_id=None,
             created_at=now,
             updated_at=now,

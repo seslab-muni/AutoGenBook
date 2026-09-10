@@ -339,6 +339,7 @@ async def test_legacy_project_without_owner_renders_null_owner_name(
             output_format=OutputFormat.MARKDOWN,
             max_outline_levels=3,
             additional_requirements=None,
+            llm_model="openai/gpt-5-mini",
         )
         session.add(record)
         await session.commit()

@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from api.application import graph_import
 from api.application.book_spec import SpecRenderer, StructureBuilder
 from api.core.errors import Conflict, NotFound, ValidationFailed
-from api.core.settings import Settings
+from api.core.settings import Settings, default_llm_model
 from api.domain.models import (
     File,
     NodeStatus,
@@ -119,7 +119,19 @@ class RunService:
         run = await self._runs.get(run_id)
         if run is None:
             raise NotFound(f"run {run_id} does not exist")
-        return run
+        return await self._fill_llm_model(run)
+
+    async def _fill_llm_model(self, run: Run) -> Run:
+        """Backfills `run.options.llm_model` for a row persisted before that field existed
+        (issue #128) - `_run_options_from_json`'s dataclass-default tolerance leaves it `None`
+        on those, but `RunOptionsOut.llmModel` is a required string on the wire. Falls back to
+        the run's own project's current `llm_model`, or the deployment default if the project is
+        gone too - never mutates the stored row, just what a read of it reports."""
+        if run.options.llm_model:
+            return run
+        project = await self._projects.get(run.project_id)
+        fallback = project.llm_model if project is not None else default_llm_model(self._settings)
+        return dataclass_replace(run, options=dataclass_replace(run.options, llm_model=fallback))
 
     async def create(
         self,
@@ -133,6 +145,7 @@ class RunService:
         audit_book_mode: Literal["off", "warn", "strict"] = "warn",
         legacy_tex: bool = False,
         fail_fast_schema: bool = False,
+        llm_model: str | None = None,
         started_by: uuid.UUID | None = None,
     ) -> Run:
         project = await self._projects.get(project_id)
@@ -166,6 +179,10 @@ class RunService:
                 "against the LaTeX build, which a markdown-only run never produces)"
             )
 
+        # Resolution order (issue #128): the request's own `llmModel`, else the project's -
+        # `project.llm_model` is never `None` (see `Project.llm_model`'s docstring), so this is
+        # always a concrete model id, persisted on the run's own `options` from here on.
+        resolved_llm_model = (llm_model or "").strip() or project.llm_model
         options = RunOptions(
             outline=outline,
             output_format=resolved_output_format,
@@ -175,6 +192,7 @@ class RunService:
             audit_book_mode=audit_book_mode,
             legacy_tex=legacy_tex,
             fail_fast_schema=fail_fast_schema,
+            llm_model=resolved_llm_model,
         )
 
         run_id = uuid.uuid4()
@@ -230,7 +248,8 @@ class RunService:
     ) -> tuple[list[Run], int]:
         if await self._projects.get(project_id) is None:
             raise NotFound(f"project {project_id} does not exist")
-        return await self._runs.list(project_id, limit, offset)
+        runs, total = await self._runs.list(project_id, limit, offset)
+        return [await self._fill_llm_model(run) for run in runs], total
 
     async def cancel(self, run_id: uuid.UUID) -> Run:
         run = await self._get(run_id)
@@ -274,7 +293,10 @@ class RunService:
         # Else: still `running` (a worker holds it) - `cancel_requested` is
         # now set, and the worker's own drain loop/`_finalize` will notice
         # and wind it down; there's nothing more for the API to do here.
-        return saved
+        # `request_cancel` reads straight from the repository, bypassing `_get`'s backfill
+        # above - fill it here too so a legacy run's `llmModel` is never `null` on this
+        # response either.
+        return await self._fill_llm_model(saved)
 
     async def events(
         self, run_id: uuid.UUID, *, after_seq: int, limit: int
@@ -410,6 +432,10 @@ class RunService:
             resume=True,
             outline=base_run.options.outline,
             prompt_modifier=prompt_modifier,
+            # `base_run.options.llm_model` is only ever `None` for a run that predates issue
+            # #128 - fall back to the project's current model rather than carrying `None`
+            # forward onto this new run's own persisted options.
+            llm_model=base_run.options.llm_model or project.llm_model,
         )
         run = Run(
             id=uuid.uuid4(),
@@ -462,6 +488,10 @@ class RunService:
                 f"status={active.status.value})"
             )
 
+        project = await self._projects.get(base_run.project_id)
+        fallback_llm_model = (
+            project.llm_model if project is not None else default_llm_model(self._settings)
+        )
         now = datetime.now(timezone.utc)
         options = dataclass_replace(
             base_run.options,
@@ -469,6 +499,7 @@ class RunService:
             export_tex_only=True,
             output_format=output_format,
             prompt_modifier=None,
+            llm_model=base_run.options.llm_model or fallback_llm_model,
         )
         run = Run(
             id=uuid.uuid4(),
@@ -555,7 +586,11 @@ class RunService:
 
         now = datetime.now(timezone.utc)
         options = dataclass_replace(
-            run.options, resume=True, export_tex_only=False, prompt_modifier=None
+            run.options,
+            resume=True,
+            export_tex_only=False,
+            prompt_modifier=None,
+            llm_model=run.options.llm_model or project.llm_model,
         )
         new_run = Run(
             id=uuid.uuid4(),
@@ -841,8 +876,18 @@ class GenerationService:
                 await self._prepare_export(run)
             else:  # pragma: no cover - exhaustive over RunKind
                 raise ValueError(f"unknown run kind: {run.kind!r}")
+            # `run.options.llm_model` is only ever unset for a run row persisted before issue
+            # #128 (`_run_options_from_json`'s dataclass-default tolerance) - fall back to the
+            # project's current model rather than letting `book_command.build_command` see
+            # `None` and leave whatever `AUTOGENBOOK_LLM_MODEL` the worker process happened to
+            # inherit unset for this run.
+            effective_options = (
+                run.options
+                if run.options.llm_model
+                else dataclass_replace(run.options, llm_model=project.llm_model)
+            )
             argv, env, cwd = book_command.build_command(
-                run.work_dir, run.options, self._settings, author=", ".join(project.authors)
+                run.work_dir, effective_options, self._settings, author=", ".join(project.authors)
             )
             exit_code, timed_out = await self._run_subprocess_and_drain(
                 run, argv, env, cwd, shutdown_event=shutdown_event

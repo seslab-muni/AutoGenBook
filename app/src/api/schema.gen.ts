@@ -442,6 +442,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Models */
+        get: operations["system-list_models"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -553,6 +570,26 @@ export interface components {
          * @enum {string}
          */
         MathLevel: "introductory" | "rigorous" | "formal_proof" | "applied";
+        /** ModelInfo */
+        ModelInfo: {
+            /** Id */
+            id: string;
+            /** Name */
+            name?: string | null;
+        };
+        /**
+         * ModelList
+         * @description `GET /api/v1/system/models`'s response. `warning` is set (and `items` empty) when the
+         *     configured LLM endpoint's model list couldn't be fetched - degrades gracefully instead of a
+         *     5xx (issue #128), so callers should still render a picker (falling back to free text) rather
+         *     than treat this as a hard error.
+         */
+        ModelList: {
+            /** Items */
+            items: components["schemas"]["ModelInfo"][];
+            /** Warning */
+            warning?: string | null;
+        };
         /**
          * NodeStatus
          * @enum {string}
@@ -889,6 +926,8 @@ export interface components {
             maxOutlineLevels: number;
             /** Additionalrequirements */
             additionalRequirements?: string | null;
+            /** Llmmodel */
+            llmModel: string;
             /** Sources */
             sources?: components["schemas"]["Source"][];
             /** Outline */
@@ -947,6 +986,8 @@ export interface components {
             maxOutlineLevels?: number;
             /** Additionalrequirements */
             additionalRequirements?: string | null;
+            /** Llmmodel */
+            llmModel?: string | null;
             /** Sources */
             sources?: components["schemas"]["SourceCreate"][] | null;
             /** Outline */
@@ -1015,6 +1056,8 @@ export interface components {
             maxOutlineLevels?: number | null;
             /** Additionalrequirements */
             additionalRequirements?: string | null;
+            /** Llmmodel */
+            llmModel?: string | null;
         };
         /**
          * RegenerateRequestIn
@@ -1187,6 +1230,8 @@ export interface components {
              * @default false
              */
             failFastSchema?: boolean;
+            /** Llmmodel */
+            llmModel?: string | null;
         };
         /** RunOptionsOut */
         RunOptionsOut: {
@@ -1223,6 +1268,8 @@ export interface components {
             exportTexOnly: boolean;
             /** Promptmodifier */
             promptModifier?: string | null;
+            /** Llmmodel */
+            llmModel: string;
         };
         /**
          * RunStatus
@@ -2543,6 +2590,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "system-list_models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelList"];
                 };
             };
         };

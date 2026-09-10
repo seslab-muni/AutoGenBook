@@ -11,6 +11,7 @@ from api.application.outline import OutlineService
 from api.application.projects import ProjectService
 from api.application.sources import SourceService
 from api.core.db import get_session
+from api.core.settings import Settings, get_settings
 from api.domain.models import Project as ProjectDomain
 from api.domain.models import User
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
@@ -33,11 +34,15 @@ from api.presentation.schemas.spec import BookStructure
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-def get_project_service(session: AsyncSession = Depends(get_session)) -> ProjectService:
+def get_project_service(
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ProjectService:
     return ProjectService(
         SqlAlchemyProjectRepository(session),
         SqlAlchemyRunRepository(session),
         SqlAlchemyOutlineRepository(session),
+        settings,
     )
 
 
@@ -70,6 +75,7 @@ async def _to_schema(
         output_format=project.output_format,
         max_outline_levels=project.max_outline_levels,
         additional_requirements=project.additional_requirements,
+        llm_model=project.llm_model,
         sources=[source_to_schema(source, file) for source, file in rows],
         outline=outline,
         last_run_id=project.last_run_id,
