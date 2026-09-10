@@ -33,18 +33,53 @@ function scheduleFakeRunStep(callback: () => void, delayMs: number): void {
   pendingTimers.add(timer);
 }
 
+function isProjectBusy(projectId: string): boolean {
+  return [...db.runs.values()].some(
+    (run) => run.projectId === projectId && run.status === 'running',
+  );
+}
+
+const TERMINAL_STATUSES = new Set<Run['status']>(['succeeded', 'failed', 'cancelled']);
+
 /**
- * Drives a queued `Run` through `queued -> running -> succeeded`, emitting
- * `stage`/`log`/`section`/`done` events like the real worker + CLI would
- * (`api/worker`, `autogenbook/orchestrator.py`), and mutates the target
- * node's content/status on a `regenerate_section` run. Fire-and-forget:
- * callers observe progress via `db.onRunEvent` / polling `db.runEvents`.
+ * Starts `projectId`'s oldest still-`queued` run if the project's single running slot is free
+ * (issue #134: one running run per project, `db.runs` iterates in creation order so the first
+ * match is the oldest by `queuedAt`) — a no-op otherwise. Called once, 300ms after a run is
+ * created (`driveFakeRun`), and again whenever a run leaves the running state (finishes here, or
+ * is cancelled directly by `handlers.ts`'s cancel handler), so the lane's FIFO keeps draining on
+ * its own the way `SqlAlchemyRunQueue.claim`'s per-project gate does against the real queue.
+ */
+export function claimNextQueued(projectId: string): void {
+  if (isProjectBusy(projectId)) return;
+  const next = [...db.runs.values()].find(
+    (run) => run.projectId === projectId && run.status === 'queued',
+  );
+  if (next) startRun(next.id);
+}
+
+/**
+ * Schedules `runId`'s project lane to be (re-)checked shortly after `runId` is created — it
+ * starts immediately if the lane is free, or stays `queued` until `claimNextQueued` picks it up
+ * once whatever's running finishes. Fire-and-forget: callers observe progress via
+ * `db.onRunEvent` / polling `db.runEvents`.
  */
 export function driveFakeRun(runId: string): void {
   const run = db.runs.get(runId);
   if (!run) return;
+  scheduleFakeRunStep(() => claimNextQueued(run.projectId), 300);
+}
 
-  const timeline = buildTimeline(run);
+/**
+ * Drives a just-claimed `Run` through `running -> succeeded`, emitting
+ * `stage`/`log`/`section`/`done` events like the real worker + CLI would
+ * (`api/worker`, `autogenbook/orchestrator.py`), and mutates the target
+ * node's content/status on a `regenerate_section` run. Claims the project's
+ * next queued run (if any) once this one reaches a terminal status.
+ */
+function startRun(runId: string): void {
+  const claimed = db.runs.get(runId);
+  if (!claimed) return;
+  const timeline = buildTimeline(claimed);
   let index = 0;
 
   function step(): void {
@@ -65,6 +100,9 @@ export function driveFakeRun(runId: string): void {
         totalTokens: entry.status === 'succeeded' ? 128_450 : run.totalTokens,
         totalCostUsd: entry.status === 'succeeded' ? 1.82 : run.totalCostUsd,
       });
+      if (TERMINAL_STATUSES.has(entry.status)) {
+        claimNextQueued(run.projectId);
+      }
     }
 
     if (entry.event) {
@@ -87,7 +125,7 @@ export function driveFakeRun(runId: string): void {
     }
   }
 
-  scheduleFakeRunStep(step, 300);
+  scheduleFakeRunStep(step, 0);
 }
 
 interface TimelineEntry {

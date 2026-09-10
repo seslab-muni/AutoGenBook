@@ -13,7 +13,7 @@ import { useUiStore } from '@/stores/ui-store';
 
 import { CopilotPanel } from './copilot-panel';
 
-// See `use-run-stream.test.ts` for why SSE is mocked wherever `useRunStream`/`useActiveRun` mount.
+// See `use-run-stream.test.ts` for why SSE is mocked wherever `useRunStream`/`useProjectRuns` mount.
 vi.mock('@/api/sse', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/sse')>();
   return { ...actual, subscribeRunEvents: vi.fn() };

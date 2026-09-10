@@ -1,6 +1,6 @@
 import { http, HttpResponse, sse } from 'msw';
 
-import { driveFakeRun } from './fakeRun';
+import { claimNextQueued, driveFakeRun } from './fakeRun';
 import { db, stripProjectId, type ProjectRow } from './db';
 import { DEFAULT_MOCK_LLM_MODEL, MOCK_MODELS, MOCK_USER, MOCK_USER_PASSWORD } from './fixtures';
 import { notFound, problemResponse } from './problem';
@@ -38,10 +38,47 @@ function paginate<T>(items: T[], url: URL): Page<T> {
   return { items: items.slice(offset, offset + limit), total: items.length, limit, offset };
 }
 
-function hasActiveRun(projectId: string): boolean {
-  return [...db.runs.values()].some(
+/** `Settings.max_queued_runs_per_project`'s mock-side default (`api/core/settings.py`). */
+const MAX_QUEUED_RUNS_PER_PROJECT = 5;
+
+/** Every queued-or-running run for `projectId`, oldest first — `db.runs` (a `Map`) iterates in
+ * insertion/creation order, which tracks `queuedAt` closely enough for the mock's own ordering
+ * to never need a timestamp comparison (and the ties one risks under fast, synchronous test
+ * `POST`s). Mirrors `RunRepository.list_active_for_project`. */
+function laneRunsFor(projectId: string): Run[] {
+  return [...db.runs.values()].filter(
     (run) => run.projectId === projectId && (run.status === 'queued' || run.status === 'running'),
   );
+}
+
+/** Mirrors `queue_admission_blocker` (`api/application/runs.py`, issue #134) so the mock's
+ * admission rules can't drift from the real API's — the 409 reason a new run should be refused
+ * given its project's current lane, or `null` if admission is allowed. `blockedByFullRun`: `true`
+ * for `regenerate`/`export`/`retry` (relative to a fixed base work dir/`project.lastRunId` a
+ * later `full` run would rewrite out from under them), `false` for `create`'s own `full` run
+ * (always reads the project/outline fresh when it starts, so it's never blocked by the lane,
+ * only the cap). */
+function queueAdmissionBlocker(blockedByFullRun: boolean, lane: Run[]): string | null {
+  if (blockedByFullRun && lane.some((run) => run.kind === 'full')) {
+    return 'a full run is queued or running for this project; wait for it to finish or cancel it';
+  }
+  const queuedCount = lane.filter((run) => run.status === 'queued').length;
+  if (queuedCount >= MAX_QUEUED_RUNS_PER_PROJECT) {
+    return `project's run queue is full (${MAX_QUEUED_RUNS_PER_PROJECT} queued); wait for one to start or cancel one`;
+  }
+  return null;
+}
+
+/** 1-based position of `run` among its project's other `queued` runs, or `null` once it's
+ * running/terminal — computed on read rather than stored, mirroring `RunRepository.queue_position`.
+ * Every handler that returns a `Run` to the client goes through this. */
+function withQueuePosition(run: Run): Run {
+  if (run.status !== 'queued') return { ...run, queuePosition: null };
+  const queuedIds = [...db.runs.values()]
+    .filter((other) => other.projectId === run.projectId && other.status === 'queued')
+    .map((other) => other.id);
+  const position = queuedIds.indexOf(run.id);
+  return { ...run, queuePosition: position === -1 ? null : position + 1 };
 }
 
 const EXTENSION_KB_ELIGIBLE = new Set(['pdf', 'docx', 'pptx', 'md', 'txt']);
@@ -625,12 +662,16 @@ const outlineHandlers = [
           new URL(request.url).pathname,
         );
       }
-      if (hasActiveRun(projectId)) {
+      if (node.status === 'drafting') {
         return problemResponse(
           409,
-          'Project already has an active run',
+          `outline node ${node.id} already has a regenerate queued or running; wait for it to finish or cancel it`,
           new URL(request.url).pathname,
         );
+      }
+      const admissionBlocker = queueAdmissionBlocker(true, laneRunsFor(projectId));
+      if (admissionBlocker) {
+        return problemResponse(409, admissionBlocker, new URL(request.url).pathname);
       }
       const body = (await request.json().catch(() => ({}))) as RegenerateRequest;
       const runId = db.nextId();
@@ -674,7 +715,7 @@ const outlineHandlers = [
       db.runs.set(runId, run);
       db.outlineNodes.set(node.id, { ...node, status: 'drafting' });
       driveFakeRun(runId);
-      return HttpResponse.json(run, { status: 202 });
+      return HttpResponse.json(withQueuePosition(run), { status: 202 });
     },
   ),
 ];
@@ -687,21 +728,22 @@ const runHandlers = [
   http.get('*/api/v1/projects/:projectId/runs', ({ params, request }) => {
     const projectId = params.projectId as string;
     if (!db.projects.has(projectId)) return notFound('Project', new URL(request.url).pathname);
+    const url = new URL(request.url);
+    const statusFilter = url.searchParams.getAll('status');
     const runs = [...db.runs.values()]
       .filter((run) => run.projectId === projectId)
-      .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
-    return HttpResponse.json(paginate(runs, new URL(request.url)));
+      .filter((run) => statusFilter.length === 0 || statusFilter.includes(run.status))
+      .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt))
+      .map(withQueuePosition);
+    return HttpResponse.json(paginate(runs, url));
   }),
 
   http.post('*/api/v1/projects/:projectId/runs', async ({ params, request }) => {
     const projectId = params.projectId as string;
     if (!db.projects.has(projectId)) return notFound('Project', new URL(request.url).pathname);
-    if (hasActiveRun(projectId)) {
-      return problemResponse(
-        409,
-        'Project already has a queued or running run',
-        new URL(request.url).pathname,
-      );
+    const admissionBlocker = queueAdmissionBlocker(false, laneRunsFor(projectId));
+    if (admissionBlocker) {
+      return problemResponse(409, admissionBlocker, new URL(request.url).pathname);
     }
     const body = (await request.json().catch(() => ({}))) as RunOptionsIn;
     const runId = db.nextId();
@@ -722,8 +764,7 @@ const runHandlers = [
         failFastSchema: body.failFastSchema ?? false,
         resume: false,
         exportTexOnly: false,
-        llmModel:
-          body.llmModel ?? db.projects.get(projectId)?.llmModel ?? DEFAULT_MOCK_LLM_MODEL,
+        llmModel: body.llmModel ?? db.projects.get(projectId)?.llmModel ?? DEFAULT_MOCK_LLM_MODEL,
       },
       baseRunId: null,
       targetNodeId: null,
@@ -742,13 +783,13 @@ const runHandlers = [
     };
     db.runs.set(runId, run);
     driveFakeRun(runId);
-    return HttpResponse.json(run, { status: 202 });
+    return HttpResponse.json(withQueuePosition(run), { status: 202 });
   }),
 
   http.get('*/api/v1/runs/:runId', ({ params, request }) => {
     const run = db.runs.get(params.runId as string);
     if (!run) return notFound('Run', new URL(request.url).pathname);
-    return HttpResponse.json(run);
+    return HttpResponse.json(withQueuePosition(run));
   }),
 
   http.post('*/api/v1/runs/:runId/cancel', ({ params, request }) => {
@@ -763,6 +804,10 @@ const runHandlers = [
     }
     const cancelled: Run = { ...run, status: 'cancelled', finishedAt: db.now() };
     db.runs.set(run.id, cancelled);
+    // The lane's running slot may have just been freed (cancelling a `running` run) — let the
+    // next queued run in this project's lane claim it (issue #134); a no-op if `run` was only
+    // ever `queued` itself, or if the project's lane is still busy with something else.
+    claimNextQueued(run.projectId);
     db.publishRunEvent(run.id, 'done', {
       seq: db.nextSeq(run.id),
       ts: db.now(),
@@ -770,7 +815,7 @@ const runHandlers = [
       stage: '',
       message: 'Run cancelled.',
     });
-    return HttpResponse.json(cancelled, { status: 202 });
+    return HttpResponse.json(withQueuePosition(cancelled), { status: 202 });
   }),
 
   http.get('*/api/v1/runs/:runId/events', ({ params, request }) => {
@@ -823,12 +868,9 @@ const runHandlers = [
         new URL(request.url).pathname,
       );
     }
-    if (hasActiveRun(baseRun.projectId)) {
-      return problemResponse(
-        409,
-        'Project already has an active run',
-        new URL(request.url).pathname,
-      );
+    const exportsAdmissionBlocker = queueAdmissionBlocker(true, laneRunsFor(baseRun.projectId));
+    if (exportsAdmissionBlocker) {
+      return problemResponse(409, exportsAdmissionBlocker, new URL(request.url).pathname);
     }
     const body = (await request.json()) as ExportRequest;
     const runId = db.nextId();
@@ -864,7 +906,7 @@ const runHandlers = [
     };
     db.runs.set(runId, run);
     driveFakeRun(runId);
-    return HttpResponse.json(run, { status: 202 });
+    return HttpResponse.json(withQueuePosition(run), { status: 202 });
   }),
 
   http.post('*/api/v1/runs/:runId/retry', ({ params, request }) => {
@@ -893,12 +935,9 @@ const runHandlers = [
         new URL(request.url).pathname,
       );
     }
-    if (hasActiveRun(baseRun.projectId)) {
-      return problemResponse(
-        409,
-        'Project already has an active run',
-        new URL(request.url).pathname,
-      );
+    const retryAdmissionBlocker = queueAdmissionBlocker(true, laneRunsFor(baseRun.projectId));
+    if (retryAdmissionBlocker) {
+      return problemResponse(409, retryAdmissionBlocker, new URL(request.url).pathname);
     }
     const runId = db.nextId();
     const run: Run = {
@@ -922,7 +961,7 @@ const runHandlers = [
     };
     db.runs.set(runId, run);
     driveFakeRun(runId);
-    return HttpResponse.json(run, { status: 202 });
+    return HttpResponse.json(withQueuePosition(run), { status: 202 });
   }),
 ];
 

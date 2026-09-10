@@ -1,12 +1,15 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiClient, unwrap } from '@/api/client';
-import type { ArtifactKind, ExportRequest, Run, RunOptionsIn } from '@/api/types';
+import type { ArtifactKind, ExportRequest, Run, RunOptionsIn, RunStatus } from '@/api/types';
 
 import { projectKeys, runKeys } from './keys';
 
 export const runs = {
-  list: (projectId: string, params: { limit?: number; offset?: number } = {}) =>
+  list: (
+    projectId: string,
+    params: { limit?: number; offset?: number; status?: RunStatus[] } = {},
+  ) =>
     queryOptions({
       queryKey: [...projectKeys.runs(projectId), params],
       queryFn: () =>
@@ -21,9 +24,7 @@ export const runs = {
     queryOptions({
       queryKey: runKeys.detail(runId),
       queryFn: () =>
-        unwrap(
-          apiClient.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }),
-        ),
+        unwrap(apiClient.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } })),
     }),
 
   events: (runId: string, params: { afterSeq?: number; limit?: number } = {}) =>
@@ -93,7 +94,7 @@ export function useCreateRunMutation(projectId: string) {
  * Optimistically sets the run's cached `status` to `cancelled` (issue #21's `ConfirmDialog`
  * flow reads this back immediately rather than waiting on the response); rolls back on error
  * (e.g. a 409 because the run had already reached a terminal state). On success: syncs the
- * cache with the server's copy and invalidates the project's run list so `useActiveRun`
+ * cache with the server's copy and invalidates the project's run list so `useProjectRuns`
  * (which derives the active run from that list) stops treating this run as active right away,
  * rather than waiting for its next poll.
  */
@@ -144,7 +145,7 @@ export function useExportRunMutation(runId: string, projectId: string) {
  * Resumes a failed/cancelled full run from its existing work dir (issue #124): `POST
  * /runs/{id}/retry` creates a new `full` run sharing the old one's work directory. On success,
  * seeds the new run's detail cache directly (the caller navigates straight there) and
- * invalidates the project's run list and detail so `useActiveRun`'s poll picks up the new
+ * invalidates the project's run list and detail so `useProjectRuns`'s poll picks up the new
  * active run right away, the same as `useCreateRunMutation`.
  */
 export function useRetryRunMutation(projectId: string) {

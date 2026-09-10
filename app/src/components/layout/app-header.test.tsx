@@ -8,7 +8,7 @@ import * as session from '@/auth/session';
 import { useUiStore } from '@/stores/ui-store';
 import { renderRouterApp } from '@/test/router-test-utils';
 
-// The project layout mounts `useActiveRun` (hence `useRunStream`) unconditionally now that
+// The project layout mounts `useProjectRuns` (hence `useRunStream`) unconditionally now that
 // issue #21 wires it up - mocked here for the reasons in `use-run-stream.test.ts`.
 vi.mock('@/api/sse', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/sse')>();
@@ -75,7 +75,7 @@ describe('AppHeader project switcher', () => {
 });
 
 describe('AppHeader run state machine', () => {
-  it('shows Running… with a cancel action once a run is queued, and Run again once cancelled', async () => {
+  it('stays "Run" while a run is only queued, then shows "Generating…" once it starts (issue #134)', async () => {
     const user = userEvent.setup();
     renderRouterApp('/p/book-consensus-quantum-2026');
     await screen.findByRole('heading', { name: /Distributed Consensus/i });
@@ -87,14 +87,44 @@ describe('AppHeader run state machine', () => {
     await waitFor(() =>
       expect(screen.queryByRole('heading', { name: 'Start a run' })).not.toBeInTheDocument(),
     );
-    expect(await screen.findByRole('button', { name: /Queued…/i })).toBeInTheDocument();
+    // Nothing is running yet (the mock worker claims it off the queue ~300ms in) — the header
+    // still shows a plain, clickable "Run" rather than treating a merely-queued run as busy.
+    expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /Queued…/i }));
-    await user.click(screen.getByRole('menuitem', { name: /cancel run/i }));
-    await user.click(screen.getByRole('button', { name: 'Cancel run' }));
+    // The generous timeout here is real-timer CI-jitter headroom (see `export-dialog.test.tsx`'s
+    // note on the same class of test), not the nominal time this takes.
+    expect(
+      await screen.findByRole('button', { name: /Generating…/i }, { timeout: 10000 }),
+    ).toBeInTheDocument();
+  }, 15000);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument());
-  });
+  it('queues a second run from the "Generating…" menu and reflects it in the queued count', async () => {
+    const user = userEvent.setup();
+    renderRouterApp('/p/book-consensus-quantum-2026');
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    await user.click(screen.getByRole('button', { name: 'Run' }));
+    await screen.findByRole('heading', { name: 'Start a run' });
+    await user.click(screen.getByRole('button', { name: 'Start run' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Start a run' })).not.toBeInTheDocument(),
+    );
+    await screen.findByRole('button', { name: /Generating…/i }, { timeout: 10000 });
+
+    await user.click(screen.getByRole('button', { name: /Generating…/i }));
+    await user.click(screen.getByRole('menuitem', { name: /queue another run/i }));
+    await screen.findByRole('heading', { name: 'Start a run' });
+    await user.click(screen.getByRole('button', { name: 'Start run' }));
+
+    expect(
+      await screen.findByRole('button', { name: /Generating…\s*·\s*1 queued/i }),
+    ).toBeInTheDocument();
+
+    // "View queue" opens the same run-history panel the header's own history icon does.
+    await user.click(screen.getByRole('button', { name: /Generating…/i }));
+    await user.click(screen.getByRole('menuitem', { name: /view queue/i }));
+    expect(await screen.findByRole('dialog', { name: /run history/i })).toBeInTheDocument();
+  }, 15000);
 });
 
 describe('AppHeader project owner', () => {

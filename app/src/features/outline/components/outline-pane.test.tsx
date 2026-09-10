@@ -10,7 +10,7 @@ import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 import { OutlinePane } from './outline-pane';
 import { STRUCTURE_LOCKED_MESSAGE } from './outline-row';
 
-// `useActiveRun` (mounted by `OutlinePane`) keeps a live SSE subscription open for any active run
+// `useProjectRuns` (mounted by `OutlinePane`) keeps a live SSE subscription open for any active run
 // via `useRunStream` — mocked the same way as `copilot-panel.test.tsx`/`start-run-dialog.test.tsx`.
 vi.mock('@/api/sse', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/sse')>();
@@ -180,9 +180,7 @@ describe('OutlinePane expand all / collapse all (issue #115)', () => {
     await findRow('Surface Code Syndrome Extraction Cycles');
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
-    expect(
-      screen.queryByText('Surface Code Syndrome Extraction Cycles'),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Surface Code Syndrome Extraction Cycles')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     await findRow('Surface Code Syndrome Extraction Cycles');

@@ -40,7 +40,7 @@ import {
   nodeMatches,
   type OutlineTree,
 } from '@/features/outline/model';
-import { useActiveRun } from '@/features/runs/hooks/use-active-run';
+import { useProjectRuns } from '@/features/runs/hooks/use-project-runs';
 import { useOutlineStore } from '@/stores/outline-store';
 import { useUiStore } from '@/stores/ui-store';
 
@@ -51,7 +51,9 @@ const FILTER_DEBOUNCE_MS = 150;
 
 /** Ids of every node in `flat` that has at least one child — shared by the seed and collapse-all paths. */
 function nodesWithChildrenIds(flat: readonly OutlineNode[]): string[] {
-  return flat.filter((node) => flat.some((child) => child.parentId === node.id)).map((node) => node.id);
+  return flat
+    .filter((node) => flat.some((child) => child.parentId === node.id))
+    .map((node) => node.id);
 }
 
 interface OutlinePaneProps {
@@ -111,21 +113,25 @@ export function OutlinePane({
   const createMutation = useCreateOutlineNodeMutation(projectId);
   const deleteMutation = useDeleteOutlineNodeMutation(projectId);
   const openModal = useUiStore((state) => state.openModal);
-  const { activeRun, sectionNodeIds } = useActiveRun(projectId);
+  const { runningRun, activeRuns, sectionNodeIds } = useProjectRuns(projectId);
   // The backend rejects every structural outline write (create/delete/move) with 409 while the
-  // project has a queued/running run (`OutlineService._reject_if_run_active`, issue #74) — mirror
-  // that here so the controls are disabled instead of silently 409ing. Rename/summary/content
-  // edits stay enabled, matching what the backend still allows.
-  const structuralEditsDisabled = Boolean(activeRun);
+  // project has any queued/running run (`OutlineService._reject_if_run_active`, issue #74) —
+  // mirror that here so the controls are disabled instead of silently 409ing. This is
+  // deliberately unrelaxed by issue #134: a queued `full` run still blocks structural edits even
+  // though it hasn't started yet. Rename/summary/content edits stay enabled, matching what the
+  // backend still allows.
+  const structuralEditsDisabled = activeRuns.length > 0;
 
+  // Only `runningRun` can actually be mid-draft — a queued run hasn't started producing sections
+  // yet, so it never marks any node as still generating.
   const isGenerating = useCallback(
     (node: OutlineNode) => {
-      if (!activeRun) return false;
-      if (activeRun.kind === 'regenerate_section') return activeRun.targetNodeId === node.id;
-      if (activeRun.kind === 'full') return !sectionNodeIds.has(node.cliKey ?? node.id);
+      if (!runningRun) return false;
+      if (runningRun.kind === 'regenerate_section') return runningRun.targetNodeId === node.id;
+      if (runningRun.kind === 'full') return !sectionNodeIds.has(node.cliKey ?? node.id);
       return false;
     },
-    [activeRun, sectionNodeIds],
+    [runningRun, sectionNodeIds],
   );
 
   // Auto-expand the path to the selected node whenever the selection changes.
@@ -226,7 +232,10 @@ export function OutlinePane({
     [toggleCollapsed, projectId],
   );
 
-  const handleExpandAll = useCallback(() => expandAllAction(projectId), [expandAllAction, projectId]);
+  const handleExpandAll = useCallback(
+    () => expandAllAction(projectId),
+    [expandAllAction, projectId],
+  );
   const handleCollapseAll = useCallback(() => {
     collapseAllAction(projectId, nodesWithChildrenIds(flat));
   }, [collapseAllAction, projectId, flat]);
@@ -370,7 +379,11 @@ export function OutlinePane({
             }
           />
         ) : isFiltering && filteredTree.length === 0 ? (
-          <EmptyState icon={Search} title="No sections match" description={`No section title or number contains "${filterQuery.trim()}".`} />
+          <EmptyState
+            icon={Search}
+            title="No sections match"
+            description={`No section title or number contains "${filterQuery.trim()}".`}
+          />
         ) : (
           filteredTree.map((entry) => (
             <OutlineRow
