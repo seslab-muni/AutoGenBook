@@ -534,6 +534,13 @@ Only one replica: migrations run in the container's own startup command (same as
 ## 9. Worker
 
 Same image as `api`, different command — mirrors `docker-compose.yml`'s `worker` service.
+`replicas: 5` with `WORKER_CONCURRENCY=1` each (issue #134 phase 3) gives 5 runs across
+different projects generating in parallel while keeping each pod's crash/OOM blast radius to
+one in-flight run, rather than one pod with 5 slots where a single large KB build/LuaLaTeX
+pass could take all 5 down together. Housekeeping (`requeue_stale`, the stale/orphaned work-dir
+sweeps) still only ever runs once per poll cycle across the whole fleet — a Postgres advisory
+lock (`api/worker/__main__.py:_run_housekeeping_sweeps`) lets exactly one replica's slot 0
+proceed each cycle.
 
 ```yaml
 # k8s/worker.yaml
@@ -542,7 +549,7 @@ kind: Deployment
 metadata:
   name: worker
 spec:
-  replicas: 1
+  replicas: 5
   selector:
     matchLabels: {app: worker}
   template:
@@ -578,7 +585,9 @@ spec:
 ```
 
 LLM calls are network-bound but LaTeX/PDF compilation and OCR can spike CPU/memory — the
-limits above are a starting point; watch `kubectl top pod` under real load and adjust.
+per-pod limits above are a starting point; watch `kubectl top pod` under real load and adjust.
+At 5 replicas, size the node pool for the Deployment's aggregate footprint: 2.5 CPU / 5 Gi
+requested, up to 10 CPU / 20 Gi at the limit.
 
 ## 10. Web (frontend + nginx)
 

@@ -3,7 +3,16 @@ kind: Deployment
 metadata:
   name: worker
 spec:
-  replicas: 1
+  # Issue #134 phase 3: 5 single-slot pods (WORKER_CONCURRENCY=1, from
+  # autogenbook-config) instead of 1 pod with 5 slots - a KB build/LuaLaTeX
+  # pass big enough to OOM one slot used to take all 5 down with it, a
+  # rolling deploy drained (and briefly ran zero generation capacity for)
+  # every in-flight run at once, and one crashed pod meant one run lost,
+  # not five. Per-pod resources are unchanged; 5 replicas at the existing
+  # `requests`/`limits` below means the Deployment's aggregate footprint is
+  # now 2.5 CPU / 5 Gi requested, 10 CPU / 20 Gi at the limit - size the
+  # node pool accordingly.
+  replicas: 5
   selector:
     matchLabels: {app: worker}
   template:

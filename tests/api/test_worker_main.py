@@ -58,17 +58,44 @@ def _make_run(**overrides) -> Run:
     return Run(**defaults)
 
 
+class _FakeDialect:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeBind:
+    def __init__(self, dialect_name: str) -> None:
+        self.dialect = _FakeDialect(dialect_name)
+
+
 class _FakeSession:
     """Stands in for an `AsyncSession`: the repositories the worker
     constructs around it (`SqlAlchemyRunRepository(session)`, etc.) just
     store the reference without touching it, since `GenerationService`
-    itself is monkeypatched out in every test below."""
+    itself is monkeypatched out in every test below. `dialect_name`
+    defaults to `sqlite` so `_run_housekeeping_sweeps`'s advisory-lock path
+    (Postgres-only) is a no-op here, matching every other test's
+    expectation that the sweeps just run unconditionally; tests of the
+    lock itself pass `dialect_name="postgresql"` and stub `scalar`/
+    `execute`/`commit` explicitly."""
+
+    def __init__(self, dialect_name: str = "sqlite") -> None:
+        self.bind = _FakeBind(dialect_name)
 
     async def __aenter__(self) -> "_FakeSession":
         return self
 
     async def __aexit__(self, *exc_info: object) -> bool:
         return False
+
+    async def scalar(self, *args, **kwargs):  # pragma: no cover - overridden where needed
+        raise AssertionError("scalar() should not be called for a non-postgres session")
+
+    async def execute(self, *args, **kwargs):  # pragma: no cover - overridden where needed
+        raise AssertionError("execute() should not be called for a non-postgres session")
+
+    async def commit(self) -> None:  # pragma: no cover - overridden where needed
+        pass
 
 
 def _fake_session_factory() -> _FakeSession:
@@ -313,6 +340,87 @@ async def test_worker_slot_nonzero_never_sweeps(monkeypatch: pytest.MonkeyPatch)
     await worker_main._worker_slot(1, _fake_session_factory, None, _settings(), stop_event)
 
     assert fake_queue.requeue_calls == []
+
+
+class _FakePostgresSession(_FakeSession):
+    """Like `_FakeSession`, but reports `dialect.name == "postgresql"` and
+    records the advisory-lock `scalar`/`execute`/`commit` calls
+    `_run_housekeeping_sweeps` makes around the sweep block, so tests can
+    assert the lock was actually taken/released without a real Postgres."""
+
+    def __init__(self, *, lock_acquired: bool) -> None:
+        super().__init__(dialect_name="postgresql")
+        self.lock_acquired = lock_acquired
+        self.scalar_calls: list[str] = []
+        self.execute_calls: list[str] = []
+        self.commit_calls = 0
+
+    async def scalar(self, stmt, params=None):
+        self.scalar_calls.append(str(stmt))
+        return self.lock_acquired
+
+    async def execute(self, stmt, params=None):
+        self.execute_calls.append(str(stmt))
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+
+async def test_housekeeping_sweeps_skip_when_advisory_lock_not_acquired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #134 phase 3: another replica already holds the housekeeping
+    lock this cycle - this replica must not touch the DB/filesystem at
+    all, not even attempt the unlock (it never acquired anything to
+    release)."""
+    fake_queue = _FakeRunQueue(claim_return=None, requeue_return=5)
+    _patch_queue(monkeypatch, fake_queue)
+
+    async def _fail_if_called(*args, **kwargs):
+        raise AssertionError("sweeps must not run when another replica holds the lock")
+
+    monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fail_if_called)
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fail_if_called)
+
+    pg_session = _FakePostgresSession(lock_acquired=False)
+
+    await worker_main._run_housekeeping_sweeps(0, lambda: pg_session, _settings())
+
+    assert fake_queue.requeue_calls == []
+    assert pg_session.scalar_calls == ["SELECT pg_try_advisory_lock(:key)"]
+    assert pg_session.execute_calls == []
+    assert pg_session.commit_calls == 0
+
+
+async def test_housekeeping_sweeps_run_and_unlock_when_lock_acquired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_queue = _FakeRunQueue(claim_return=None, requeue_return=3)
+    _patch_queue(monkeypatch, fake_queue)
+
+    stale_calls: list[float] = []
+    orphan_calls: list[str] = []
+
+    async def _fake_stale_sweep(run_repository, retention_days):
+        stale_calls.append(retention_days)
+        return 0
+
+    async def _fake_orphan_sweep(run_repository, runs_dir):
+        orphan_calls.append(runs_dir)
+        return 0
+
+    monkeypatch.setattr(worker_main, "sweep_stale_work_dirs", _fake_stale_sweep)
+    monkeypatch.setattr(worker_main, "sweep_orphaned_work_dirs", _fake_orphan_sweep)
+
+    pg_session = _FakePostgresSession(lock_acquired=True)
+
+    await worker_main._run_housekeeping_sweeps(0, lambda: pg_session, _settings())
+
+    assert fake_queue.requeue_calls == [300]
+    assert stale_calls == [30]
+    assert orphan_calls == ["/app/runs"]
+    assert pg_session.execute_calls == ["SELECT pg_advisory_unlock(:key)"]
+    assert pg_session.commit_calls == 1
 
 
 async def test_worker_slot_survives_requeue_stale_exception(
