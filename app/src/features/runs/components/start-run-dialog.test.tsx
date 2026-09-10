@@ -73,7 +73,7 @@ describe('StartRunDialog', () => {
     useUiStore.setState({ activeModal: 'start-run' });
     await screen.findByRole('heading', { name: 'Start a run' });
 
-    expect(screen.getByLabelText(/llm model/i)).toHaveValue('openai/gpt-5-mini');
+    expect(screen.getByLabelText(/llm model/i)).toHaveTextContent('openai/gpt-5-mini');
   });
 
   it('starting a run with an overridden model shows it on the run detail page', async () => {
@@ -84,9 +84,11 @@ describe('StartRunDialog', () => {
     useUiStore.setState({ activeModal: 'start-run' });
     await screen.findByRole('heading', { name: 'Start a run' });
 
-    const modelInput = screen.getByLabelText(/llm model/i);
+    await user.click(screen.getByLabelText(/llm model/i));
+    const modelInput = await screen.findByPlaceholderText('e.g. openai/gpt-5-mini');
     await user.clear(modelInput);
     await user.type(modelInput, 'anthropic/claude-3.5-sonnet');
+    await user.keyboard('{Escape}');
     await user.click(screen.getByRole('button', { name: 'Start run' }));
 
     await waitFor(() =>

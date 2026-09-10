@@ -10,15 +10,20 @@ import { renderWithProviders } from '@/test/component-test-utils';
 import { ModelSelect } from './model-select';
 
 describe('ModelSelect', () => {
-  it('renders the discovered models as datalist options', async () => {
-    renderWithProviders(<ModelSelect value="openai/gpt-5-mini" onChange={() => {}} id="model" />);
+  it('shows the current value on the trigger and lists discovered models once opened', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ModelSelect value="" onChange={() => {}} id="model" />);
 
-    const input = screen.getByRole('textbox');
-    await waitFor(() => expect(input).toHaveAttribute('list'));
+    // Only the trigger button is mounted while the popover is closed.
+    const trigger = screen.getByRole('combobox');
+    await user.click(trigger);
 
-    const options = await screen.findAllByRole('option', { hidden: true });
-    const values = options.map((option) => (option as HTMLOptionElement).value);
-    expect(values).toContain('anthropic/claude-3.5-sonnet');
+    // Empty search text - every discovered model is listed, unfiltered.
+    await waitFor(() =>
+      expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(
+        expect.arrayContaining(['Claude 3.5 Sonnet', 'GPT-5 mini']),
+      ),
+    );
   });
 
   it('shows the current value even when it is not in the discovered list', async () => {
@@ -26,33 +31,49 @@ describe('ModelSelect', () => {
       <ModelSelect value="some-custom/not-in-catalog" onChange={() => {}} id="model" />,
     );
 
-    const input = await screen.findByRole('textbox');
-    expect(input).toHaveValue('some-custom/not-in-catalog');
+    expect(screen.getByRole('combobox')).toHaveTextContent('some-custom/not-in-catalog');
   });
 
-  it('falls back to a plain text input when the discovery list is empty', async () => {
+  it('shows the placeholder, not an empty list, when the discovery list is empty', async () => {
     server.use(
       http.get('*/api/v1/system/models', () =>
         HttpResponse.json({ items: [], warning: 'endpoint unreachable' } satisfies ModelList),
       ),
     );
+    const user = userEvent.setup();
 
-    renderWithProviders(<ModelSelect value="openai/gpt-5-mini" onChange={() => {}} id="model" />);
+    renderWithProviders(<ModelSelect value="" onChange={() => {}} id="model" />);
 
-    const input = await screen.findByRole('textbox');
-    // No datalist to fall back on - still a perfectly usable free-text field.
-    expect(input).not.toHaveAttribute('list');
-    expect(input).toHaveValue('openai/gpt-5-mini');
+    await user.click(screen.getByRole('combobox'));
+
+    // Still a perfectly usable free-text search box - just no suggestions under it.
+    const search = await screen.findByPlaceholderText('e.g. openai/gpt-5-mini');
+    expect(search).toHaveValue('');
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
   });
 
-  it('calls onChange as the user types', async () => {
+  it('calls onChange as the user types in the search box', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderWithProviders(<ModelSelect value="" onChange={onChange} id="model" />);
 
-    const input = await screen.findByRole('textbox');
-    await user.type(input, 'x');
+    await user.click(screen.getByRole('combobox'));
+    const search = await screen.findByPlaceholderText('e.g. openai/gpt-5-mini');
+    await user.type(search, 'x');
 
     expect(onChange).toHaveBeenCalledWith('x');
+  });
+
+  it('calls onChange and closes the popover when a suggestion is picked', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<ModelSelect value="" onChange={onChange} id="model" />);
+
+    await user.click(screen.getByRole('combobox'));
+    const option = await screen.findByRole('option', { name: /Claude 3\.5 Sonnet/i });
+    await user.click(option);
+
+    expect(onChange).toHaveBeenCalledWith('anthropic/claude-3.5-sonnet');
+    await waitFor(() => expect(screen.queryByRole('option')).not.toBeInTheDocument());
   });
 });
