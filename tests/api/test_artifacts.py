@@ -16,7 +16,11 @@ from api.domain.models import (
     RunStatus,
     TargetAudience,
 )
-from api.infrastructure.cli.artifacts import collect_artifact_paths, upload_artifacts
+from api.infrastructure.cli.artifacts import (
+    collect_artifact_paths,
+    upload_artifacts,
+    upload_section_artifacts,
+)
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
 from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
@@ -301,6 +305,12 @@ async def test_upload_artifacts_streams_from_a_file_handle_not_bytesio(
 async def test_upload_artifacts_is_idempotent_on_rerun(
     tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
+    """Regression/behavior test for issue #129: a second `upload_artifacts`
+    call for the same run removes artifacts whose file disappeared, but
+    leaves every unchanged file's row/blob alone rather than deleting and
+    recreating the whole set - the point of making the terminal upload at
+    the end of a run cheap after sections were already uploaded
+    incrementally."""
     out_dir = _make_out_dir(tmp_path)
 
     async with session_factory() as session:
@@ -311,17 +321,152 @@ async def test_upload_artifacts_is_idempotent_on_rerun(
         storage = InMemoryFileStorage()
 
         first = await upload_artifacts(out_dir, run_id, files, run_artifacts, storage)
-        first_file_ids = {artifact.file_id for artifact in first}
+        first_by_path = {artifact.relative_path: artifact.file_id for artifact in first}
 
-        # Work dir changes between the two calls (a file removed) - the
-        # second upload should fully replace the first, not accumulate.
+        # Work dir changes between the two calls: one file removed, one
+        # file's content changed, the rest untouched.
         (out_dir / "audit_report.json").unlink()
+        (out_dir / "sections" / "1.md").write_text("changed content", encoding="utf-8")
         second = await upload_artifacts(out_dir, run_id, files, run_artifacts, storage)
+        second_by_path = {artifact.relative_path: artifact.file_id for artifact in second}
 
         rows, total = await run_artifacts.list(run_id, limit=100, offset=0)
-        remaining_files = [await files.get(fid) for fid in first_file_ids]
+        removed_file = await files.get(first_by_path["audit_report.json"])
+        unchanged_file_id = first_by_path["Fake Book.tex"]
+        changed_old_file = await files.get(first_by_path["sections/1.md"])
 
     assert total == len(second) == len(collect_artifact_paths(out_dir))
     assert "audit_report.json" not in {a.relative_path for a in rows}
-    # The first upload's file blobs/rows are gone, not just superseded.
-    assert all(f is None for f in remaining_files)
+    # The removed file's blob/row is gone.
+    assert removed_file is None
+    # An unchanged file keeps the exact same File row (no re-upload, no new
+    # downloadable link) across the two calls.
+    assert second_by_path["Fake Book.tex"] == unchanged_file_id
+    # A file whose content changed gets a new File row...
+    assert second_by_path["sections/1.md"] != first_by_path["sections/1.md"]
+    # ...and the old one is gone, not left behind as an orphan.
+    assert changed_old_file is None
+
+
+async def test_upload_artifacts_skips_storage_put_for_unchanged_files(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession], monkeypatch
+) -> None:
+    """A stronger version of the idempotency check above: re-uploading
+    unchanged artifacts must not even touch storage a second time, not just
+    "happen to end up with the same file id"."""
+    out_dir = _make_out_dir(tmp_path)
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        await upload_artifacts(out_dir, run_id, files, run_artifacts, storage)
+
+        put_calls: list[str] = []
+        original_put = storage.put
+
+        async def spy_put(key, stream, content_type, size_hint=None):
+            put_calls.append(key)
+            return await original_put(key, stream, content_type, size_hint)
+
+        monkeypatch.setattr(storage, "put", spy_put)
+
+        await upload_artifacts(out_dir, run_id, files, run_artifacts, storage)
+
+    assert put_calls == []
+
+
+async def test_upload_section_artifacts_uploads_just_the_one_section(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    out_dir = _make_out_dir(tmp_path)
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        created = await upload_section_artifacts(out_dir, run_id, "1", files, run_artifacts, storage)
+
+        rows, total = await run_artifacts.list(run_id, limit=100, offset=0)
+
+    # `_make_out_dir` writes both `sections/1.md` and `section_reviews/1.json`.
+    assert total == len(created) == 2
+    assert {a.relative_path for a in rows} == {"sections/1.md", "section_reviews/1.json"}
+
+
+async def test_upload_section_artifacts_skips_review_json_when_absent(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    out_dir = _make_out_dir(tmp_path)
+    (out_dir / "section_reviews" / "1.json").unlink()
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        created = await upload_section_artifacts(out_dir, run_id, "1", files, run_artifacts, storage)
+
+    assert {a.relative_path for a in created} == {"sections/1.md"}
+
+
+async def test_upload_section_artifacts_is_a_noop_for_unchanged_content(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """A `--resume` run re-announcing an already-uploaded section (issue
+    #129's note on resume) must not create a duplicate row or a new file id."""
+    out_dir = _make_out_dir(tmp_path)
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        first = await upload_section_artifacts(out_dir, run_id, "1", files, run_artifacts, storage)
+        second = await upload_section_artifacts(out_dir, run_id, "1", files, run_artifacts, storage)
+
+        rows, total = await run_artifacts.list(run_id, limit=100, offset=0)
+
+    assert total == len(first) == 2
+    first_by_path = {a.relative_path: a.file_id for a in first}
+    second_by_path = {a.relative_path: a.file_id for a in second}
+    assert first_by_path == second_by_path
+
+
+async def test_upload_section_artifacts_then_upload_artifacts_does_not_duplicate(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """The exact end-to-end shape issue #129 relies on: a section uploaded
+    incrementally mid-run, then the terminal `upload_artifacts` call at the
+    end of the run, must leave exactly one row per artifact - not two."""
+    out_dir = _make_out_dir(tmp_path)
+
+    async with session_factory() as session:
+        run = await _make_run_row(session, tmp_path / "run")
+        run_id = run.id
+        files = SqlAlchemyFileRepository(session)
+        run_artifacts = SqlAlchemyRunArtifactRepository(session)
+        storage = InMemoryFileStorage()
+
+        incremental = await upload_section_artifacts(
+            out_dir, run_id, "1", files, run_artifacts, storage
+        )
+        terminal = await upload_artifacts(out_dir, run_id, files, run_artifacts, storage)
+
+        rows, total = await run_artifacts.list(run_id, limit=100, offset=0)
+
+    assert total == len(collect_artifact_paths(out_dir))
+    section_rows = [a for a in rows if a.relative_path == "sections/1.md"]
+    assert len(section_rows) == 1
+    assert section_rows[0].file_id == incremental[0].file_id
+    assert any(a.relative_path == "sections/1.md" for a in terminal)

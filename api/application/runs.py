@@ -1193,6 +1193,22 @@ class GenerationService:
                 try:
                     if batch:
                         await self._events.append_batch(run.id, batch)
+                        # Issue #129: as soon as a `"section"` event is
+                        # persisted, upload that leaf's `sections/<key>.md`
+                        # (and its review JSON, if any) right away instead of
+                        # waiting for the run to reach a terminal state -
+                        # `GET /runs/{id}/artifacts` then already shows it
+                        # while the CLI is still drafting the next section.
+                        # Best-effort and non-fatal by construction (`_upload_
+                        # section_artifact` never raises), so a failure here
+                        # never counts against this loop's own retry budget
+                        # below or aborts the run.
+                        for event in batch:
+                            if event.stage != "section":
+                                continue
+                            node_key = (event.payload or {}).get("nodeKey")
+                            if isinstance(node_key, str) and node_key:
+                                await self._upload_section_artifact(run, node_key)
                     current = await self._runs.get(run.id)
                     if current is not None and current.cancel_requested:
                         cancel_event.set()
@@ -1368,6 +1384,26 @@ class GenerationService:
             )
         current = await self._runs.get(run.id)
         return current if current is not None else run
+
+    async def _upload_section_artifact(self, run: Run, node_key: str) -> None:
+        """Incrementally upload one leaf's `sections/<node_key>.md` (and its
+        review JSON, if the CLI has written one yet) the moment its
+        `"section"` run event lands (issue #129) - called from `_run_
+        subprocess_and_drain`'s drain loop, on the same session/event loop
+        as everything else it does there, so no extra concurrency handling
+        is needed beyond what that loop already has. Best-effort: never
+        raises, matching `_upload_artifacts` below - a failed incremental
+        upload is filled in later by the terminal `upload_artifacts` call in
+        `_finalize`/`_fail` instead of aborting the run."""
+        out_dir = Path(run.work_dir) / book_command.OUT_DIRNAME
+        try:
+            await artifacts.upload_section_artifacts(
+                out_dir, run.id, node_key, self._files, self._artifacts, self._storage
+            )
+        except Exception:  # noqa: BLE001 - incremental artifact upload is best-effort
+            logger.exception(
+                "run %s: failed to incrementally upload section %s", run.id, node_key
+            )
 
     async def _upload_artifacts(self, run: Run, project: Project | None) -> None:
         out_dir = Path(run.work_dir) / book_command.OUT_DIRNAME

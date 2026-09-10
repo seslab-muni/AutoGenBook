@@ -40,6 +40,15 @@ describe('run detail page', () => {
     expect(screen.getByText(new RegExp(`Started by ${MOCK_USER.displayName}`))).toBeInTheDocument();
   });
 
+  it('shows a "N of M sections generated" counter derived from the outline leaf count (issue #129)', async () => {
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${RUN_ID}`);
+
+    // The seeded run's fixture has exactly one `section` artifact, and the seeded project's
+    // outline has 6 leaf nodes (sec-1-1, sec-1-2, sec-2-1, sec-2-2, sec-3-1, sec-3-2 - its
+    // three chapters are parents, not leaves).
+    expect(await screen.findByText('1 of 6 sections generated')).toBeInTheDocument();
+  });
+
   it('shows "—" for Started by when the run has no attributed user', async () => {
     const runId = 'run-no-owner';
     db.runs.set(runId, {

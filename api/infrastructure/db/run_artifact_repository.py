@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,5 +57,13 @@ class SqlAlchemyRunArtifactRepository:
     async def delete_by_run(self, run_id: uuid.UUID) -> None:
         await self._session.execute(
             delete(RunArtifactRecord).where(RunArtifactRecord.run_id == run_id)
+        )
+        await self._session.commit()
+
+    async def delete_many(self, artifact_ids: Sequence[uuid.UUID]) -> None:
+        if not artifact_ids:
+            return
+        await self._session.execute(
+            delete(RunArtifactRecord).where(RunArtifactRecord.id.in_(artifact_ids))
         )
         await self._session.commit()

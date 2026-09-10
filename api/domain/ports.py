@@ -184,6 +184,14 @@ class RunArtifactRepository(Protocol):
 
     async def delete_by_run(self, run_id: uuid.UUID) -> None: ...
 
+    async def delete_many(self, artifact_ids: Sequence[uuid.UUID]) -> None:
+        """Delete specific `RunArtifact` rows by id - the incremental-upload path
+        (issue #129) uses this to replace just the one artifact whose content
+        changed, rather than `delete_by_run`'s "delete everything for this
+        run" (which would also throw away every other already-uploaded,
+        still-unchanged section)."""
+        ...
+
 
 class RunQueue(Protocol):
     async def claim(self, worker_id: str) -> Run | None: ...
