@@ -205,14 +205,24 @@ services:
     networks:
       - backend
 
+  # MinIO's own Docker Hub / quay.io repositories (`minio/minio`, `minio/mc`) were withdrawn in
+  # September 2026 (issue #141), so Compose and CI use the Bitnami "legacy" build of the same
+  # server instead - still public on Docker Hub, though frozen at this version. The Kubernetes
+  # manifests (k8s/minio.yaml, k8s/minio-init-job.yaml) keep the original MinIO bits from the
+  # team's private cerit.io mirror, which GitHub Actions and developers without a Harbor login
+  # cannot pull - hence two images for one service.
+  #
+  # Bitnami differences vs the upstream image: the entrypoint starts the server itself (no
+  # `server /data ...` command), data lives under /bitnami/minio/data, and it runs as UID 1001.
+  # An existing `minio_data` volume written by the old root-run image is therefore unwritable
+  # for it - `docker compose down -v` (dev data only) before the first start with this image.
   minio:
-    image: minio/minio:RELEASE.2024-08-29T01-40-52Z
-    command: server /data --console-address :9001
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-autogenbook}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-change-this-secret}
     volumes:
-      - minio_data:/data
+      - minio_data:/bitnami/minio/data
     expose:
       - "9000"
       - "9001"
@@ -225,19 +235,28 @@ services:
       - backend
 
   minio-init:
-    image: minio/mc:RELEASE.2024-08-17T11-33-50Z
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
     depends_on:
       minio:
         condition: service_healthy
     environment:
+      # `mc` writes its config under $HOME, which this image leaves at `/` (unwritable for
+      # its UID 1001) - same fix as k8s/minio-init-job.yaml.
+      HOME: /tmp
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-autogenbook}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-change-this-secret}
       S3_BUCKET: ${S3_BUCKET:-autogenbook}
     entrypoint: ["sh", "-c"]
+    # The Bitnami server image starts MinIO once during its setup phase, stops it, and starts it
+    # again for real - so the `minio` healthcheck can pass a few seconds before port 9000 is
+    # reachable for good. Retry the alias handshake instead of failing on the first refusal.
     command:
       - >
-        mc alias set local "$$S3_ENDPOINT_URL" "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" &&
+        for i in $$(seq 1 30); do
+          mc alias set local "$$S3_ENDPOINT_URL" "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" && break;
+          echo "minio-init: MinIO not reachable yet (attempt $$i/30), retrying..."; sleep 2;
+        done &&
         mc mb --ignore-existing "local/$$S3_BUCKET"
     networks:
       - backend

@@ -396,7 +396,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: minio
-        image: minio/minio:RELEASE.2024-08-29T01-40-52Z
+        image: cerit.io/conerzyo/minio:RELEASE.2024-08-29T01-40-52Z
         args: ["server", "/data", "--console-address", ":9001"]
         securityContext:
           runAsUser: 1000
@@ -442,7 +442,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: mc
-        image: minio/mc:RELEASE.2024-08-17T11-33-50Z
+        image: cerit.io/conerzyo/mc:RELEASE.2024-08-17T11-33-50Z
         securityContext:
           runAsUser: 1000
           allowPrivilegeEscalation: false
@@ -458,6 +458,26 @@ spec:
           mc alias set local "$S3_ENDPOINT_URL" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" &&
           mc mb --ignore-existing "local/$S3_BUCKET"
 ```
+
+**Image source (September 2026, issue #141).** MinIO withdrew its `minio/minio` and `minio/mc`
+repositories from Docker Hub and quay.io, so the pinned tags above can no longer be pulled from a
+fresh node. The manifests therefore point at byte-identical copies of the two images that were
+re-tagged from a local Docker cache and pushed to the team's Harbor project:
+
+```bash
+docker tag minio/minio:RELEASE.2024-08-29T01-40-52Z cerit.io/conerzyo/minio:RELEASE.2024-08-29T01-40-52Z
+docker tag minio/mc:RELEASE.2024-08-17T11-33-50Z   cerit.io/conerzyo/mc:RELEASE.2024-08-17T11-33-50Z
+docker push cerit.io/conerzyo/minio:RELEASE.2024-08-29T01-40-52Z
+docker push cerit.io/conerzyo/mc:RELEASE.2024-08-17T11-33-50Z
+```
+
+Like the app images, they are pullable from inside the cluster without `imagePullSecrets` but
+*not* anonymously from the internet, which is why `docker-compose.yml` (local dev and the CI e2e
+job) uses the public `bitnamilegacy/minio` build of the same server instead. `scripts/deploy.py`
+only rolls the `api`/`worker`/`web` Deployments, so this change reaches the cluster with a manual
+`kubectl apply -f k8s/minio.yaml` (a `Recreate` rollout: MinIO is briefly unavailable while the
+pod restarts on the mirrored image; the PVC data is untouched). Longer term, replacing MinIO with
+a maintained S3-compatible store everywhere is tracked in issue #141.
 
 **Status: hit and fixed.** `minio/mc` doesn't set `$HOME` for its non-root UID, so it defaults to
 `/` — unwritable by UID 1000 — and `mc alias set` failed with `Unable to save new mc config.

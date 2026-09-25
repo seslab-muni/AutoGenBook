@@ -19,7 +19,8 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: minio
-        image: minio/minio:RELEASE.2024-08-29T01-40-52Z
+        # Mirror of the withdrawn upstream image (issue #141); pullable from inside the cluster only.
+        image: cerit.io/conerzyo/minio:RELEASE.2024-08-29T01-40-52Z
         args: ["server", "/data", "--console-address", ":9001"]
         securityContext:
           runAsUser: 1000

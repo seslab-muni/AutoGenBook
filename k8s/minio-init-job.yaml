@@ -13,7 +13,8 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: mc
-        image: minio/mc:RELEASE.2024-08-17T11-33-50Z
+        # Mirror of the withdrawn upstream image (issue #141); pullable from inside the cluster only.
+        image: cerit.io/conerzyo/mc:RELEASE.2024-08-17T11-33-50Z
         securityContext:
           runAsUser: 1000
           allowPrivilegeEscalation: false
