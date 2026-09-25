@@ -20,7 +20,9 @@ import { outline, useRegenerateOutlineNodeMutation } from '@/api/queries/outline
 import type { Project, Run } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { SectionSourcesCard } from '@/features/outline/components/section-sources-card';
 import { isLeaf } from '@/features/outline/model';
+import { resolveSourceScope } from '@/features/outline/source-scope';
 import { useProjectRuns } from '@/features/runs/hooks/use-project-runs';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
 import { RunEventLog } from '@/features/runs/components/run-event-log';
@@ -199,6 +201,12 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
     );
   }
 
+  const effectiveScope = resolveSourceScope(node.id, flat);
+  const regenerateLabel =
+    effectiveScope.kind === 'selected'
+      ? `Regenerate with ${effectiveScope.sourceIds.length} ${effectiveScope.sourceIds.length === 1 ? 'source' : 'sources'}`
+      : 'Regenerate';
+
   const footerStatus = trackedRun ? RUN_STATUS_LABELS[trackedRun.status] : node.status;
   const isRunTerminal = trackedRun ? TERMINAL_STATUSES.has(trackedRun.status) : false;
 
@@ -226,6 +234,8 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
             {node.cliKey ? `cli key ${node.cliKey}` : 'Not yet synced from a run'}
           </p>
         </div>
+
+        <SectionSourcesCard projectId={projectId} node={node} flat={flat} />
 
         <div className="space-y-2 rounded-xl border bg-muted/30 p-3">
           <p className="text-[11px] font-bold text-foreground">Quick actions</p>
@@ -273,7 +283,7 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
               onClick={() => send(instruction)}
             >
               <Send className="size-3" />
-              {regenerateMutation.isPending ? 'Sending…' : 'Regenerate'}
+              {regenerateMutation.isPending ? 'Sending…' : regenerateLabel}
             </Button>
           </div>
         </div>

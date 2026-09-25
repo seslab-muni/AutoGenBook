@@ -163,6 +163,8 @@ function flattenOutline(
       reviewerScore: null,
       reviewerNotes: null,
       structureLocked: true,
+      sourceScope: 'inherit',
+      sourceIds: [],
       createdAt: timestamp,
       updatedAt: timestamp,
     });

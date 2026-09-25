@@ -10,8 +10,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { Separator } from '@/components/ui/separator';
 import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
+import { NodeSourcesSection } from '@/features/outline/components/node-sources-section';
 import { cn } from '@/lib/utils';
 
 const MATH_LEVELS: { value: MathLevel; label: string }[] = [
@@ -26,6 +28,8 @@ const DEBOUNCE_MS = 500;
 interface NodePropertiesSheetProps {
   projectId: string;
   node: OutlineNode | null;
+  /** The project's flat outline — the Sources section resolves inherited scopes through it. */
+  flat: readonly OutlineNode[];
   onOpenChange: (open: boolean) => void;
 }
 
@@ -34,11 +38,18 @@ interface NodePropertiesSheetProps {
  * copilot drawer's Settings tab — the real copilot drawer doesn't exist yet
  * (#21), so this is a standalone `Sheet` that #21 can later relocate/embed.
  */
-export function NodePropertiesSheet({ projectId, node, onOpenChange }: NodePropertiesSheetProps) {
+export function NodePropertiesSheet({
+  projectId,
+  node,
+  flat,
+  onOpenChange,
+}: NodePropertiesSheetProps) {
   return (
     <Sheet open={node !== null} onOpenChange={onOpenChange}>
       <SheetContent>
-        {node ? <NodePropertiesForm key={node.id} projectId={projectId} node={node} /> : null}
+        {node ? (
+          <NodePropertiesForm key={node.id} projectId={projectId} node={node} flat={flat} />
+        ) : null}
       </SheetContent>
     </Sheet>
   );
@@ -47,9 +58,11 @@ export function NodePropertiesSheet({ projectId, node, onOpenChange }: NodePrope
 function NodePropertiesForm({
   projectId,
   node,
+  flat,
 }: {
   projectId: string;
   node: OutlineNode;
+  flat: readonly OutlineNode[];
 }) {
   const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
   const [targetPages, setTargetPages] = useState(node.targetPages);
@@ -165,6 +178,10 @@ function NodePropertiesForm({
             }}
           />
         </div>
+
+        <Separator />
+
+        <NodeSourcesSection projectId={projectId} node={node} flat={flat} />
       </div>
     </>
   );

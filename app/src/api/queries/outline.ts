@@ -10,6 +10,7 @@ import type {
   Page,
 } from '@/api/types';
 import { assignPositions, descendantIds, nextOrderIndex } from '@/features/outline/model';
+import { mergeSourceScope } from '@/features/outline/source-scope';
 
 import { projectKeys } from './keys';
 
@@ -152,6 +153,8 @@ export function useCreateOutlineNodeMutation(projectId: string) {
           reviewerScore: null,
           reviewerNotes: null,
           structureLocked: true,
+          sourceScope: 'inherit',
+          sourceIds: [],
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -209,6 +212,7 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
           contentMarkdown,
           contentLatex: body.contentLatex ?? current.contentLatex,
           structureLocked: body.structureLocked ?? current.structureLocked,
+          ...mergeSourceScope(current, body),
           actualWords:
             body.contentMarkdown !== undefined ? wordCount(contentMarkdown) : current.actualWords,
           updatedAt: new Date().toISOString(),
@@ -245,6 +249,34 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
       queryClient.setQueryData(projectKeys.outlineNode(projectId, nodeId), node);
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
+    },
+  });
+}
+
+/**
+ * PATCHes several nodes at once (e.g. `SourcesDialog`'s "Assign to chapters…", issue #138),
+ * each independently — resolves with how many succeeded/failed rather than rejecting on the
+ * first failure. Invalidates every outline view once they have all settled.
+ */
+export function useUpdateOutlineNodesMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (updates: { nodeId: string; body: OutlineNodeUpdate }[]) => {
+      const results = await Promise.allSettled(
+        updates.map(({ nodeId, body }) =>
+          unwrap(
+            apiClient.PATCH('/api/v1/projects/{project_id}/outline/{node_id}', {
+              params: { path: { project_id: projectId, node_id: nodeId } },
+              body,
+            }),
+          ),
+        ),
+      );
+      const failed = results.filter((result) => result.status === 'rejected').length;
+      return { succeeded: results.length - failed, failed };
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
     },
   });
 }

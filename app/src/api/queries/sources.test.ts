@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { db } from '@/mocks/db';
 import { renderWithQueryClient, waitFor } from '@/test/query-test-utils';
 
+import { outline } from './outline';
 import { projects } from './projects';
 import { sources, useAddSourceMutation, useRemoveSourceMutation } from './sources';
 
@@ -68,6 +69,29 @@ describe('sources queries', () => {
 
     await waitFor(() =>
       expect(result.current.list.data?.items.some((s) => s.id === sourceId)).toBe(false),
+    );
+  });
+
+  it('removing a source refetches the outline, whose scopes the server pruned (issue #138)', async () => {
+    const sourceId = 'file-lamport-1982-source';
+    const node = db.outlineNodes.get('ch-1')!;
+    db.outlineNodes.set('ch-1', { ...node, sourceScope: 'selected', sourceIds: [sourceId] });
+    const { result } = renderWithQueryClient(() => ({
+      flat: useQuery(outline.flat(PROJECT_ID)),
+      remove: useRemoveSourceMutation(PROJECT_ID),
+    }));
+    await waitFor(() => expect(result.current.flat.isSuccess).toBe(true));
+    expect(result.current.flat.data?.items.find((n) => n.id === 'ch-1')?.sourceScope).toBe(
+      'selected',
+    );
+
+    result.current.remove.mutate(sourceId);
+
+    await waitFor(() =>
+      expect(result.current.flat.data?.items.find((n) => n.id === 'ch-1')).toMatchObject({
+        sourceScope: 'inherit',
+        sourceIds: [],
+      }),
     );
   });
 });
