@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { scopedNodes } from '@/features/outline/source-scope';
 import { OUTPUT_FORMAT_LABELS } from '@/features/projects/lib/labels';
 import { useUiStore } from '@/stores/ui-store';
 
@@ -63,6 +64,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
     enabled: open,
   });
   const nodeCount = outlineData?.total ?? 0;
+  const scoped = scopedNodes(outlineData?.items ?? []);
 
   const [outputFormat, setOutputFormat] = useState<OutputFormat>(project.outputFormat);
   const [allowSubdivision, setAllowSubdivision] = useState(false);
@@ -134,9 +136,19 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Estimated size:</span> {nodeCount} outline
-            node{nodeCount === 1 ? '' : 's'} · ~{project.totalPagesBudget} pages
+          <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <p>
+              <span className="font-medium text-foreground">Estimated size:</span> {nodeCount}{' '}
+              outline node{nodeCount === 1 ? '' : 's'} · ~{project.totalPagesBudget} pages
+            </p>
+            {scoped.length > 0 ? (
+              <p className="border-t pt-2">
+                <span className="block font-medium text-foreground">
+                  Scoped sources: {scoped.map((node) => `§${node.sectionNumber}`).join(', ')}
+                </span>
+                Their sections only search the files chosen for them.
+              </p>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-3">

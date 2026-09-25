@@ -1,15 +1,20 @@
 import { Sparkles } from 'lucide-react';
 
-import type { Source } from '@/api/types';
+import type { OutlineNode, Source } from '@/api/types';
 import { Checkbox } from '@/components/ui/checkbox';
 import { SourceActionsMenu } from '@/features/sources/components/source-actions-menu';
 import { SourceStatusDot } from '@/features/sources/components/source-status-dot';
 import { SourceTypeTile } from '@/features/sources/components/source-type-tile';
 import { formatBytes, formatDate } from '@/features/sources/lib/source-format';
 
+/** Keeps the narrow "Used in" column to one line; the cell's `title` lists every node. */
+const MAX_USED_IN_CHIPS = 3;
+
 interface SourceRowProps {
   source: Source;
   citationCount: number;
+  /** Outline nodes whose own source selection includes this source (issue #138). */
+  usedIn: readonly OutlineNode[];
   selected: boolean;
   onSelectedChange: (selected: boolean) => void;
   onEdit: () => void;
@@ -20,6 +25,7 @@ interface SourceRowProps {
 export function SourceRow({
   source,
   citationCount,
+  usedIn,
   selected,
   onSelectedChange,
   onEdit,
@@ -62,6 +68,30 @@ export function SourceRow({
       </td>
       <td className="py-1.5 pr-3">
         <SourceStatusDot source={source} />
+      </td>
+      <td className="overflow-hidden py-1.5 pr-3">
+        {usedIn.length > 0 ? (
+          <span
+            className="flex gap-1 overflow-hidden"
+            title={`Selected on ${usedIn.map((node) => `§${node.sectionNumber}`).join(', ')}`}
+          >
+            {usedIn.slice(0, MAX_USED_IN_CHIPS).map((node) => (
+              <span
+                key={node.id}
+                className="rounded-full border border-primary/30 bg-primary/10 px-1.5 font-mono text-[10px] font-semibold text-primary"
+              >
+                §{node.sectionNumber}
+              </span>
+            ))}
+            {usedIn.length > MAX_USED_IN_CHIPS ? (
+              <span className="font-mono text-[10px] text-muted-foreground">
+                +{usedIn.length - MAX_USED_IN_CHIPS}
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground">—</span>
+        )}
       </td>
       <td className="py-1.5 pr-3 text-right text-[11px]" title="Linked citations">
         <span className="inline-flex items-center gap-1 text-muted-foreground">

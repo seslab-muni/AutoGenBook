@@ -243,6 +243,72 @@ def _extract_explicit_outline_from_txt(txt_spec: str) -> List[Dict[str, Any]]:
     return [_finalize_outline_node(node) for node in roots if str(node.get("title", "")).strip()]
 
 
+KB_SCOPES = ("inherit", "all", "selected")
+
+
+def _normalize_kb_scope(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """`kb_scope`/`kb_sources` of one outline node, sanitized.
+
+    `kb_scope` is `inherit` (default: use the nearest ancestor's scope),
+    `all` (every `--kb-dir` source) or `selected` (only `kb_sources`, paths
+    relative to `--kb-dir`). Only non-default values are returned, so nodes
+    without a scope stay byte-identical to before.
+    """
+    scope = str(raw.get("kb_scope", "inherit") or "inherit").strip().lower()
+    if scope not in KB_SCOPES:
+        scope = "inherit"
+    out: Dict[str, Any] = {}
+    if scope == "all":
+        out["kb_scope"] = "all"
+    elif scope == "selected":
+        sources = raw.get("kb_sources", [])
+        if not isinstance(sources, list):
+            sources = []
+        out["kb_scope"] = "selected"
+        out["kb_sources"] = [str(src).strip() for src in sources if str(src).strip()]
+    return out
+
+
+def resolve_kb_sources(g: nx.DiGraph, node_key: str) -> Optional[List[str]]:
+    """Effective KB source restriction for `node_key`.
+
+    Walks up from the node to the root and returns the first explicit scope:
+    `None` for `all` (or when nothing up the chain sets one), the node's
+    `kb_sources` list for `selected`.
+    """
+    current: Optional[str] = node_key
+    seen: set[str] = set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        attrs = g.nodes[current]
+        scope = str(attrs.get("kb_scope", "inherit") or "inherit").strip().lower()
+        if scope == "all":
+            return None
+        if scope == "selected":
+            sources = attrs.get("kb_sources", [])
+            if not isinstance(sources, list):
+                return []
+            return [str(src) for src in sources if str(src).strip()]
+        parents = list(g.predecessors(current))
+        current = parents[0] if parents else None
+    return None
+
+
+def _warn_if_scoped_without_hits(
+    node: Dict[str, Any], kb_sources: Optional[List[str]], items: List[Any]
+) -> None:
+    if kb_sources is None:
+        return
+    if any(getattr(item, "kind", "") == "kb" for item in items):
+        return
+    title = str(node.get("title", "")).strip() or "(untitled)"
+    count = len(kb_sources)
+    print(
+        f"[WARN] Section '{title}': no knowledge-base passages matched in its {count} "
+        f"selected source{'s' if count != 1 else ''}; continuing without KB context."
+    )
+
+
 def _normalize_book_child(raw: Dict[str, Any]) -> Dict[str, Any]:
     childs = raw.get("childs", [])
     if not isinstance(childs, list):
@@ -264,6 +330,7 @@ def _normalize_book_child(raw: Dict[str, Any]) -> Dict[str, Any]:
         out["needsSubdivision"] = True
     if ensure_bool(raw.get("structure_locked", False), False):
         out["structure_locked"] = True
+    out.update(_normalize_kb_scope(raw))
     return out
 
 
@@ -374,6 +441,7 @@ def build_graph_from_book_json(book_json: Dict[str, Any]) -> nx.DiGraph:
             }
             if ensure_bool(ch.get("structure_locked", False), False):
                 attrs["structure_locked"] = True
+            attrs.update(_normalize_kb_scope(ch))
             g.add_node(node_key, **attrs)
             g.add_edge(parent_key, node_key)
             nested = ch.get("childs", [])
@@ -515,7 +583,10 @@ def subdivide_graph(
                 query = f"{book_title}\n{book_summary}\n{node.get('title','')}\n{node.get('summary','')}"
                 retrieved_context = ""
                 if retrieval_manager is not None:
-                    items = retrieval_manager.retrieve(query, k=rag_top_k, allow_web=False)
+                    kb_sources = resolve_kb_sources(g, child)
+                    items = retrieval_manager.retrieve(
+                        query, k=rag_top_k, allow_web=False, kb_sources=kb_sources
+                    )
                     retrieved_context = retrieval_manager.format_context(items, max_chars_total=rag_max_chars_total)
                 if not retrieved_context:
                     retrieved_context = "(none)"
@@ -706,13 +777,17 @@ def generate_contents(
 
         retrieved_context = ""
         query = f"{book_title}\n{book_summary}\n{node.get('title','')}\n{node.get('summary','')}"
+        kb_sources = resolve_kb_sources(g, node_key)
         if retrieval_manager is not None:
             items = retrieval_manager.retrieve(
                 query,
                 k=cfg.rag_top_k,
                 diversify_sources=True,
                 allow_web=False,
+                kb_sources=kb_sources,
             )
+            if retrieval_manager.local_kb is not None:
+                _warn_if_scoped_without_hits(node, kb_sources, items)
             retrieved_context = retrieval_manager.format_context(items, max_chars_total=cfg.rag_max_chars_total)
         if not retrieved_context:
             retrieved_context = "(none)"
@@ -748,7 +823,11 @@ def generate_contents(
             if draft_query:
                 refined_query = f"{node.get('title','')}\n{draft_query}"
                 refined_items = retrieval_manager.retrieve(
-                    refined_query, k=cfg.rag_top_k, diversify_sources=True, allow_web=True
+                    refined_query,
+                    k=cfg.rag_top_k,
+                    diversify_sources=True,
+                    allow_web=True,
+                    kb_sources=kb_sources,
                 )
                 merged_items = _dedupe_items(items + refined_items)
                 if _item_keys(merged_items) != _item_keys(items):

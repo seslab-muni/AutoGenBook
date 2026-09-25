@@ -192,8 +192,9 @@ async def duplicate_project(
 ) -> Project:
     original_sources = await source_service.list_for_embed(project_id)
     project = await service.duplicate(project_id, owner_id=user.id)
+    source_id_map: dict[uuid.UUID, uuid.UUID] = {}
     for source, _file in original_sources:
-        await source_service.add(
+        copy, _copy_file = await source_service.add(
             project.id,
             file_id=source.file_id,
             source_type=source.source_type,
@@ -203,7 +204,8 @@ async def duplicate_project(
             url=source.url,
             description=source.description,
         )
-    await outline_service.duplicate_from(project_id, project.id)
+        source_id_map[source.id] = copy.id
+    await outline_service.duplicate_from(project_id, project.id, source_id_map=source_id_map)
     outline = await _outline_tree(project.id, outline_service)
     return await _to_schema(project, source_service, outline)
 

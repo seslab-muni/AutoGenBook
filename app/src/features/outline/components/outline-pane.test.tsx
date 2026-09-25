@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
-import type { Run } from '@/api/types';
+import type { OutlineNode, Run } from '@/api/types';
 import { db } from '@/mocks/db';
 import { renderWithProviders } from '@/test/component-test-utils';
 import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
@@ -184,5 +184,30 @@ describe('OutlinePane expand all / collapse all (issue #115)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     await findRow('Surface Code Syndrome Extraction Cycles');
+  });
+});
+
+describe('OutlinePane source-scope pills (issue #138)', () => {
+  it('marks own, inherited, and explicit-all scopes, and nothing for unrestricted rows', async () => {
+    const setNode = (id: string, patch: Partial<OutlineNode>) =>
+      db.outlineNodes.set(id, { ...db.outlineNodes.get(id)!, ...patch });
+    setNode('ch-2', {
+      sourceScope: 'selected',
+      sourceIds: ['file-lamport-1982-source', 'file-castro-liskov-pbft-source'],
+    });
+    setNode('sec-2-2', { sourceScope: 'all', sourceIds: [] });
+    renderPane();
+
+    const chapter = await findRow(MIDDLE_CHAPTER_TITLE);
+    expect(within(chapter).getByTitle('2 sources selected on this node')).toHaveTextContent('2');
+
+    const inheriting = await findRow('Surface Code Syndrome Extraction Cycles');
+    expect(within(inheriting).getByTitle('2 sources inherited from §2')).toBeInTheDocument();
+
+    const overriding = await findRow('Quantum Byzantine Agreement (QBA) Protocols');
+    expect(within(overriding).getByTitle(/Uses all project sources/)).toHaveTextContent('All');
+
+    const unscoped = await findRow('Foundations of Classical Asynchronous Consensus');
+    expect(unscoped.querySelector('[data-scope-pill]')).toBeNull();
   });
 });

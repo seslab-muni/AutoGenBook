@@ -5,7 +5,7 @@ from datetime import datetime
 
 from pydantic import ConfigDict, Field
 
-from api.domain.models import MathLevel, NodeStatus
+from api.domain.models import MathLevel, NodeStatus, SourceScope
 from api.presentation.schemas.common import BaseSchema, NonBlankStr
 
 
@@ -44,6 +44,11 @@ class OutlineNode(BaseSchema):
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
     structure_locked: bool
+    # Issue #138: which project sources this node's sections retrieve from.
+    # `inherit` = nearest ancestor's scope (all sources at the top level).
+    # `sourceIds` is non-empty only when `sourceScope` is `selected`.
+    source_scope: SourceScope
+    source_ids: list[uuid.UUID]
     created_at: datetime
     updated_at: datetime
 
@@ -89,6 +94,11 @@ class OutlineNodeUpdate(BaseSchema):
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
     structure_locked: bool | None = None
+    # Issue #138. Setting `sourceScope` to anything but `selected` clears
+    # `sourceIds`; `selected` requires at least one id of a live source of
+    # this project (422 otherwise). `sourceIds` alone keeps the scope.
+    source_scope: SourceScope | None = None
+    source_ids: list[uuid.UUID] | None = None
 
 
 class OutlineTreeReplaceNode(BaseSchema):

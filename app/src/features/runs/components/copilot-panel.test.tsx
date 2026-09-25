@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event';
 import { useQuery } from '@tanstack/react-query';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { projects } from '@/api/queries/projects';
@@ -189,5 +189,34 @@ describe('CopilotPanel', () => {
 
     expect(await screen.findByText('Succeeded')).toBeInTheDocument();
     expect(await screen.findByText(/4,200 tokens/)).toBeInTheDocument();
+  });
+
+  it('shows the inherited scope and names the source count on Regenerate (issue #138)', async () => {
+    db.outlineNodes.set('ch-1', {
+      ...db.outlineNodes.get('ch-1')!,
+      sourceScope: 'selected',
+      sourceIds: ['file-lamport-1982-source', 'file-castro-liskov-pbft-source'],
+    });
+    renderWithProviders(<Harness projectId={CONSENSUS_PROJECT_ID} selectedNodeId="sec-1-1" />);
+
+    const group = await screen.findByRole('radiogroup', { name: 'Section source scope' });
+    expect(within(group).getByRole('radio', { name: 'Inherit from §1' })).toBeChecked();
+    const chips = await screen.findByRole('list', { name: 'Effective sources' });
+    expect(within(chips).getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Regenerate with 2 sources' })).toBeInTheDocument();
+  });
+
+  it('keeps the plain Regenerate label when retrieval is unrestricted', async () => {
+    renderWithProviders(<Harness projectId={CONSENSUS_PROJECT_ID} selectedNodeId="sec-1-1" />);
+    await screen.findByRole('radiogroup', { name: 'Section source scope' });
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeInTheDocument();
+  });
+
+  it('"Only selected" opens the source picker', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness projectId={CONSENSUS_PROJECT_ID} selectedNodeId="sec-1-1" />);
+    const group = await screen.findByRole('radiogroup', { name: 'Section source scope' });
+    await user.click(within(group).getByRole('radio', { name: 'Only selected' }));
+    expect(await screen.findByRole('dialog', { name: 'Choose sources' })).toBeInTheDocument();
   });
 });

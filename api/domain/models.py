@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -146,6 +146,18 @@ class MathLevel(str, enum.Enum):
     APPLIED = "applied"
 
 
+class SourceScope(str, enum.Enum):
+    """Which project sources an outline node's sections retrieve from."""
+
+    # Issue #138: `inherit` uses the nearest ancestor's scope (all sources at
+    # the top level), `all` searches every source, `selected` only
+    # `source_ids`.
+
+    INHERIT = "inherit"
+    ALL = "all"
+    SELECTED = "selected"
+
+
 @dataclass
 class OutlineNode:
     id: uuid.UUID
@@ -181,6 +193,11 @@ class OutlineNode:
     cli_key: str | None = None
     level: int = 0
     section_number: str = ""
+    # Issue #138: per-node knowledge-base scoping. `source_ids` is only ever
+    # non-empty when `source_scope` is `selected` (`OutlineService.update`
+    # enforces it); it lists live `project_sources.id`s of this project.
+    source_scope: SourceScope = SourceScope.INHERIT
+    source_ids: list[uuid.UUID] = field(default_factory=list)
 
 
 class FileKind(str, enum.Enum):

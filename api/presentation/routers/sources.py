@@ -10,6 +10,7 @@ from api.application.sources import SourceService
 from api.core.db import get_session
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
 from api.presentation.schemas.common import Page, PageParams
 from api.presentation.schemas.sources import Source, SourceCreate, SourceUpdate, source_to_schema
@@ -22,6 +23,7 @@ def get_source_service(session: AsyncSession = Depends(get_session)) -> SourceSe
         project_repository=SqlAlchemyProjectRepository(session),
         file_repository=SqlAlchemyFileRepository(session),
         source_repository=SqlAlchemySourceRepository(session),
+        outline_repository=SqlAlchemyOutlineRepository(session),
     )
 
 

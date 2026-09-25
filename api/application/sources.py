@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from typing import Any
 
 from api.core.errors import Conflict, NotFound, ValidationFailed
-from api.domain.models import File, Source, SourceStatus, SourceType
-from api.domain.ports import FileRepository, ProjectRepository, SourceRepository
+from api.domain.models import File, Source, SourceScope, SourceStatus, SourceType
+from api.domain.ports import (
+    FileRepository,
+    OutlineRepository,
+    ProjectRepository,
+    SourceRepository,
+)
 
 # Mirrors the frontend mock's `EXTENSION_SOURCE_TYPE` (app/src/mocks/handlers.ts) and
 # the extensions the CLI's knowledge base indexes (`FileService.KB_ELIGIBLE_EXTENSIONS`).
@@ -31,10 +37,12 @@ class SourceService:
         project_repository: ProjectRepository,
         file_repository: FileRepository,
         source_repository: SourceRepository,
+        outline_repository: OutlineRepository | None = None,
     ) -> None:
         self._projects = project_repository
         self._files = file_repository
         self._sources = source_repository
+        self._outline = outline_repository
 
     async def _require_project(self, project_id: uuid.UUID) -> None:
         project = await self._projects.get(project_id)
@@ -149,3 +157,21 @@ class SourceService:
         source.deleted_at = datetime.now(timezone.utc)
         source.file_id = None
         await self._sources.update(source)
+        await self._prune_from_outline(project_id, source_id)
+
+    async def _prune_from_outline(self, project_id: uuid.UUID, source_id: uuid.UUID) -> None:
+        """Drop a detached source from every outline node's `source_ids`
+        (issue #138). A node left with none falls back to `inherit` rather
+        than a `selected` scope that would search nothing."""
+        if self._outline is None:
+            return
+        now = datetime.now(timezone.utc)
+        for node in await self._outline.list(project_id):
+            if source_id not in node.source_ids:
+                continue
+            remaining = [sid for sid in node.source_ids if sid != source_id]
+            scope = node.source_scope if remaining else SourceScope.INHERIT
+            await self._outline.update(
+                dataclass_replace(node, source_ids=remaining, source_scope=scope, updated_at=now),
+                fields=("source_ids", "source_scope"),
+            )

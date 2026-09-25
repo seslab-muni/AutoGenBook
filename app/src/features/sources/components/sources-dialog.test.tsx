@@ -2,6 +2,7 @@ import userEvent from '@testing-library/user-event';
 import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { db } from '@/mocks/db';
 import { useUiStore } from '@/stores/ui-store';
 import { renderWithProviders } from '@/test/component-test-utils';
 import { FakeXhr } from '@/test/fake-xhr';
@@ -147,5 +148,60 @@ describe('SourcesDialog', () => {
     fake.respond(201, { id: 'new-file-1', filename: 'ExtraNotes.md', kbEligible: true });
 
     expect(await screen.findByText('ExtraNotes.md')).toBeInTheDocument();
+  });
+
+  it('shows which outline nodes select each source in the "Used in" column (issue #138)', async () => {
+    const chapter = db.outlineNodes.get('ch-2')!;
+    db.outlineNodes.set('ch-2', {
+      ...chapter,
+      sourceScope: 'selected',
+      sourceIds: ['file-lamport-1982-source'],
+    });
+    openDialog();
+
+    await screen.findByText('Lamport_1982_ByzantineGenerals.pdf');
+    await waitFor(() =>
+      expect(
+        within(rowOf('Lamport_1982_ByzantineGenerals.pdf')).getByText('§2'),
+      ).toBeInTheDocument(),
+    );
+    expect(within(rowOf('Castro_Liskov_PBFT_TOCS.pdf')).getByText('—')).toBeInTheDocument();
+  });
+
+  it("assigns selected sources to chapters, keeping a chapter's existing selection", async () => {
+    const chapter = db.outlineNodes.get('ch-2')!;
+    db.outlineNodes.set('ch-2', {
+      ...chapter,
+      sourceScope: 'selected',
+      sourceIds: ['file-lamport-1982-source'],
+    });
+    const user = userEvent.setup();
+    openDialog();
+
+    await screen.findByText('Castro_Liskov_PBFT_TOCS.pdf');
+    await user.click(screen.getByRole('checkbox', { name: 'Select Castro_Liskov_PBFT_TOCS.pdf' }));
+    await user.click(screen.getByRole('button', { name: 'Assign to chapters…' }));
+
+    const popover = await screen.findByRole('dialog', { name: 'Assign to chapters' });
+    expect(within(popover).getByText('Add 1 source to…')).toBeInTheDocument();
+    const assign = within(popover).getByRole('button', { name: 'Assign' });
+    expect(assign).toBeDisabled();
+    await user.click(within(popover).getByRole('checkbox', { name: /^§2 / }));
+    await user.click(within(popover).getByRole('checkbox', { name: /^§3 / }));
+    await user.click(assign);
+
+    await waitFor(() =>
+      expect(db.outlineNodes.get('ch-3')).toMatchObject({
+        sourceScope: 'selected',
+        sourceIds: ['file-castro-liskov-pbft-source'],
+      }),
+    );
+    expect(db.outlineNodes.get('ch-2')?.sourceIds).toEqual([
+      'file-lamport-1982-source',
+      'file-castro-liskov-pbft-source',
+    ]);
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Assign to chapters' })).not.toBeInTheDocument(),
+    );
   });
 });

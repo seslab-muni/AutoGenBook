@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from api.domain.models import OutlineNode, Project, TargetAudience
+from api.domain.models import OutlineNode, Project, SourceScope, TargetAudience
 from api.domain.outline import OutlineTree
 
 _AUDIENCE_PHRASES: dict[TargetAudience, str] = {
@@ -154,4 +154,43 @@ class StructureBuilder:
             out["childs"] = child_dicts
         if lock_nodes:
             out["structure_locked"] = True
+        out.update(kb_scope_fields(tree.node))
         return out
+
+
+def kb_scope_fields(node: OutlineNode) -> dict[str, Any]:
+    """The CLI's `kb_scope`/`kb_sources` node fields for `node` (issue #138).
+
+    `kb_sources` are paths relative to `--kb-dir`; `GenerationService.
+    _download_sources` puts each source under `kb/<source.id>/`, so a
+    source's id is its directory. `inherit` (the default) emits nothing."""
+    if node.source_scope == SourceScope.ALL:
+        return {"kb_scope": "all"}
+    if node.source_scope == SourceScope.SELECTED:
+        return {"kb_scope": "selected", "kb_sources": [str(sid) for sid in node.source_ids]}
+    return {}
+
+
+def sync_kb_scopes_into_graph(graph_data: dict[str, Any], nodes: list[OutlineNode]) -> bool:
+    """Overwrite `kb_scope`/`kb_sources` on a CLI `structure_graph.json`
+    payload's nodes from the outline's *current* scopes, matched by
+    `cli_key` (issue #138). Runs reusing a base run's graph (`regenerate`,
+    retry) otherwise keep whatever scopes were set when that base run
+    started. Returns whether anything changed."""
+    graph_nodes = graph_data.get("nodes") or {}
+    changed = False
+    for node in nodes:
+        if not node.cli_key:
+            continue
+        cli_node = graph_nodes.get(node.cli_key)
+        if not isinstance(cli_node, dict):
+            continue
+        wanted = kb_scope_fields(node)
+        current = {key: cli_node[key] for key in ("kb_scope", "kb_sources") if key in cli_node}
+        if current == wanted:
+            continue
+        cli_node.pop("kb_scope", None)
+        cli_node.pop("kb_sources", None)
+        cli_node.update(wanted)
+        changed = True
+    return changed

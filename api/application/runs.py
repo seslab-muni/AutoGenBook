@@ -25,13 +25,18 @@ from typing import Any, Literal
 from starlette.concurrency import run_in_threadpool
 
 from api.application import graph_import
-from api.application.book_spec import SpecRenderer, StructureBuilder
+from api.application.book_spec import (
+    SpecRenderer,
+    StructureBuilder,
+    sync_kb_scopes_into_graph,
+)
 from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.core.settings import Settings, default_llm_model
 from api.domain.models import (
     ArtifactKind,
     File,
     NodeStatus,
+    OutlineNode,
     Project,
     Run,
     RunArtifact,
@@ -962,6 +967,11 @@ class GenerationService:
                 flat_nodes = await self._outline.list(run.project_id)
                 outline_tree = build_tree(flat_nodes)
                 await self._prepare_work_dir(run, project, outline_tree)
+                if run.options.resume:
+                    # `--resume` reads the previous attempt's
+                    # `structure_graph.json`, not the `book_structure.json`
+                    # just rewritten - carry current source scopes into it.
+                    await self._sync_kb_scopes(run, flat_nodes)
                 await self._download_sources(run)
             elif run.kind == RunKind.regenerate_section:
                 await self._prepare_regenerate(run)
@@ -1057,6 +1067,16 @@ class GenerationService:
                 json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8"
             )
 
+    async def _sync_kb_scopes(self, run: Run, flat_nodes: list[OutlineNode]) -> None:
+        graph_path = Path(run.work_dir) / book_command.OUT_DIRNAME / "structure_graph.json"
+        if not await run_in_threadpool(graph_path.is_file):
+            return
+        graph_data = await run_in_threadpool(
+            lambda: json.loads(graph_path.read_text(encoding="utf-8"))
+        )
+        if sync_kb_scopes_into_graph(graph_data, assign_positions(flat_nodes)):
+            await run_in_threadpool(self._write_json_sync, graph_path, graph_data)
+
     async def _prepare_regenerate(self, run: Run) -> None:
         """`regenerate_section`: reuse the base run's work directory as-is,
         but delete the target section's Markdown so the CLI's `--resume`
@@ -1127,6 +1147,8 @@ class GenerationService:
             cli_node["summary"] = (
                 f"{base_summary}\n\n{modifier_line}" if base_summary else modifier_line
             )
+            graph_changed = True
+        if sync_kb_scopes_into_graph(graph_data, list(positioned.values())):
             graph_changed = True
         if graph_changed:
             await run_in_threadpool(self._write_json_sync, graph_path, graph_data)

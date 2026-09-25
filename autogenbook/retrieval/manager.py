@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Sequence
 
-from rag_kb import KnowledgeBase
+from rag_kb import KnowledgeBase, make_source_filter
 
 from .mcp_papers import MCPPaperRetriever
 from .tavily import TavilyRetriever
@@ -22,6 +22,9 @@ class RetrievalManager:
     allow_tavily_fallback: bool = True
     default_k: int = 6
     max_chars_total: int = 6000
+    # The `--kb-dir` the local KB was built from; `kb_sources` passed to
+    # `retrieve` are resolved relative to it.
+    kb_root: Optional[Path] = None
 
     @staticmethod
     def _source_key(item: RetrievalItem) -> str:
@@ -66,17 +69,27 @@ class RetrievalManager:
         diversify_sources: bool = False,
         diversify_multiplier: int = 3,
         allow_web: Optional[bool] = None,
+        kb_sources: Optional[Sequence[str]] = None,
     ) -> List[RetrievalItem]:
+        """`kb_sources`: `None` searches the whole local KB; a sequence restricts
+        it to those files/directories (relative to `kb_root`) - an empty one
+        means no local KB results at all. Web retrieval is never restricted."""
         k = k or self.default_k
         items: List[RetrievalItem] = []
         use_web = self.enable_web if allow_web is None else (self.enable_web and bool(allow_web))
+
+        source_filter = None
+        if kb_sources is not None and self.local_kb is not None:
+            if self.kb_root is None:
+                raise ValueError("RetrievalManager.kb_root is required to restrict kb_sources")
+            source_filter = make_source_filter(self.kb_root, kb_sources)
 
         if self.local_kb is not None:
             fetch_k = max(k, 1)
             if diversify_sources:
                 fetch_k = max(k * max(diversify_multiplier, 1), k + 2)
             raw_items: List[RetrievalItem] = []
-            for chunk, score in self.local_kb.retrieve(query, k=fetch_k):
+            for chunk, score in self.local_kb.retrieve(query, k=fetch_k, source_filter=source_filter):
                 cite_key = chunk.cite_key or kb_cite_key(chunk.source_path, chunk.loc)
                 raw_items.append(
                     RetrievalItem(

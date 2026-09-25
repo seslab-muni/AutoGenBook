@@ -421,6 +421,7 @@ export function OutlinePane({
       <NodePropertiesSheet
         projectId={projectId}
         node={propertiesNode}
+        flat={flat}
         onOpenChange={(open) => {
           if (!open) setPropertiesNodeId(null);
         }}

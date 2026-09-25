@@ -58,6 +58,8 @@ export type SourceUpdate = components['schemas']['SourceUpdate'];
 
 export type NodeStatus = components['schemas']['NodeStatus'];
 export type MathLevel = components['schemas']['MathLevel'];
+/** Which project sources a node's sections retrieve from (issue #138) — `inherit` defers to the nearest ancestor. */
+export type SourceScope = components['schemas']['SourceScope'];
 export type OutlineNode = components['schemas']['OutlineNode'];
 export type OutlineNodeTree = components['schemas']['OutlineNodeTree'];
 export type OutlineNodeCreate = components['schemas']['OutlineNodeCreate'];

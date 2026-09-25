@@ -251,8 +251,10 @@ def run_book(args: Any, run_ctx: Optional[RunContext], logger: Any) -> int:
         # Optional Knowledge Base
         t0 = time.perf_counter()
         kb = None
+        kb_root = None
         if args.kb_dir:
             kb_dir = Path(args.kb_dir).expanduser().resolve()
+            kb_root = kb_dir
             print(f"[KB] Buduji/načítám znalostní databázi z: {kb_dir}")
             kb = KnowledgeBase.build_from_directory(
                 kb_dir,
@@ -270,7 +272,7 @@ def run_book(args: Any, run_ctx: Optional[RunContext], logger: Any) -> int:
         print(f"[KB] Trvání: {_format_duration(time.perf_counter() - t0)}")
 
         llm = OpenRouterLLM()
-        retrieval_manager = RetrievalManager(local_kb=kb, default_k=6, max_chars_total=6000)
+        retrieval_manager = RetrievalManager(local_kb=kb, default_k=6, max_chars_total=6000, kb_root=kb_root)
         if getattr(args, "enable_web_rag", False):
             mcp_papers = MCPPaperRetriever()
             api_key = os.environ.get("TAVILY_API_KEY")
@@ -282,6 +284,7 @@ def run_book(args: Any, run_ctx: Optional[RunContext], logger: Any) -> int:
                 enable_web=True,
                 default_k=6,
                 max_chars_total=6000,
+                kb_root=kb_root,
             )
             has_mcp = bool(mcp_papers and mcp_papers.is_available())
             has_tavily = bool(tavily and tavily.api_key)
