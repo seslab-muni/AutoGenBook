@@ -3459,6 +3459,10 @@ def run_proposal(args: Any, run_ctx: Optional[RunContext], logger: Any) -> int:
                         )
                         continue
 
+                _log_progress(
+                    logger,
+                    f"[PROPOSAL] Subsection {subsection_no}/{total_subsections} started: {path_label}.",
+                )
                 query = _build_section_query(sec, proposal_text)
                 kb1_items = kb1_retrieval.retrieve(query, k=6, allow_web=False)
                 kb2_items = kb2_retrieval.retrieve(query, k=6, allow_web=False)
