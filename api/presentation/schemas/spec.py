@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # Deliberately plain `BaseModel` subclasses, not `BaseSchema`: this mirrors
@@ -18,6 +20,9 @@ class BookStructureNode(BaseModel):
     needsSubdivision: bool
     childs: list["BookStructureNode"] = Field(default_factory=list)
     structure_locked: bool | None = None
+    # Issue #138: only present when the node restricts KB retrieval.
+    kb_scope: Literal["all", "selected"] | None = None
+    kb_sources: list[str] | None = None
 
 
 class BookStructure(BaseModel):

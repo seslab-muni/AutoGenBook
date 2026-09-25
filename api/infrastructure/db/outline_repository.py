@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.errors import Conflict, NotFound
-from api.domain.models import OutlineNode
+from api.domain.models import OutlineNode, SourceScope
 from api.infrastructure.db.models import OutlineNodeRecord
 
 
@@ -47,6 +47,8 @@ def _to_domain(record: OutlineNodeRecord) -> OutlineNode:
             _as_aware_utc(record.deleted_at) if record.deleted_at is not None else None
         ),
         cli_key=record.cli_key,
+        source_scope=SourceScope(record.source_scope),
+        source_ids=[uuid.UUID(str(value)) for value in (record.source_ids or [])],
     )
 
 
@@ -70,7 +72,16 @@ _ALL_MUTABLE_FIELDS = (
     "reviewer_score",
     "reviewer_notes",
     "structure_locked",
+    "source_scope",
+    "source_ids",
 )
+
+# Domain -> column conversions for fields whose column type differs from the
+# domain attribute's.
+_COLUMN_VALUE = {
+    "source_scope": lambda value: SourceScope(value).value,
+    "source_ids": lambda value: [str(item) for item in value],
+}
 
 
 def _apply_domain_to_record(
@@ -84,7 +95,9 @@ def _apply_domain_to_record(
     own stale copy of it."""
     names = _ALL_MUTABLE_FIELDS if fields is None else fields
     for name in names:
-        setattr(record, name, getattr(node, name))
+        value = getattr(node, name)
+        convert = _COLUMN_VALUE.get(name)
+        setattr(record, name, convert(value) if convert is not None else value)
     record.updated_at = node.updated_at
 
 

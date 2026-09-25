@@ -529,6 +529,10 @@ export interface components {
             childs?: components["schemas"]["BookStructureNode"][];
             /** Structure Locked */
             structure_locked?: boolean | null;
+            /** Kb Scope */
+            kb_scope?: ("all" | "selected") | null;
+            /** Kb Sources */
+            kb_sources?: string[] | null;
         };
         /**
          * ExportRequestIn
@@ -672,6 +676,9 @@ export interface components {
             reviewerNotes?: string | null;
             /** Structurelocked */
             structureLocked: boolean;
+            sourceScope: components["schemas"]["SourceScope"];
+            /** Sourceids */
+            sourceIds: string[];
             /**
              * Createdat
              * Format: date-time
@@ -755,6 +762,9 @@ export interface components {
             reviewerNotes?: string | null;
             /** Structurelocked */
             structureLocked: boolean;
+            sourceScope: components["schemas"]["SourceScope"];
+            /** Sourceids */
+            sourceIds: string[];
             /**
              * Createdat
              * Format: date-time
@@ -803,6 +813,9 @@ export interface components {
             reviewerNotes?: string | null;
             /** Structurelocked */
             structureLocked?: boolean | null;
+            sourceScope?: components["schemas"]["SourceScope"] | null;
+            /** Sourceids */
+            sourceIds?: string[] | null;
         };
         /**
          * OutlineTreeReplaceNode
@@ -1363,6 +1376,12 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /**
+         * SourceScope
+         * @description Which project sources an outline node's sections retrieve from.
+         * @enum {string}
+         */
+        SourceScope: "inherit" | "all" | "selected";
         /**
          * SourceStatus
          * @enum {string}

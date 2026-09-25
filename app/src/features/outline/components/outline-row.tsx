@@ -2,6 +2,8 @@ import { memo, useEffect, useRef } from 'react';
 import {
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
+  Database,
   FileText,
   Loader2,
   Lock,
@@ -25,6 +27,7 @@ import {
 } from '@/components/ui/context-menu';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { childrenOf, type OutlineTree } from '@/features/outline/model';
+import { inheritedSourceScope, resolveSourceScope } from '@/features/outline/source-scope';
 import { cn } from '@/lib/utils';
 
 export interface OutlineRowActions {
@@ -102,6 +105,57 @@ function highlightMatch(text: string, query: string): React.ReactNode {
       <mark className="rounded-sm bg-primary/25 text-inherit">{text.slice(start, end)}</mark>
       {text.slice(end)}
     </>
+  );
+}
+
+/**
+ * The compact source-scope marker after a row's title (issue #138): a solid pill for the node's
+ * own selection, a dashed one for a selection it inherits, "All" for an explicit all-sources
+ * override under a scoped ancestor, and nothing when retrieval is unrestricted.
+ */
+function SourceScopePill({ node, flat }: { node: OutlineNode; flat: readonly OutlineNode[] }) {
+  const sectionOf = (nodeId: string | null) =>
+    flat.find((item) => item.id === nodeId)?.sectionNumber ?? '';
+  let variant: 'own' | 'inherited' | 'all';
+  let count = 0;
+  let label: string;
+  if (node.sourceScope === 'selected' && node.sourceIds.length > 0) {
+    variant = 'own';
+    count = node.sourceIds.length;
+    label = `${count} ${count === 1 ? 'source' : 'sources'} selected on this node`;
+  } else if (node.sourceScope === 'inherit') {
+    const effective = resolveSourceScope(node.id, flat);
+    if (effective.kind !== 'selected') return null;
+    variant = 'inherited';
+    count = effective.sourceIds.length;
+    label = `${count} ${count === 1 ? 'source' : 'sources'} inherited from §${sectionOf(effective.fromNodeId)}`;
+  } else if (node.sourceScope === 'all') {
+    const inherited = inheritedSourceScope(node.id, flat);
+    if (inherited.kind !== 'selected') return null;
+    variant = 'all';
+    label = `Uses all project sources instead of §${sectionOf(inherited.fromNodeId)}'s selection`;
+  } else {
+    return null;
+  }
+
+  return (
+    <span
+      title={label}
+      data-scope-pill={variant}
+      className={cn(
+        'inline-flex h-4 shrink-0 items-center gap-0.5 rounded-full border px-1.5 font-mono text-[10px] leading-none font-semibold',
+        variant === 'own' && 'border-primary/30 bg-primary/10 text-primary',
+        variant === 'inherited' && 'border-dashed border-muted-foreground/40 text-muted-foreground',
+        variant === 'all' && 'border-border text-muted-foreground',
+      )}
+    >
+      <span className="sr-only">{label}</span>
+      <span aria-hidden="true" className="inline-flex items-center gap-0.5">
+        {variant === 'own' ? <Database className="size-2.5" /> : null}
+        {variant === 'inherited' ? <CornerDownRight className="size-2.5" /> : null}
+        {variant === 'all' ? 'All' : count}
+      </span>
+    </span>
   );
 }
 
@@ -252,6 +306,8 @@ function OutlineRowComponent({
                 title={`${node.sectionNumber} ${node.title}`}
               />
             )}
+
+            <SourceScopePill node={node} flat={flat} />
 
             {!node.structureLocked ? (
               <HoverCard openDelay={150}>

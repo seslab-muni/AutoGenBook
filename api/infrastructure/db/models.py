@@ -230,6 +230,10 @@ class OutlineNodeRecord(Base):
             "equation_density_level BETWEEN 1 AND 5",
             name="ck_outline_nodes_equation_density_level",
         ),
+        sa.CheckConstraint(
+            "source_scope IN ('inherit', 'all', 'selected')",
+            name="ck_outline_nodes_source_scope",
+        ),
         # Partial (not deferrable - Postgres doesn't allow that on an index)
         # so a soft-deleted row can keep occupying its old
         # (project_id, parent_id, order_index) tuple without colliding with
@@ -323,6 +327,19 @@ class OutlineNodeRecord(Base):
     reviewer_notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     structure_locked: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=True, server_default=sa.true()
+    )
+    # Issue #138. Plain text + CHECK rather than a Postgres enum type: the
+    # value set may grow, and `ALTER TYPE ... ADD VALUE` can't run inside the
+    # migration's transaction.
+    source_scope: Mapped[str] = mapped_column(
+        sa.Text, nullable=False, default="inherit", server_default="inherit"
+    )
+    # Source ids (as strings) this node is restricted to; `[]` unless
+    # `source_scope = 'selected'`. JSON rather than a link table: it is only
+    # ever read/written as a whole alongside the node, and a detached source
+    # is pruned by `SourceService.remove`.
+    source_ids: Mapped[list[str]] = mapped_column(
+        _jsonb(), nullable=False, default=list, server_default="[]"
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False

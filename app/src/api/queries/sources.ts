@@ -77,7 +77,11 @@ export function useUpdateSourceMutation(projectId: string, sourceId: string) {
   });
 }
 
-/** On success: invalidates `projectKeys.sources(projectId)` and `projectKeys.detail(projectId)`. */
+/** On success: invalidates `projectKeys.sources(projectId)`, `projectKeys.outline(projectId)` and
+ * `projectKeys.detail(projectId)` — detaching a source prunes it from every node's `sourceIds`
+ * server-side, and a node left empty falls back to `inherit` (issue #138). The detail
+ * invalidation already cascades to the outline; it's listed explicitly so that dependency
+ * survives a query-key reshuffle. */
 export function useRemoveSourceMutation(projectId: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -89,6 +93,7 @@ export function useRemoveSourceMutation(projectId: string) {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: projectKeys.sources(projectId) });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
       void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
     },
   });

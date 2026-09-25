@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Database, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { outline as outlineQueries } from '@/api/queries/outline';
 import {
   sources as sourcesQueries,
   useAddSourceMutation,
@@ -23,6 +24,9 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import { childrenOf } from '@/features/outline/model';
+import { nodesBySource } from '@/features/outline/source-scope';
+import { AssignToChaptersPopover } from '@/features/sources/components/assign-to-chapters-popover';
 import { SourceEditDialog } from '@/features/sources/components/source-edit-dialog';
 import { SourceRow } from '@/features/sources/components/source-row';
 import { UploadDropzone } from '@/features/sources/components/upload-dropzone';
@@ -171,6 +175,11 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
 
   const { data, isPending } = useQuery({ ...sourcesQueries.list(projectId), enabled: open });
   const citationCounts = useSourceCitationCounts(projectId);
+  // No params: shares the route loader's `outline.flat` cache entry, like `CopilotPanel`.
+  const { data: outlineData } = useQuery({ ...outlineQueries.flat(projectId), enabled: open });
+  const flatOutline = useMemo(() => outlineData?.items ?? [], [outlineData]);
+  const usedInBySource = useMemo(() => nodesBySource(flatOutline), [flatOutline]);
+  const chapters = useMemo(() => childrenOf(null, flatOutline), [flatOutline]);
   const addMutation = useAddSourceMutation(projectId);
   const removeMutation = useRemoveSourceMutation(projectId);
 
@@ -310,6 +319,7 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
           <col className="w-20" />
           <col className="w-28" />
           <col className="w-44" />
+          <col className="w-28" />
           <col className="w-14" />
           <col className="w-10" />
         </colgroup>
@@ -331,6 +341,9 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
             <th scope="col" className="py-2 pr-3 font-semibold">
               Status
             </th>
+            <th scope="col" className="py-2 pr-3 font-semibold">
+              Used in
+            </th>
             <th scope="col" className="py-2 pr-3 text-right font-semibold">
               Cites
             </th>
@@ -345,6 +358,7 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
               key={source.id}
               source={source}
               citationCount={citationCounts[source.name] ?? 0}
+              usedIn={usedInBySource.get(source.id) ?? []}
               selected={selectedIds.has(source.id)}
               onSelectedChange={(selected) => setSelected(source.id, selected)}
               onEdit={() => setEditingSource(source)}
@@ -437,6 +451,11 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
                   <span className="text-xs text-muted-foreground">
                     {selectedVisible.length} selected
                   </span>
+                  <AssignToChaptersPopover
+                    projectId={projectId}
+                    chapters={chapters}
+                    sourceIds={selectedVisible.map((source) => source.id)}
+                  />
                   <Button
                     type="button"
                     variant="outline"
@@ -466,7 +485,7 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
               <span>
                 Showing {filtered.length} of {allSources.length}
               </span>
-              <span>Select rows to detach several sources at once.</span>
+              <span>Select rows to detach several sources or assign them to chapters at once.</span>
             </div>
           </div>
         </DialogContent>

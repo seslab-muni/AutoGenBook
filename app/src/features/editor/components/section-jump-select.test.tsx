@@ -29,6 +29,8 @@ function node(overrides: Partial<OutlineNode>): OutlineNode {
     reviewerScore: null,
     reviewerNotes: null,
     structureLocked: true,
+    sourceScope: 'inherit',
+    sourceIds: [],
     createdAt: '',
     updatedAt: '',
     ...overrides,

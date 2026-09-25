@@ -272,6 +272,8 @@ function insertOutlineTree(
       reviewerScore: null,
       reviewerNotes: null,
       structureLocked: true,
+      sourceScope: 'inherit',
+      sourceIds: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -290,6 +292,44 @@ function insertOutlineTree(
     }
   }
   return {};
+}
+
+/**
+ * Mirrors `OutlineService.update`'s source-scope rules (issue #138): `inherit`/`all` clear
+ * `sourceIds` (non-empty ids alongside them is a 422), `selected` needs at least one id of a live
+ * source of the node's project (de-duplicated), and `sourceIds` sent alone implies `selected`.
+ * Returns the node's (possibly unchanged) scope fields, or an error title for a 422.
+ */
+function normalizeSourceScope(
+  node: OutlineNode & { projectId: string },
+  body: OutlineNodeUpdate,
+): Pick<OutlineNode, 'sourceScope' | 'sourceIds'> | { error: string } {
+  const ids = body.sourceIds ?? undefined;
+  const scope = body.sourceScope ?? (ids !== undefined ? 'selected' : undefined);
+  if (scope === undefined) return { sourceScope: node.sourceScope, sourceIds: node.sourceIds };
+  if (scope !== 'selected') {
+    if (ids?.length) return { error: `sourceIds must be empty when sourceScope is "${scope}"` };
+    return { sourceScope: scope, sourceIds: [] };
+  }
+  const unique = [...new Set(ids ?? [])];
+  if (unique.length === 0) return { error: 'sourceScope "selected" needs at least one source' };
+  const unknown = unique.filter((id) => db.sources.get(id)?.projectId !== node.projectId);
+  if (unknown.length)
+    return { error: `Unknown source ids for this project: ${unknown.join(', ')}` };
+  return { sourceScope: 'selected', sourceIds: unique };
+}
+
+/** Detaching a source prunes it from every node's `sourceIds`; a node left empty falls back to `inherit`. */
+function pruneSourceFromOutline(projectId: string, sourceId: string): void {
+  for (const node of db.outlineNodes.values()) {
+    if (node.projectId !== projectId || !node.sourceIds.includes(sourceId)) continue;
+    const sourceIds = node.sourceIds.filter((id) => id !== sourceId);
+    db.outlineNodes.set(node.id, {
+      ...node,
+      sourceIds,
+      sourceScope: sourceIds.length > 0 ? node.sourceScope : 'inherit',
+    });
+  }
 }
 
 function deleteOutlineSubtree(nodeId: string): void {
@@ -512,6 +552,7 @@ const sourceHandlers = [
     if (!source || source.projectId !== params.projectId)
       return notFound('Source', new URL(request.url).pathname);
     db.sources.delete(source.id);
+    pruneSourceFromOutline(source.projectId, source.id);
     return new HttpResponse(null, { status: 204 });
   }),
 ];
@@ -596,6 +637,8 @@ const outlineHandlers = [
       reviewerScore: null,
       reviewerNotes: null,
       structureLocked: false,
+      sourceScope: 'inherit',
+      sourceIds: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -625,9 +668,14 @@ const outlineHandlers = [
         new URL(request.url).pathname,
       );
     }
+    const scope = normalizeSourceScope(node, body);
+    if ('error' in scope) {
+      return problemResponse(422, scope.error, new URL(request.url).pathname);
+    }
     const updated: OutlineNode & { projectId: string } = {
       ...node,
       ...(body as Partial<OutlineNode>),
+      ...scope,
       actualWords:
         body.contentMarkdown != null
           ? body.contentMarkdown.trim().split(/\s+/).filter(Boolean).length

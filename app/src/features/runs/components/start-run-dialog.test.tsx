@@ -164,4 +164,33 @@ describe('StartRunDialog', () => {
     );
     expect(await screen.findByText('anthropic/claude-3.5-sonnet')).toBeInTheDocument();
   });
+
+  it('shows no scoped-sources line when no node restricts its sources (issue #138)', async () => {
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+    useUiStore.setState({ activeModal: 'start-run' });
+    await screen.findByText(/Estimated size:/);
+    expect(screen.queryByText(/Scoped sources:/)).not.toBeInTheDocument();
+  });
+
+  it('lists the scoped nodes in outline order', async () => {
+    for (const [id, sourceIds] of [
+      ['sec-2-1', ['file-castro-liskov-pbft-source']],
+      ['ch-2', ['file-lamport-1982-source']],
+    ] as const) {
+      db.outlineNodes.set(id, {
+        ...db.outlineNodes.get(id)!,
+        sourceScope: 'selected',
+        sourceIds: [...sourceIds],
+      });
+    }
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+    useUiStore.setState({ activeModal: 'start-run' });
+
+    expect(await screen.findByText('Scoped sources: §2, §2.1')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Their sections only search the files chosen for them\./),
+    ).toBeInTheDocument();
+  });
 });
