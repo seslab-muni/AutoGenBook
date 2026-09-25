@@ -664,12 +664,18 @@ def make_source_filter(kb_root: Path, sources: Iterable[str]) -> Callable[[str],
         if str(s).strip().strip("/") not in {"", "."}
     }
 
+    # Many chunks share one file; resolve each path once, not once per chunk.
+    decided: dict[str, bool] = {}
+
     def _accept(source_path: str) -> bool:
-        try:
-            rel = Path(source_path).resolve().relative_to(root).as_posix()
-        except ValueError:
-            return False
-        return any(rel == p or rel.startswith(p + "/") for p in prefixes)
+        if source_path not in decided:
+            try:
+                rel = Path(source_path).resolve().relative_to(root).as_posix()
+            except ValueError:
+                decided[source_path] = False
+            else:
+                decided[source_path] = any(rel == p or rel.startswith(p + "/") for p in prefixes)
+        return decided[source_path]
 
     return _accept
 
