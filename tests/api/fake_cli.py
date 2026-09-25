@@ -278,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.resume and section_path.exists():
             print(f"[RESUME] Preskakuji jiz vygenerovanou sekci '{node_title}'")
         else:
-            print(f"[GEN] Generuji obsah sekci: {node_title}")
+            print(f"[GEN] {i}/{total} Starting section '{node_title}'")
             time.sleep(STEP_SLEEP_S)
             content = f"## {node_title}\n\nFake generated content for {key}.\n"
             section_summary = str(nodes[key].get("summary") or "").strip()

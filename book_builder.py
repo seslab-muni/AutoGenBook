@@ -692,6 +692,8 @@ def generate_contents(
                     save_graph_json(g, progress_path)
                 continue
 
+        print(f"[GEN] {completed}/{total} Starting section '{node.get('title','')}'")
+
         previous_sections = ""
         if n_prev:
             for i, item in enumerate(prev_list):
