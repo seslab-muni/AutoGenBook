@@ -1431,6 +1431,21 @@ components:
           - type: boolean
           - type: 'null'
           title: Structure Locked
+        kb_scope:
+          anyOf:
+          - type: string
+            enum:
+            - all
+            - selected
+          - type: 'null'
+          title: Kb Scope
+        kb_sources:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Kb Sources
       type: object
       required:
       - title
@@ -1657,6 +1672,14 @@ components:
         structureLocked:
           type: boolean
           title: Structurelocked
+        sourceScope:
+          $ref: '#/components/schemas/SourceScope'
+        sourceIds:
+          items:
+            type: string
+            format: uuid
+          type: array
+          title: Sourceids
         createdAt:
           type: string
           format: date-time
@@ -1683,6 +1706,8 @@ components:
       - contentMarkdown
       - contentLatex
       - structureLocked
+      - sourceScope
+      - sourceIds
       - createdAt
       - updatedAt
       title: OutlineNode
@@ -1832,6 +1857,14 @@ components:
         structureLocked:
           type: boolean
           title: Structurelocked
+        sourceScope:
+          $ref: '#/components/schemas/SourceScope'
+        sourceIds:
+          items:
+            type: string
+            format: uuid
+          type: array
+          title: Sourceids
         createdAt:
           type: string
           format: date-time
@@ -1863,6 +1896,8 @@ components:
       - contentMarkdown
       - contentLatex
       - structureLocked
+      - sourceScope
+      - sourceIds
       - createdAt
       - updatedAt
       title: OutlineNodeTree
@@ -1945,6 +1980,18 @@ components:
           - type: boolean
           - type: 'null'
           title: Structurelocked
+        sourceScope:
+          anyOf:
+          - $ref: '#/components/schemas/SourceScope'
+          - type: 'null'
+        sourceIds:
+          anyOf:
+          - items:
+              type: string
+              format: uuid
+            type: array
+          - type: 'null'
+          title: Sourceids
       additionalProperties: false
       type: object
       title: OutlineNodeUpdate
@@ -3001,6 +3048,14 @@ components:
       required:
       - fileId
       title: SourceCreate
+    SourceScope:
+      type: string
+      enum:
+      - inherit
+      - all
+      - selected
+      title: SourceScope
+      description: Which project sources an outline node's sections retrieve from.
     SourceStatus:
       type: string
       enum:

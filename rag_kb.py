@@ -589,13 +589,28 @@ class KnowledgeBase:
             if not getattr(chunk, "cite_key", ""):
                 chunk.cite_key = _make_cite_key(source_id, loc_base, idx)
 
-    def retrieve(self, query: str, k: int = 6) -> List[Tuple[Chunk, float]]:
+    def retrieve(
+        self,
+        query: str,
+        k: int = 6,
+        source_filter: Optional[Callable[[str], bool]] = None,
+    ) -> List[Tuple[Chunk, float]]:
+        """Top-`k` BM25 hits for `query`.
+
+        `source_filter`, when given, is called with each chunk's `source_path`;
+        only chunks it accepts are candidates. It is applied *before* the top-`k`
+        cut, so a restricted search still returns up to `k` hits from the allowed
+        sources instead of whatever survives filtering the global top `k`.
+        """
         if not self.chunks:
             return []
         q_tokens = _tokenize(query)
         scores = self._bm25.get_scores(q_tokens)
+        candidates = range(len(scores))
+        if source_filter is not None:
+            candidates = [i for i in candidates if source_filter(self.chunks[i].source_path)]
         # top-k indices
-        top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+        top_idx = sorted(candidates, key=lambda i: scores[i], reverse=True)[:k]
         results: List[Tuple[Chunk, float]] = []
         for i in top_idx:
             if scores[i] <= 0:
@@ -632,6 +647,31 @@ class KnowledgeBase:
             remaining -= len(block) + 2
 
         return "\n\n".join(blocks)
+
+
+def make_source_filter(kb_root: Path, sources: Iterable[str]) -> Callable[[str], bool]:
+    """Predicate accepting chunks whose file is one of `sources` or lies under one.
+
+    `sources` are paths relative to `kb_root` (the `--kb-dir`), either a single
+    file (`notes/ch2.md`) or a directory (`<source-id>`, as the web app lays out
+    one directory per project source). Matching is by whole path segments, so
+    `ab` never matches `abc/file.pdf`.
+    """
+    root = Path(kb_root).expanduser().resolve()
+    prefixes = {
+        Path(str(s).strip()).as_posix().strip("/")
+        for s in sources
+        if str(s).strip().strip("/") not in {"", "."}
+    }
+
+    def _accept(source_path: str) -> bool:
+        try:
+            rel = Path(source_path).resolve().relative_to(root).as_posix()
+        except ValueError:
+            return False
+        return any(rel == p or rel.startswith(p + "/") for p in prefixes)
+
+    return _accept
 
 
 def _extract_chunk_index(text: str) -> Optional[int]:

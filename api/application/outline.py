@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from api.core.errors import Conflict, NotFound, ValidationFailed
-from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project
+from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project, SourceScope
 from api.domain.outline import (
     OutlineTree,
     assign_positions,
@@ -15,7 +15,12 @@ from api.domain.outline import (
     subtree_ids,
     word_budget_for,
 )
-from api.domain.ports import OutlineRepository, ProjectRepository, RunRepository
+from api.domain.ports import (
+    OutlineRepository,
+    ProjectRepository,
+    RunRepository,
+    SourceRepository,
+)
 
 
 def _word_count(markdown: str) -> int:
@@ -35,10 +40,52 @@ class OutlineService:
         outline_repository: OutlineRepository,
         project_repository: ProjectRepository,
         run_repository: RunRepository,
+        source_repository: SourceRepository | None = None,
     ) -> None:
         self._outline_repository = outline_repository
         self._project_repository = project_repository
         self._run_repository = run_repository
+        self._source_repository = source_repository
+
+    async def _normalize_source_scope(
+        self, project_id: uuid.UUID, node: OutlineNode, changes: dict[str, Any]
+    ) -> None:
+        """Validate/normalize a `source_scope`/`source_ids` change in place
+        (issue #138): ids are de-duplicated (order kept) and must name live
+        sources of this project; `selected` needs at least one; any other
+        scope stores no ids."""
+        if "source_scope" not in changes and "source_ids" not in changes:
+            return
+        scope = changes.get("source_scope", node.source_scope)
+        if scope is None:
+            raise ValidationFailed("sourceScope cannot be null")
+        scope = SourceScope(scope)
+        ids = changes.get("source_ids")
+        if ids is None:
+            ids = node.source_ids if "source_scope" not in changes else []
+        if "source_scope" not in changes and ids:
+            # Sending only `sourceIds` means "restrict to these".
+            scope = SourceScope.SELECTED
+        ids = list(dict.fromkeys(ids))
+
+        if scope != SourceScope.SELECTED:
+            if ids:
+                raise ValidationFailed(
+                    f"sourceIds must be empty unless sourceScope is 'selected' (got {scope.value!r})"
+                )
+        else:
+            if not ids:
+                raise ValidationFailed("sourceScope 'selected' requires at least one sourceId")
+            if self._source_repository is None:  # pragma: no cover - wiring error
+                raise RuntimeError("OutlineService needs a source repository to validate sourceIds")
+            live = {source.id for source in await self._source_repository.list_all(project_id)}
+            unknown = [str(source_id) for source_id in ids if source_id not in live]
+            if unknown:
+                raise ValidationFailed(
+                    f"sourceIds not attached to project {project_id}: {', '.join(unknown)}"
+                )
+        changes["source_scope"] = scope
+        changes["source_ids"] = ids
 
     async def _get_project(self, project_id: uuid.UUID) -> Project:
         project = await self._project_repository.get(project_id)
@@ -199,6 +246,7 @@ class OutlineService:
         node = self._get_node(project_id, node_id, flat)
 
         changes = dict(changes)
+        await self._normalize_source_scope(project_id, node, changes)
         if "content_markdown" in changes:
             changes["actual_words"] = _word_count(changes["content_markdown"] or "")
         if "target_pages" in changes and "word_budget" not in changes:
@@ -336,11 +384,19 @@ class OutlineService:
         return assign_positions(saved)
 
     async def duplicate_from(
-        self, source_project_id: uuid.UUID, target_project_id: uuid.UUID
+        self,
+        source_project_id: uuid.UUID,
+        target_project_id: uuid.UUID,
+        *,
+        source_id_map: dict[uuid.UUID, uuid.UUID] | None = None,
     ) -> list[OutlineNode]:
         """Deep-copy every outline node of `source_project_id` onto
         `target_project_id` with freshly minted ids, preserving structure -
-        used by `ProjectService.duplicate` (issue #4)."""
+        used by `ProjectService.duplicate` (issue #4). `source_id_map` maps
+        the original project's source ids to their copies so a node's
+        `source_ids` (issue #138) keep pointing at the duplicate's own
+        sources; ids with no copy are dropped."""
+        id_map_sources = source_id_map or {}
         flat = await self._outline_repository.list(source_project_id)
         if not flat:
             return []
@@ -351,6 +407,14 @@ class OutlineService:
         for node in sorted(flat, key=lambda n: depth_of(n.id, flat)):
             new_id = uuid.uuid4()
             id_map[node.id] = new_id
+            copied_source_ids = [
+                id_map_sources[sid] for sid in node.source_ids if sid in id_map_sources
+            ]
+            copied_scope = (
+                SourceScope.INHERIT
+                if node.source_scope == SourceScope.SELECTED and not copied_source_ids
+                else node.source_scope
+            )
             copies.append(
                 dataclass_replace(
                     node,
@@ -363,6 +427,8 @@ class OutlineService:
                     # and the target project has no run of its own yet to
                     # have derived one from (issue #62).
                     cli_key=None,
+                    source_scope=copied_scope,
+                    source_ids=copied_source_ids,
                     created_at=now,
                     updated_at=now,
                 )

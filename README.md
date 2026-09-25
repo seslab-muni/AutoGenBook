@@ -197,6 +197,8 @@ Arguments and defaults:
 
 Book mode now generates Markdown sections by default and only exports TeX/PDF when `--export-tex` is set (requires `pandoc`). Use `--legacy-tex` to force the older LaTeX-first pipeline if conversion fails. (`autogenbook/pipelines/book_pipeline.py:run_book`)
 
+Per-chapter KB sources: any node in a `--use-json` `book_structure.json` may set `"kb_scope": "selected"` with `"kb_sources": [...]` (files or directories relative to `--kb-dir`) to restrict that node's sections to those sources, or `"kb_scope": "all"` to lift a restriction set higher up. Nodes without `kb_scope` inherit the nearest ancestor's scope (all sources at the top level); subdivided sections inherit their parent's. A scoped section with no matching passages is drafted without KB context and logs a `[WARN]` line. Web RAG is never restricted. (`book_builder.py:resolve_kb_sources`, `rag_kb.py:make_source_filter`)
+
 Example: book with KB rebuild, web RAG, and resume:
 
 ```bash

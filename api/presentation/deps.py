@@ -24,6 +24,7 @@ from api.infrastructure.db.run_repository import (
     SqlAlchemyRunEventRepository,
     SqlAlchemyRunRepository,
 )
+from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
 from api.infrastructure.db.user_repository import SqlAlchemyUserRepository
 from api.infrastructure.llm.model_catalog import CachingModelCatalog, UrllibModelCatalog
 from api.infrastructure.storage.s3 import S3FileStorage
@@ -108,6 +109,7 @@ def get_outline_service(session: AsyncSession = Depends(get_session)) -> Outline
         outline_repository=SqlAlchemyOutlineRepository(session),
         project_repository=SqlAlchemyProjectRepository(session),
         run_repository=SqlAlchemyRunRepository(session),
+        source_repository=SqlAlchemySourceRepository(session),
     )
 
 

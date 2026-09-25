@@ -258,7 +258,7 @@ Status codes: `200`; `404`.
 
 #### `DELETE /api/v1/projects/{projectId}/sources/{sourceId}`
 
-Soft delete (see above).
+Soft delete (see above). The source's id is also removed from every outline node's `sourceIds`; a node left with none falls back to `sourceScope: inherit` (issue #138).
 
 Status codes: `204`; `404`.
 
@@ -268,7 +268,7 @@ Source (all five): `api/application/sources.py:SourceService`, `api/presentation
 
 Outline nodes, mounted under `/api/v1/projects/{projectId}/outline`. The **flat** shape (`parentId` + `orderIndex`) is canonical; `?format=tree` (nested `children`) is a rendering convenience derived from it on every read. `level`, `sectionNumber`, and `cliKey` are always server-derived from the current tree shape (`api/domain/outline.py:assign_positions`) — never client-supplied. Deletes are soft (`deletedAt` set on the whole subtree via `delete_subtree`); reads only ever see live rows.
 
-`OutlineNode` fields: `id`, `parentId`, `orderIndex`, `cliKey` (nullable — set once a run's CLI graph is imported back), `title`, `summary`, `level`, `sectionNumber`, `status` (`not_started|drafting|review_ready|compiled`), `targetPages`, `wordBudget` (`= 350 × targetPages` when not explicit), `actualWords` (word count of `contentMarkdown`, recomputed server-side whenever it changes), `equationDensityLevel` (1–5), `mathLevel` (`introductory|rigorous|formal_proof|applied`), `subPrompt`, `contentMarkdown`/`contentLatex`, `ragCitations`, `reviewerScore`/`reviewerNotes`, `structureLocked`, timestamps.
+`OutlineNode` fields: `id`, `parentId`, `orderIndex`, `cliKey` (nullable — set once a run's CLI graph is imported back), `title`, `summary`, `level`, `sectionNumber`, `status` (`not_started|drafting|review_ready|compiled`), `targetPages`, `wordBudget` (`= 350 × targetPages` when not explicit), `actualWords` (word count of `contentMarkdown`, recomputed server-side whenever it changes), `equationDensityLevel` (1–5), `mathLevel` (`introductory|rigorous|formal_proof|applied`), `subPrompt`, `contentMarkdown`/`contentLatex`, `ragCitations`, `reviewerScore`/`reviewerNotes`, `structureLocked`, `sourceScope` (`inherit|all|selected`, issue #138 — which project sources this node's sections retrieve from; `inherit` uses the nearest ancestor's scope, i.e. all sources at the top level), `sourceIds` (non-empty only when `sourceScope` is `selected`), timestamps.
 
 #### `GET /api/v1/projects/{projectId}/outline`
 
@@ -294,7 +294,7 @@ Status codes: `200`; `404` if the project or node doesn't exist.
 
 #### `PATCH /api/v1/projects/{projectId}/outline/{nodeId}`
 
-Partial update (`extra="forbid"` — `level`/`sectionNumber`/`cliKey`/`actualWords` are server-derived and rejected with `422` if sent, as is any other unknown key). Sending `parentId` and/or `orderIndex` re-parents/reorders the node (and re-sequences old and new sibling lists); moving a node into its own subtree, or to a depth that would exceed `maxOutlineLevels`, is rejected.
+Partial update (`extra="forbid"` — `level`/`sectionNumber`/`cliKey`/`actualWords` are server-derived and rejected with `422` if sent, as is any other unknown key). Sending `parentId` and/or `orderIndex` re-parents/reorders the node (and re-sequences old and new sibling lists); moving a node into its own subtree, or to a depth that would exceed `maxOutlineLevels`, is rejected. `sourceScope`/`sourceIds` (issue #138): setting `sourceScope` to `inherit`/`all` clears `sourceIds`; `selected` requires at least one id of a live source of this project (duplicates are dropped, order kept); sending only `sourceIds` implies `selected`. Unlike structural edits, a scope change is allowed while a run is active — it takes effect on the next run, regenerate, or retry (`GenerationService` syncs current scopes into a reused `structure_graph.json`). The CLI receives them as `kb_scope`/`kb_sources` (`kb_sources` = source ids, i.e. the `kb/<sourceId>/` directories) in `book_structure.json`.
 
 Status codes: `200`; `404` if the project/node/new-parent doesn't exist; `422` on the validation cases above.
 
