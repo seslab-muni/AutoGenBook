@@ -34,8 +34,9 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
   await page.getByRole('button', { name: /Sources/ }).click();
   await page.getByLabel('Upload files').setInputFiles(FIXTURE_PDF);
   await expect(page.getByText('Attached.')).toBeVisible({ timeout: 15_000 });
+  // The Sources dialog lists attached files as table rows, not headings (#130).
   await expect(
-    page.getByRole('heading', { name: 'sample-source.pdf' }),
+    page.getByRole('dialog', { name: 'Sources' }).getByText('sample-source.pdf', { exact: true }),
   ).toBeVisible();
   await page.keyboard.press('Escape');
 
