@@ -7,8 +7,10 @@ import {
   FileText,
   Loader2,
   Lock,
+  LockOpen,
   Plus,
   Settings2,
+  Split,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -26,6 +28,11 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
+import {
+  CONTENT_LOCKED_BADGE_LABEL,
+  contentLockDisabledReason,
+  contentLockToggleLabel,
+} from '@/features/outline/content-lock';
 import { childrenOf, type OutlineTree } from '@/features/outline/model';
 import { inheritedSourceScope, resolveSourceScope } from '@/features/outline/source-scope';
 import { cn } from '@/lib/utils';
@@ -197,6 +204,10 @@ function OutlineRowComponent({
     : moveDisabledByFilter
       ? FILTER_ACTIVE_MOVE_MESSAGE
       : undefined;
+  // Content lock (issue #113) - against `flat`, not `entry.children`: an active filter prunes
+  // children out of the visible tree, and a parent must never look lockable because of that.
+  const contentLockDisabledMessage = contentLockDisabledReason(node, flat);
+  const contentLockLabel = contentLockToggleLabel(node);
 
   function rename(title: string) {
     updateMutation.mutate(
@@ -209,6 +220,13 @@ function OutlineRowComponent({
     updateMutation.mutate(
       { structureLocked: !node.structureLocked },
       { onError: (error) => reportError(error, 'Could not change lock state') },
+    );
+  }
+
+  function toggleContentLock() {
+    updateMutation.mutate(
+      { contentLocked: !node.contentLocked },
+      { onError: (error) => reportError(error, 'Could not change the content lock') },
     );
   }
 
@@ -311,13 +329,30 @@ function OutlineRowComponent({
 
             <SourceScopePill node={node} flat={flat} />
 
+            {node.contentLocked ? (
+              <span
+                title={CONTENT_LOCKED_BADGE_LABEL}
+                data-content-locked=""
+                className="inline-flex h-4 shrink-0 items-center rounded-full border border-primary/30 bg-primary/10 px-1.5 text-primary"
+              >
+                <span className="sr-only">{CONTENT_LOCKED_BADGE_LABEL}</span>
+                <Lock aria-hidden="true" className="size-2.5" />
+              </span>
+            ) : null}
+
             {!node.structureLocked ? (
               <HoverCard openDelay={150}>
                 <HoverCardTrigger asChild>
-                  <Lock className="size-3 shrink-0 text-muted-foreground" />
+                  {/* Not a lock icon: this is about the CLI splitting the node, and the row's
+                      lock glyphs now mean "content locked" (issue #113). */}
+                  <Split
+                    aria-label="Structure unlocked"
+                    className="size-3 shrink-0 text-muted-foreground"
+                  />
                 </HoverCardTrigger>
-                <HoverCardContent className="w-56 text-xs">
-                  Unlocked — the CLI may split this section into more nodes on its next run.
+                <HoverCardContent className="w-60 text-xs">
+                  Structure unlocked — the CLI may split this section into more nodes on its next
+                  run. This is unrelated to locking the section's content.
                 </HoverCardContent>
               </HoverCard>
             ) : null}
@@ -353,6 +388,26 @@ function OutlineRowComponent({
                   <Plus className="size-3.5" />
                 </button>
               ) : null}
+              <button
+                type="button"
+                // No `disabled:pointer-events-none` here, unlike its siblings: the title *is* the
+                // explanation of why it's disabled, and it can't show if hover never reaches it.
+                title={contentLockDisabledMessage ?? contentLockLabel}
+                aria-label={contentLockLabel}
+                aria-pressed={node.contentLocked}
+                disabled={Boolean(contentLockDisabledMessage)}
+                className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleContentLock();
+                }}
+              >
+                {node.contentLocked ? (
+                  <LockOpen className="size-3.5" />
+                ) : (
+                  <Lock className="size-3.5" />
+                )}
+              </button>
               <button
                 type="button"
                 title="Properties"
@@ -403,8 +458,17 @@ function OutlineRowComponent({
           <ContextMenuItem onSelect={() => actions.onOpenProperties(node.id)}>
             Properties
           </ContextMenuItem>
+          <ContextMenuItem
+            disabled={Boolean(contentLockDisabledMessage)}
+            title={contentLockDisabledMessage}
+            onSelect={toggleContentLock}
+          >
+            {contentLockLabel}
+          </ContextMenuItem>
           <ContextMenuItem onSelect={toggleLock}>
-            {node.structureLocked ? 'Unlock structure' : 'Lock structure'}
+            {node.structureLocked
+              ? 'Unlock structure (allow the CLI to split it)'
+              : 'Lock structure (never split it)'}
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem

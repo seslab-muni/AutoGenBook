@@ -4,7 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
-import { outline } from '@/api/queries/outline';
+import { outline, useUnlockAllOutlineMutation } from '@/api/queries/outline';
 import { useCreateRunMutation } from '@/api/queries/runs';
 import type { AuditMode, OutputFormat, Project, RunOptionsIn } from '@/api/types';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { lockedNodes } from '@/features/outline/content-lock';
+import { isLeaf } from '@/features/outline/model';
 import { scopedNodes } from '@/features/outline/source-scope';
 import { OUTPUT_FORMAT_LABELS } from '@/features/projects/lib/labels';
 import { useUiStore } from '@/stores/ui-store';
@@ -64,7 +66,12 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
     enabled: open,
   });
   const nodeCount = outlineData?.total ?? 0;
-  const scoped = scopedNodes(outlineData?.items ?? []);
+  const flatNodes = outlineData?.items ?? [];
+  const scoped = scopedNodes(flatNodes);
+  // Issue #113: only leaves can be locked, so the banner counts against leaves ("sections").
+  const leafCount = flatNodes.filter((node) => isLeaf(node.id, flatNodes)).length;
+  const lockedCount = lockedNodes(flatNodes).length;
+  const unlockAllMutation = useUnlockAllOutlineMutation(project.id);
 
   const [outputFormat, setOutputFormat] = useState<OutputFormat>(project.outputFormat);
   const [allowSubdivision, setAllowSubdivision] = useState(false);
@@ -82,6 +89,16 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
       setAuditBookMode('warn');
       setLlmModel(project.llmModel);
     }
+  }
+
+  function handleUnlockAllAndSubmit() {
+    unlockAllMutation.mutate(undefined, {
+      onSuccess: () => handleSubmit(),
+      onError: (error) => {
+        const problem = error instanceof ApiError ? error.problem : undefined;
+        toast.error(problem?.detail ?? problem?.title ?? 'Could not unlock the sections');
+      },
+    });
   }
 
   function handleSubmit() {
@@ -148,6 +165,28 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
                 </span>
                 Their sections only search the files chosen for them.
               </p>
+            ) : null}
+            {lockedCount > 0 ? (
+              <div className="space-y-2 border-t pt-2" data-testid="start-run-locked-banner">
+                <p>
+                  <span className="block font-medium text-foreground">
+                    {lockedCount} of {leafCount} section{leafCount === 1 ? '' : 's'}{' '}
+                    {lockedCount === 1 ? 'is' : 'are'} locked.
+                  </span>
+                  They will be kept as-is and used as context for the rest.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={unlockAllMutation.isPending || createMutation.isPending}
+                  onClick={handleUnlockAllAndSubmit}
+                >
+                  {unlockAllMutation.isPending
+                    ? 'Unlocking…'
+                    : 'Unlock all and regenerate everything'}
+                </Button>
+              </div>
             ) : null}
           </div>
 

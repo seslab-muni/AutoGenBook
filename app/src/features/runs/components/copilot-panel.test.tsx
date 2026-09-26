@@ -94,6 +94,27 @@ describe('CopilotPanel', () => {
     expect(screen.getByText(/start a full run first/i)).toBeInTheDocument();
   });
 
+  it('disables regeneration for a content-locked section and offers to unlock it (issue #113)', async () => {
+    const node = db.outlineNodes.get('sec-1-2')!;
+    db.outlineNodes.set('sec-1-2', { ...node, contentLocked: true });
+
+    const user = userEvent.setup();
+    renderWithProviders(<Harness projectId={CONSENSUS_PROJECT_ID} selectedNodeId="sec-1-2" />);
+    await screen.findByText(/§1\.2/);
+
+    expect(screen.getByRole('button', { name: /^regenerate/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Draft section' })).toBeDisabled();
+    expect(screen.getByText(/content is locked — unlock it to regenerate/i)).toBeInTheDocument();
+    const hint = screen.getByTestId('copilot-content-locked');
+
+    await user.click(within(hint).getByRole('button', { name: 'Unlock content' }));
+
+    await waitFor(() => expect(db.outlineNodes.get('sec-1-2')?.contentLocked).toBe(false));
+    await waitFor(() => expect(screen.queryByTestId('copilot-content-locked')).toBeNull());
+    expect(screen.getByRole('button', { name: /^regenerate/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Draft section' })).toBeEnabled();
+  });
+
   it('renders a 409 conflict inline with a "Start full run" action', async () => {
     // Force a stale-resume 409: the client only checks `lastRunId` presence, so make that run
     // exist but not resumable (matching the server's real precondition in `outline.regenerate`).

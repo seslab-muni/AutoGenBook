@@ -99,6 +99,8 @@ interface SeedOutlineNode {
   contentLatex: string;
   /** `OutlineNode.ragCitations` is untyped freeform JSON in the API's own schema; fixtures still model realistic entries. */
   ragCitations: Record<string, unknown>[];
+  /** Issue #113 — keep this leaf's content as-is across full runs. Defaults to `false`. */
+  contentLocked?: boolean;
   children?: SeedOutlineNode[];
 }
 
@@ -163,7 +165,7 @@ function flattenOutline(
       reviewerScore: null,
       reviewerNotes: null,
       structureLocked: true,
-      contentLocked: false,
+      contentLocked: node.contentLocked ?? false,
       sourceScope: 'inherit',
       sourceIds: [],
       createdAt: timestamp,

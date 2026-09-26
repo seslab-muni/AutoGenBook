@@ -200,7 +200,10 @@ export function ManuscriptSheet({
                     : 'This is a container node — it only has the outline summary shown in the assembled document. Content is generated per leaf section; select a leaf section below it to write or generate text.'}
                 </p>
               ) : (
-                <LazyMarkdownView markdown={draft} citations={parseRagCitations(node.ragCitations)} />
+                <LazyMarkdownView
+                  markdown={draft}
+                  citations={parseRagCitations(node.ragCitations)}
+                />
               )}
 
               <div className="mt-16 flex items-center justify-between border-t pt-6 font-sans text-xs text-muted-foreground">
@@ -220,6 +223,7 @@ export function ManuscriptSheet({
         equationCount={equationCount}
         status={status}
         reviewerScore={node.reviewerScore ?? null}
+        contentLocked={node.contentLocked}
       />
     </div>
   );

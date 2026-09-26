@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
@@ -37,6 +37,8 @@ describe('StartRunDialog', () => {
 
     useUiStore.setState({ activeModal: 'start-run' });
     await screen.findByRole('heading', { name: 'Start a run' });
+    // Nothing is locked in the seed, so no locked-sections banner (issue #113).
+    expect(screen.queryByTestId('start-run-locked-banner')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Start run' }));
 
@@ -192,5 +194,32 @@ describe('StartRunDialog', () => {
     expect(
       screen.getByText(/Their sections only search the files chosen for them\./),
     ).toBeInTheDocument();
+  });
+
+  it('counts locked sections and can unlock them all before starting the run (issue #113)', async () => {
+    for (const id of ['sec-1-1', 'sec-1-2']) {
+      db.outlineNodes.set(id, { ...db.outlineNodes.get(id)!, contentLocked: true });
+    }
+    const user = userEvent.setup();
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    useUiStore.setState({ activeModal: 'start-run' });
+    const banner = await screen.findByTestId('start-run-locked-banner');
+    // 6 leaves in the seeded consensus outline; only leaves can be locked.
+    expect(banner).toHaveTextContent('2 of 6 sections are locked.');
+    expect(banner).toHaveTextContent('kept as-is and used as context for the rest');
+
+    await user.click(
+      within(banner).getByRole('button', { name: 'Unlock all and regenerate everything' }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Start a run' })).not.toBeInTheDocument(),
+    );
+    expect(db.outlineNodes.get('sec-1-1')?.contentLocked).toBe(false);
+    expect(db.outlineNodes.get('sec-1-2')?.contentLocked).toBe(false);
+    // ...and the run was actually started.
+    expect(await screen.findByText('Full run')).toBeInTheDocument();
   });
 });

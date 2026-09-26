@@ -7,6 +7,12 @@ import { db } from '@/mocks/db';
 import { renderWithProviders } from '@/test/component-test-utils';
 import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
+import {
+  CONTENT_LOCK_LEAF_ONLY_MESSAGE,
+  CONTENT_LOCK_NEEDS_CONTENT_MESSAGE,
+  LOCK_CONTENT_LABEL,
+  UNLOCK_CONTENT_LABEL,
+} from '../content-lock';
 import { OutlinePane } from './outline-pane';
 import { STRUCTURE_LOCKED_MESSAGE } from './outline-row';
 
@@ -209,5 +215,60 @@ describe('OutlinePane source-scope pills (issue #138)', () => {
 
     const unscoped = await findRow('Foundations of Classical Asynchronous Consensus');
     expect(unscoped.querySelector('[data-scope-pill]')).toBeNull();
+  });
+});
+
+describe('OutlinePane content locks (issue #113)', () => {
+  it('disables the lock toggle with a reason on a blank leaf and on a node with children', async () => {
+    renderPane();
+
+    const blankLeaf = await findRow('Entanglement-Swapping Mesh Networks');
+    const blankToggle = within(blankLeaf).getByRole('button', { name: LOCK_CONTENT_LABEL });
+    expect(blankToggle).toBeDisabled();
+    expect(blankToggle).toHaveAttribute('title', CONTENT_LOCK_NEEDS_CONTENT_MESSAGE);
+
+    const parent = await findRow('Foundations of Classical Asynchronous Consensus');
+    const parentToggle = within(parent).getByRole('button', { name: LOCK_CONTENT_LABEL });
+    expect(parentToggle).toBeDisabled();
+    expect(parentToggle).toHaveAttribute('title', CONTENT_LOCK_LEAF_ONLY_MESSAGE);
+
+    // Nothing locked yet: no badge anywhere, no counter, no "Unlock all".
+    expect(document.querySelector('[data-content-locked]')).toBeNull();
+    expect(screen.queryByTestId('outline-locked-count')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Unlock all' })).toBeNull();
+  });
+
+  it('locks a drafted leaf from its hover action, then "Unlock all" clears every lock', async () => {
+    renderPane();
+
+    const row = await findRow('Formal Safety and Liveness Definitions');
+    fireEvent.click(within(row).getByRole('button', { name: LOCK_CONTENT_LABEL }));
+
+    await waitFor(() => expect(db.outlineNodes.get('sec-1-1')?.contentLocked).toBe(true));
+    const lockedRow = await findRow('Formal Safety and Liveness Definitions');
+    await waitFor(() => expect(lockedRow.querySelector('[data-content-locked]')).not.toBeNull());
+    expect(within(lockedRow).getByRole('button', { name: UNLOCK_CONTENT_LABEL })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByTestId('outline-locked-count')).toHaveTextContent('1 locked');
+
+    // A second lock, then the bulk clear from the toolbar.
+    const other = await findRow('Byzantine Quorum Intersection & Threshold Bounds');
+    fireEvent.click(within(other).getByRole('button', { name: LOCK_CONTENT_LABEL }));
+    await waitFor(() =>
+      expect(screen.getByTestId('outline-locked-count')).toHaveTextContent('2 locked'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock all' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Unlock all 2 locked sections?');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unlock all' }));
+
+    await waitFor(() => expect(db.outlineNodes.get('sec-1-1')?.contentLocked).toBe(false));
+    expect(db.outlineNodes.get('sec-1-2')?.contentLocked).toBe(false);
+    await waitFor(() => expect(screen.queryByTestId('outline-locked-count')).toBeNull());
+    expect(document.querySelector('[data-content-locked]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Unlock all' })).toBeNull();
   });
 });
