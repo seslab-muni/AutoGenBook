@@ -46,6 +46,11 @@ class RunOptionsIn(BaseSchema):
     audit_book_mode: Literal["off", "warn", "strict"] = "warn"
     legacy_tex: bool = False
     fail_fast_schema: bool = False
+    # Issue #113: clear every content lock of the project as part of queueing
+    # this run, atomically after all validation/admission checks - the
+    # "Unlock all and regenerate everything" shortcut. Not a run option (not
+    # echoed back on `Run.options`); it's a one-off side effect of this request.
+    unlock_all: bool = False
     # Issue #128: `None`/omitted means "use the project's own `llmModel`" - resolved by
     # `RunService.create` and persisted on the run's own `options`, so a project-level model
     # change afterward never retroactively changes what an already-queued/running run reports.

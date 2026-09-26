@@ -44,6 +44,10 @@ class OutlineNode(BaseSchema):
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
     structure_locked: bool
+    # Issue #113: keep this leaf's `contentMarkdown` as-is across full runs
+    # (it is still used as context for the sections generated after it).
+    # Only a leaf with non-blank content can be locked.
+    content_locked: bool
     # Issue #138: which project sources this node's sections retrieve from.
     # `inherit` = nearest ancestor's scope (all sources at the top level).
     # `sourceIds` is non-empty only when `sourceScope` is `selected`.
@@ -94,6 +98,10 @@ class OutlineNodeUpdate(BaseSchema):
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
     structure_locked: bool | None = None
+    # Issue #113. `true` is rejected with 422 on a node with blank
+    # `contentMarkdown` and with 409 on a node that has children; blanking
+    # `contentMarkdown` on a locked node clears the lock in the same write.
+    content_locked: bool | None = None
     # Issue #138. Setting `sourceScope` to anything but `selected` clears
     # `sourceIds`; `selected` requires at least one id of a live source of
     # this project (422 otherwise). `sourceIds` alone keeps the scope.

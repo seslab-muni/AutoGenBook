@@ -272,6 +272,7 @@ function insertOutlineTree(
       reviewerScore: null,
       reviewerNotes: null,
       structureLocked: true,
+      contentLocked: false,
       sourceScope: 'inherit',
       sourceIds: [],
       createdAt: now,
@@ -300,6 +301,35 @@ function insertOutlineTree(
  * source of the node's project (de-duplicated), and `sourceIds` sent alone implies `selected`.
  * Returns the node's (possibly unchanged) scope fields, or an error title for a 422.
  */
+/** Mirrors `OutlineService._normalize_content_lock` (issue #113). */
+function normalizeContentLock(
+  node: OutlineNode & { projectId: string },
+  body: OutlineNodeUpdate,
+): { contentLocked: boolean } | { status: 409 | 422; error: string } {
+  const content = body.contentMarkdown ?? node.contentMarkdown;
+  const wantsLock = body.contentLocked ?? node.contentLocked;
+  if (!wantsLock) return { contentLocked: false };
+  if (content.trim().length === 0) {
+    if (body.contentLocked != null) {
+      return {
+        status: 422,
+        error: 'contentLocked requires the node to have content; write the section first',
+      };
+    }
+    return { contentLocked: false };
+  }
+  if (
+    body.contentLocked != null &&
+    [...db.outlineNodes.values()].some((other) => other.parentId === node.id)
+  ) {
+    return {
+      status: 409,
+      error: `outline node ${node.id} has child sections; only a leaf's content can be locked`,
+    };
+  }
+  return { contentLocked: true };
+}
+
 function normalizeSourceScope(
   node: OutlineNode & { projectId: string },
   body: OutlineNodeUpdate,
@@ -595,6 +625,13 @@ const outlineHandlers = [
     if (body.parentId && !db.outlineNodes.get(body.parentId)) {
       return notFound('Parent node', new URL(request.url).pathname);
     }
+    if (body.parentId && db.outlineNodes.get(body.parentId)?.contentLocked) {
+      return problemResponse(
+        409,
+        `outline node ${body.parentId} is content-locked; unlock it before adding sections under it`,
+        new URL(request.url).pathname,
+      );
+    }
     const depth = outlineDepthOf(body.parentId ?? null) + 1;
     if (depth > row.maxOutlineLevels) {
       return problemResponse(
@@ -637,6 +674,7 @@ const outlineHandlers = [
       reviewerScore: null,
       reviewerNotes: null,
       structureLocked: false,
+      contentLocked: false,
       sourceScope: 'inherit',
       sourceIds: [],
       createdAt: now,
@@ -672,10 +710,26 @@ const outlineHandlers = [
     if ('error' in scope) {
       return problemResponse(422, scope.error, new URL(request.url).pathname);
     }
+    const lock = normalizeContentLock(node, body);
+    if ('error' in lock) {
+      return problemResponse(lock.status, lock.error, new URL(request.url).pathname);
+    }
+    if (
+      body.parentId &&
+      body.parentId !== node.parentId &&
+      db.outlineNodes.get(body.parentId)?.contentLocked
+    ) {
+      return problemResponse(
+        409,
+        `outline node ${body.parentId} is content-locked; unlock it before adding sections under it`,
+        new URL(request.url).pathname,
+      );
+    }
     const updated: OutlineNode & { projectId: string } = {
       ...node,
       ...(body as Partial<OutlineNode>),
       ...scope,
+      ...lock,
       actualWords:
         body.contentMarkdown != null
           ? body.contentMarkdown.trim().split(/\s+/).filter(Boolean).length
@@ -692,6 +746,25 @@ const outlineHandlers = [
       return notFound('Outline node', new URL(request.url).pathname);
     deleteOutlineSubtree(node.id);
     return new HttpResponse(null, { status: 204 });
+  }),
+
+  // Issue #113: one bulk clear of every content lock; idempotent, returns the whole outline.
+  http.post('*/api/v1/projects/:projectId/outline/unlock-all', ({ params, request }) => {
+    const projectId = params.projectId as string;
+    if (!db.projects.has(projectId)) return notFound('Project', new URL(request.url).pathname);
+    const now = db.now();
+    for (const node of db.outlineNodes.values()) {
+      if (node.projectId === projectId && node.contentLocked) {
+        db.outlineNodes.set(node.id, { ...node, contentLocked: false, updatedAt: now });
+      }
+    }
+    const flat = db.outlineFlatForProject(projectId);
+    return HttpResponse.json({
+      items: flat,
+      total: flat.length,
+      limit: Math.max(flat.length, 1),
+      offset: 0,
+    });
   }),
 
   http.post(
@@ -714,6 +787,13 @@ const outlineHandlers = [
         return problemResponse(
           409,
           `outline node ${node.id} already has a regenerate queued or running; wait for it to finish or cancel it`,
+          new URL(request.url).pathname,
+        );
+      }
+      if (node.contentLocked) {
+        return problemResponse(
+          409,
+          `outline node ${node.id} is content-locked; unlock it first to regenerate it`,
           new URL(request.url).pathname,
         );
       }
@@ -794,6 +874,26 @@ const runHandlers = [
       return problemResponse(409, admissionBlocker, new URL(request.url).pathname);
     }
     const body = (await request.json().catch(() => ({}))) as RunOptionsIn;
+    if (
+      body.legacyTex &&
+      !body.unlockAll &&
+      (body.outline ?? 'project') === 'project' &&
+      db.outlineFlatForProject(projectId).some((node) => node.contentLocked)
+    ) {
+      return problemResponse(
+        422,
+        'legacyTex cannot be combined with content-locked sections (their text is Markdown); unlock them first or run without legacyTex',
+        new URL(request.url).pathname,
+      );
+    }
+    if (body.unlockAll) {
+      // Issue #113: cleared only now, after every check above has passed.
+      for (const node of db.outlineNodes.values()) {
+        if (node.projectId === projectId && node.contentLocked) {
+          db.outlineNodes.set(node.id, { ...node, contentLocked: false, updatedAt: db.now() });
+        }
+      }
+    }
     const runId = db.nextId();
     const run: Run = {
       id: runId,

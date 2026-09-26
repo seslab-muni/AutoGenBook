@@ -72,4 +72,29 @@ describe('EditorStatusBar', () => {
     );
     expect(screen.getByText('Error saving')).toBeInTheDocument();
   });
+
+  it('shows a Locked badge for a content-locked section (issue #113)', () => {
+    const { rerender } = render(
+      <EditorStatusBar
+        serverWords={100}
+        draftWords={100}
+        isDirty={false}
+        equationCount={0}
+        status="saved"
+        contentLocked
+      />,
+    );
+    expect(screen.getByText('Locked')).toBeInTheDocument();
+
+    rerender(
+      <EditorStatusBar
+        serverWords={100}
+        draftWords={100}
+        isDirty={false}
+        equationCount={0}
+        status="saved"
+      />,
+    );
+    expect(screen.queryByText('Locked')).toBeNull();
+  });
 });

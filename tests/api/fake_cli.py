@@ -229,6 +229,16 @@ def main(argv: list[str] | None = None) -> int:
                     "title": str(child.get("title", key)).strip(),
                     "summary": str(child.get("summary", "")).strip(),
                 }
+                # Carried onto the graph node like `build_graph_from_book_json`
+                # does (issue #113) so the API's regenerate/retry lock sync has
+                # the same graph shape to work on. Deliberately *not* honoured
+                # below - every leaf still gets fake content - so the API's own
+                # import-time skip for locked rows is what the tests exercise.
+                if child.get("content_locked"):
+                    nodes[key]["content_locked"] = True
+                    nodes[key]["structure_locked"] = True
+                if child.get("content_file"):
+                    nodes[key]["content_file"] = str(child["content_file"])
                 edges.append([parent_key, key])
                 nested = [c for c in (child.get("childs") or []) if isinstance(c, dict)]
                 if nested:

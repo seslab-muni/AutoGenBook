@@ -85,6 +85,17 @@ Routes stay thin: a route module owns params/search-param parsing, loader
 wiring, and rendering a feature's top-level component — the actual UI and data
 logic live under `src/features/<name>`.
 
+Cross-cutting outline rules live next to the feature, not in components:
+`src/features/outline/model.ts` (positions, tree building, filtering),
+`source-scope.ts` (per-node KB scoping, issue #138) and `content-lock.ts`
+(content locks, issue #113 — a locked leaf is kept as-is by full runs and used
+as context for the rest; the helper decides when a node may be locked, and the
+outline row, properties sheet, Copilot panel and start-run dialog all read the
+same wording from it). The row's hover group and context menu toggle the lock,
+the pane's toolbar offers "Unlock all" (with a confirm) once anything is locked,
+and the start-run dialog shows an "N of M sections are locked" banner with an
+"Unlock all and regenerate everything" shortcut.
+
 ## API client layer
 
 `src/api/schema.gen.ts` is generated from `../docs/openapi.yaml` by

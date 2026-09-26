@@ -269,6 +269,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/outline/unlock-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlock All Outline Nodes
+         * @description Clear `contentLocked` on every node of the project (issue #113) so
+         *     the next full run regenerates everything. Idempotent. Returns the
+         *     whole outline, like `PUT /outline` does.
+         */
+        post: operations["outline-unlock_all_outline_nodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/outline/{node_id}": {
         parameters: {
             query?: never;
@@ -529,6 +551,10 @@ export interface components {
             childs?: components["schemas"]["BookStructureNode"][];
             /** Structure Locked */
             structure_locked?: boolean | null;
+            /** Content Locked */
+            content_locked?: boolean | null;
+            /** Content File */
+            content_file?: string | null;
             /** Kb Scope */
             kb_scope?: ("all" | "selected") | null;
             /** Kb Sources */
@@ -676,6 +702,8 @@ export interface components {
             reviewerNotes?: string | null;
             /** Structurelocked */
             structureLocked: boolean;
+            /** Contentlocked */
+            contentLocked: boolean;
             sourceScope: components["schemas"]["SourceScope"];
             /** Sourceids */
             sourceIds: string[];
@@ -762,6 +790,8 @@ export interface components {
             reviewerNotes?: string | null;
             /** Structurelocked */
             structureLocked: boolean;
+            /** Contentlocked */
+            contentLocked: boolean;
             sourceScope: components["schemas"]["SourceScope"];
             /** Sourceids */
             sourceIds: string[];
@@ -813,6 +843,8 @@ export interface components {
             reviewerNotes?: string | null;
             /** Structurelocked */
             structureLocked?: boolean | null;
+            /** Contentlocked */
+            contentLocked?: boolean | null;
             sourceScope?: components["schemas"]["SourceScope"] | null;
             /** Sourceids */
             sourceIds?: string[] | null;
@@ -1275,6 +1307,11 @@ export interface components {
              * @default false
              */
             failFastSchema?: boolean;
+            /**
+             * Unlockall
+             * @default false
+             */
+            unlockAll?: boolean;
             /** Llmmodel */
             llmModel?: string | null;
         };
@@ -2202,6 +2239,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OutlineNode"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "outline-unlock_all_outline_nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_OutlineNode_"];
                 };
             };
             /** @description Validation Error */

@@ -25,6 +25,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { lockedNodes } from '@/features/outline/content-lock';
+import { isLeaf } from '@/features/outline/model';
 import { scopedNodes } from '@/features/outline/source-scope';
 import { OUTPUT_FORMAT_LABELS } from '@/features/projects/lib/labels';
 import { useUiStore } from '@/stores/ui-store';
@@ -64,7 +66,11 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
     enabled: open,
   });
   const nodeCount = outlineData?.total ?? 0;
-  const scoped = scopedNodes(outlineData?.items ?? []);
+  const flatNodes = outlineData?.items ?? [];
+  const scoped = scopedNodes(flatNodes);
+  // Issue #113: only leaves can be locked, so the banner counts against leaves ("sections").
+  const leafCount = flatNodes.filter((node) => isLeaf(node.id, flatNodes)).length;
+  const lockedCount = lockedNodes(flatNodes).length;
 
   const [outputFormat, setOutputFormat] = useState<OutputFormat>(project.outputFormat);
   const [allowSubdivision, setAllowSubdivision] = useState(false);
@@ -84,7 +90,12 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
     }
   }
 
-  function handleSubmit() {
+  /**
+   * `unlockAll` rides the run request itself (issue #113) rather than being a separate
+   * `unlock-all` call first: the API clears the locks only once the run has passed every
+   * validation/admission check, so a 409/422 here never leaves the project unlocked with no run.
+   */
+  function handleSubmit(extra: Pick<RunOptionsIn, 'unlockAll'> = {}) {
     const body: RunOptionsIn = {
       outline: 'project',
       outputFormat,
@@ -93,6 +104,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
       ...(llmModel.trim() && llmModel.trim() !== project.llmModel
         ? { llmModel: llmModel.trim() }
         : {}),
+      ...extra,
     };
     createMutation.mutate(body, {
       onSuccess: (run) => {
@@ -148,6 +160,26 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
                 </span>
                 Their sections only search the files chosen for them.
               </p>
+            ) : null}
+            {lockedCount > 0 ? (
+              <div className="space-y-2 border-t pt-2" data-testid="start-run-locked-banner">
+                <p>
+                  <span className="block font-medium text-foreground">
+                    {lockedCount} of {leafCount} section{leafCount === 1 ? '' : 's'}{' '}
+                    {lockedCount === 1 ? 'is' : 'are'} locked.
+                  </span>
+                  They will be kept as-is and used as context for the rest.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={createMutation.isPending}
+                  onClick={() => handleSubmit({ unlockAll: true })}
+                >
+                  Unlock all and regenerate everything
+                </Button>
+              </div>
             ) : null}
           </div>
 
@@ -234,7 +266,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
           <Button type="button" variant="outline" onClick={closeModal}>
             Cancel
           </Button>
-          <Button type="button" onClick={handleSubmit} disabled={createMutation.isPending}>
+          <Button type="button" onClick={() => handleSubmit()} disabled={createMutation.isPending}>
             {createMutation.isPending ? 'Starting…' : 'Start run'}
           </Button>
         </DialogFooter>
