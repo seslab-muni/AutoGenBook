@@ -23,5 +23,6 @@ semgrep-results.json
 
 info.txt
 
-# Root-level output of `python -m autogenbook.smoke_test`
-out_smoke/
+# Scratch output of `python -m autogenbook.smoke_test` (repo-root only; tests/out_smoke* fixtures stay tracked)
+/out_smoke/
+/out_smoke_*/

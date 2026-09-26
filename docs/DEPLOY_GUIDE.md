@@ -860,10 +860,35 @@ python scripts/deploy.py --sync-secrets --apply
 ```
 
 Run `python scripts/deploy.py --help` for every flag (`--force {core,web,all}` to rebuild
-regardless of the diff, `--no-rollback` to leave a failed rollout in place for debugging,
-`-y`/`--yes` to skip the confirmation prompt for scripting). One real limitation worth knowing:
-rolling back restores container images, not the database - if a failed rollout's `api` container
-already ran an Alembic migration on startup, the rollback does not undo that migration.
+regardless of the diff, `--no-rollback` to leave a broken rollout in place for debugging,
+`-y`/`--yes` to skip the confirmation prompt for scripting).
+
+**How the script handles a rollout that does not finish** - shaped by a real incident where a
+merely slow worker rollout tripped the timeout, the script "rolled back" `api` onto an image two
+Alembic migrations behind the database, and the API crash-looped until it was re-applied by hand:
+
+- **Broken vs slow.** `kubectl rollout status` is polled in 30 s slices and the new ReplicaSet's
+  pods are inspected in between. A crash loop, an unpullable image, or a pod that has restarted
+  twice is reported as *broken* within one slice and rolled back straight away. A rollout whose
+  timeout elapses while every new pod still looks healthy is reported as *slow* and left running
+  - the script exits 1 and tells you to wait and re-run `--apply`, which then carries on with
+  whatever it had not applied yet. `--rollout-timeout` (api/web, default 180 s) and
+  `--worker-rollout-timeout` (default 900 s: the worker's five replicas roll one at a time with
+  `maxSurge: 0` and take about two minutes each) only bound the *healthy* case.
+- **Migrations are forward-only.** `api`'s entrypoint runs `alembic upgrade head` on every start,
+  so once a deploy that changes `api/infrastructure/db/alembic/versions/` has applied `api`, the
+  database is at HEAD's revision and any older core image would fail with
+  `Can't locate revision identified by '...'`. The plan says so up front (a `note:` line), and on
+  a later failure in that run `api` and `worker` are deliberately **not** rolled back - only the
+  other touched Deployments are - with instructions printed for the two possible situations
+  (`api`'s new pod died before the migration ran, so `kubectl rollout undo deployment/api` is
+  safe; or it ran, so fix forward). Kubernetes keeps the previous `api` ReplicaSet serving until a
+  new pod is ready, so this by itself is not an outage.
+- **Rollback restores what the cluster was actually running.** The pre-run baseline is the
+  manifest as committed at the live tag's commit (so a bad resource-limit change bundled in HEAD
+  is undone too) with its image line pinned to the tag `kubectl` reported, because that commit's
+  own image line still names the deploy *before* it (the tag only lands in the follow-up
+  `Deploy <tag>` commit).
 
 The equivalent by hand, for reference or if the script itself is unavailable:
 

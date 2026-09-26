@@ -13,10 +13,19 @@ from a local file that could go stale) and only rebuilds an image whose relevant
 changed since then.
 
 Safe by default: with no flags this only prints the plan - nothing is built, pushed, or applied.
-Pass --apply to actually do it. A failed rollout automatically rolls every Deployment touched in
-that run back to its pre-run state (image tag *and* manifest file), so the cluster never sits
-half-upgraded with an api/web pair that were never meant to run together - see --no-rollback to
-opt out and leave a failure in place for debugging instead.
+Pass --apply to actually do it. A *broken* rollout (new pods crash-looping, image unpullable, ...)
+automatically rolls every Deployment touched in that run back to its pre-run state (image tag
+*and* manifest file), so the cluster never sits half-upgraded with an api/web pair that were never
+meant to run together - see --no-rollback to opt out and leave a failure in place for debugging
+instead. Two deliberate exceptions, both learned from a real incident:
+
+  * A rollout that is merely *slow* (its timeout elapsed but every new pod is healthy - the
+    worker's five replicas roll one at a time and take ~2 min each) is left running, not rolled
+    back: the script exits 1 and tells you to wait and re-run --apply to finish the remaining
+    Deployments.
+  * Once a deploy that changes Alembic migrations has applied api, api and worker are never
+    auto-rolled back: api runs `alembic upgrade head` on startup, so the database is already at
+    HEAD's revision and any older image would just crash-loop on "Can't locate revision".
 
 This does not replace docs/DEPLOY_GUIDE.md - that's still the runbook for first-time cluster
 setup (Postgres, MinIO, ingress, etc). This script automates the day-to-day "I changed some code,
@@ -52,13 +61,15 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import textwrap
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -115,6 +126,18 @@ class DeployError(Exception):
     traceback. Anything else propagating out of main() is a real bug in this script."""
 
 
+class RolloutBroken(DeployError):
+    """A rollout whose new pods are failing (crash loop, unpullable image, ...) - it will never
+    complete on its own, so apply_phase() gives up early and rolls back."""
+
+
+class RolloutSlow(DeployError):
+    """A rollout whose timeout elapsed while every new pod still looked healthy. It is most
+    likely just slow (the worker's one-at-a-time replica turnover), so apply_phase() leaves it
+    running instead of rolling back - rolling back a healthy rollout is how the incident described
+    at MIGRATIONS_PREFIX happened."""
+
+
 @dataclass(frozen=True)
 class ImageSpec:
     repo: str
@@ -139,6 +162,41 @@ DEPLOYMENTS: dict[str, DeploymentSpec] = {
     "web": DeploymentSpec(REPO_ROOT / "k8s" / "web.yaml", "web"),
 }
 DEPLOYMENT_ORDER = ("api", "worker", "web")
+
+# Alembic migration files. api's container entrypoint (k8s/api.yaml) runs `alembic upgrade head`
+# on every start, so the moment a new core image's api pod has started the database is at that
+# image's head revision - and any *older* core image's `alembic upgrade head` then fails with
+# "Can't locate revision identified by '<new revision>'" and crash-loops. That is why
+# apply_phase() refuses to auto-roll api/worker back once a deploy that touched this directory has
+# applied api. Learned the hard way: a worker rollout *timeout* rolled api back to an image two
+# migrations behind and took the API down until it was re-applied by hand.
+MIGRATIONS_PREFIX = "api/infrastructure/db/alembic/versions/"
+
+# Per-Deployment `kubectl rollout status --timeout` defaults. worker is five single-slot replicas
+# rolling one at a time with maxSurge: 0 (see k8s/worker.yaml) and each replacement takes ~2 min
+# (old pod drains, new pod schedules and attaches two PVCs), so its rollout legitimately needs
+# ~10 min; api and web are single-replica and up in well under a minute. A genuinely broken
+# rollout (crash loop, bad image) is detected within one poll interval regardless of the timeout
+# - see _wait_for_rollout() - so these only bound how long a *healthy but slow* rollout may take.
+ROLLOUT_TIMEOUT_DEFAULT = "180s"
+WORKER_ROLLOUT_TIMEOUT_DEFAULT = "900s"
+ROLLOUT_POLL_INTERVAL_S = 30
+# Container waiting-state reasons that mean a new pod will never become ready on its own.
+BROKEN_WAITING_REASONS = frozenset(
+    {
+        "CrashLoopBackOff",
+        "ImagePullBackOff",
+        "ErrImagePull",
+        "InvalidImageName",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "RunContainerError",
+    }
+)
+# A new pod that has already restarted this many times is crashing, even if kubelet hasn't got
+# round to labelling it CrashLoopBackOff yet. One restart is tolerated: api's entrypoint can lose
+# its first DB connection while Postgres is still warming up and come good on the second try.
+BROKEN_RESTART_COUNT = 2
 
 
 # --------------------------------------------------------------------------------------
@@ -255,6 +313,85 @@ def kubectl_get_secret_data(name: str, namespace: str) -> dict[str, str] | None:
     return json.loads(out).get("data", {}) if out is not None else None
 
 
+def _kubectl_list_json(resource: str, namespace: str, selector: str) -> list[dict]:
+    """`kubectl get <resource> -l <selector> -o json` -> the list's items."""
+    result = subprocess.run(
+        ["kubectl", "get", resource, "-n", namespace, "-l", selector, "-o", "json"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise DeployError(f"kubectl get {resource} -l {selector} failed:\n{result.stderr.strip()}")
+    return json.loads(result.stdout).get("items", [])
+
+
+def _deployment_new_pods(name: str, namespace: str) -> list[dict]:
+    """The pods belonging to `name`'s *current* ReplicaSet (the one this rollout is bringing up),
+    excluding pods already being deleted. Old-ReplicaSet pods are deliberately left out: a
+    14-day-old worker pod's historical restart count says nothing about whether the new image
+    works. Returns [] when the new ReplicaSet can't be identified yet (kubectl has not observed
+    the spec update), which callers treat as "nothing known to be wrong"."""
+    raw = _kubectl_get("deployment", name, namespace, output="json")
+    if raw is None:
+        return []
+    deployment = json.loads(raw)
+    revision = deployment.get("metadata", {}).get("annotations", {}).get("deployment.kubernetes.io/revision")
+    match_labels = deployment.get("spec", {}).get("selector", {}).get("matchLabels", {})
+    if not revision or not match_labels:
+        return []
+    selector = ",".join(f"{k}={v}" for k, v in sorted(match_labels.items()))
+    template_hash = None
+    for rs in _kubectl_list_json("replicasets", namespace, selector):
+        if rs.get("metadata", {}).get("annotations", {}).get("deployment.kubernetes.io/revision") == revision:
+            template_hash = rs.get("spec", {}).get("selector", {}).get("matchLabels", {}).get("pod-template-hash")
+            break
+    if not template_hash:
+        return []
+    pods = _kubectl_list_json("pods", namespace, f"{selector},pod-template-hash={template_hash}")
+    return [pod for pod in pods if not pod.get("metadata", {}).get("deletionTimestamp")]
+
+
+def _broken_pods(pods: list[dict]) -> list[str]:
+    """Human-readable reasons for every pod in `pods` that will never become ready on its own
+    (see BROKEN_WAITING_REASONS / BROKEN_RESTART_COUNT). Empty means all of them still look like
+    they're merely starting up."""
+    reasons: list[str] = []
+    for pod in pods:
+        pod_name = pod.get("metadata", {}).get("name", "?")
+        status = pod.get("status", {})
+        if status.get("phase") == "Failed":
+            reasons.append(f"pod/{pod_name}: phase Failed ({status.get('reason') or status.get('message') or 'no reason'})")
+            continue
+        for cs in status.get("initContainerStatuses", []) + status.get("containerStatuses", []):
+            container = cs.get("name", "?")
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            if waiting.get("reason") in BROKEN_WAITING_REASONS:
+                detail = f": {waiting['message']}" if waiting.get("message") else ""
+                reasons.append(f"pod/{pod_name} container {container}: {waiting['reason']}{detail}")
+            elif cs.get("restartCount", 0) >= BROKEN_RESTART_COUNT:
+                last = ((cs.get("lastState") or {}).get("terminated") or {})
+                detail = f" (last exit: {last.get('reason', '?')}, code {last.get('exitCode', '?')})" if last else ""
+                reasons.append(f"pod/{pod_name} container {container}: restarted {cs['restartCount']} times{detail}")
+    return reasons
+
+
+_DURATION_RE = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
+
+
+def parse_duration(text: str) -> int:
+    """'900s' / '15m' / '1h30m' / bare '900' -> seconds. Same grammar kubectl accepts for
+    --timeout (minus sub-second units, which make no sense for a rollout)."""
+    text = text.strip()
+    if text.isdigit():
+        return int(text)
+    match = _DURATION_RE.match(text)
+    if not match or not text:
+        raise DeployError(f"invalid duration {text!r} - expected e.g. '180s', '15m' or '1h30m'")
+    hours, minutes, seconds = (int(part) if part else 0 for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
 def parse_tag(image_ref: str) -> str:
     if ":" not in image_ref:
         raise DeployError(
@@ -264,20 +401,25 @@ def parse_tag(image_ref: str) -> str:
     return image_ref.rsplit(":", 1)[1]
 
 
-def set_image_tag(manifest: Path, image_ref_prefix: str, new_tag: str) -> None:
-    """Rewrites `image: <image_ref_prefix>:<old-tag>` to the new tag, in place, leaving every
-    other line (including all the manifest's own comments) untouched. Deliberately a targeted
-    regex rather than a YAML parse/dump round-trip - these manifests are heavily hand-commented,
-    and PyYAML's dumper silently drops comments on a round-trip."""
-    text = manifest.read_text()
+def replace_image_tag(text: str, image_ref_prefix: str, new_tag: str, *, where: str) -> str:
+    """Returns `text` with its single `image: <image_ref_prefix>:<old-tag>` line pointed at
+    `new_tag`, every other line (including all the manifest's own comments) untouched.
+    Deliberately a targeted regex rather than a YAML parse/dump round-trip - these manifests are
+    heavily hand-commented, and PyYAML's dumper silently drops comments on a round-trip. `where`
+    names the text's origin for the error message."""
     pattern = re.compile(rf"^(\s*image:\s*{re.escape(image_ref_prefix)}:)([^\s]+)(\s*)$", re.MULTILINE)
     new_text, count = pattern.subn(rf"\g<1>{new_tag}\3", text)
     if count != 1:
         raise DeployError(
-            f"expected exactly one 'image: {image_ref_prefix}:...' line in {manifest}, found {count} - "
-            "the manifest's format may have changed; update set_image_tag() in scripts/deploy.py"
+            f"expected exactly one 'image: {image_ref_prefix}:...' line in {where}, found {count} - "
+            "the manifest's format may have changed; update replace_image_tag() in scripts/deploy.py"
         )
-    manifest.write_text(new_text)
+    return new_text
+
+
+def set_image_tag(manifest: Path, image_ref_prefix: str, new_tag: str) -> None:
+    """Rewrites the manifest's image tag in place - see replace_image_tag()."""
+    manifest.write_text(replace_image_tag(manifest.read_text(), image_ref_prefix, new_tag, where=str(manifest)))
 
 
 # --------------------------------------------------------------------------------------
@@ -320,6 +462,11 @@ class Plan:
     deployments: dict[str, DeploymentPlan]
     images_to_build: set[str]
     notes: list[str]
+    # Alembic migration files (MIGRATIONS_PREFIX) that differ between the live core image's
+    # commit and HEAD. Non-empty means "once api has been applied, api/worker cannot be rolled
+    # back" - see apply_phase(). Conservatively non-empty when the live commit isn't reachable
+    # locally and no diff was possible.
+    migrations_changed: list[str] = field(default_factory=list)
 
     @property
     def anything_to_do(self) -> bool:
@@ -390,11 +537,21 @@ def build_plan(namespace: str, force: str | None) -> Plan:
         for image_key, tag in image_tags.items()
     }
 
+    migrations_changed: list[str] = []
     if decisions["core"].needs_build:
-        notes.append(
-            "rolling back the core image does not undo any Alembic migration it already ran on "
-            "startup - migrations are forward-only. See docs/DEPLOY_GUIDE.md."
-        )
+        _, core_unknown = diff_since(tags["api"])
+        if core_unknown:
+            migrations_changed = [f"(unknown - {tags['api']} isn't reachable locally, assuming migrations changed)"]
+        else:
+            migrations_changed = [f for f in decisions["core"].changed if f.startswith(MIGRATIONS_PREFIX)]
+        if migrations_changed:
+            notes.append(
+                "this deploy changes Alembic migration(s): "
+                + ", ".join(migrations_changed)
+                + ". api runs `alembic upgrade head` on startup, so once api has been applied "
+                "api/worker will NOT be auto-rolled back on a later failure - the database would "
+                "already be ahead of the old image. See docs/DEPLOY_GUIDE.md section 16."
+            )
 
     deployments: dict[str, DeploymentPlan] = {}
     for name in DEPLOYMENT_ORDER:
@@ -421,7 +578,7 @@ def build_plan(namespace: str, force: str | None) -> Plan:
         )
 
     images_to_build = {image_key for image_key, decision in decisions.items() if decision.needs_build}
-    return Plan(head_full, head_short, deployments, images_to_build, notes)
+    return Plan(head_full, head_short, deployments, images_to_build, notes, migrations_changed)
 
 
 def print_plan(plan: Plan) -> None:
@@ -499,54 +656,139 @@ def _manifest_at_ref(ref: str, manifest: Path) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _wait_for_rollout(name: str, namespace: str, rollout_timeout: str) -> None:
+    """Waits for deployment/`name` to finish rolling out, for at most `rollout_timeout`.
+
+    Polls `kubectl rollout status` in ROLLOUT_POLL_INTERVAL_S slices rather than one long call so
+    that between slices the new ReplicaSet's pods can be inspected: a crash-looping or unpullable
+    image is reported as RolloutBroken within one interval instead of after the full timeout, and
+    a timeout with every new pod still healthy is reported as RolloutSlow rather than as a
+    failure. Any other kubectl error propagates as CalledProcessError, as before."""
+    deadline = time.monotonic() + parse_duration(rollout_timeout)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RolloutSlow(
+                f"deployment/{name} has not finished rolling out after {rollout_timeout}, but every new pod "
+                "looks healthy - it is most likely just slow (the worker replaces its replicas one at a time). "
+                f"Watch it with `kubectl rollout status deployment/{name} -n {namespace}`; if it does complete, "
+                "re-run `deploy.py --apply` to carry on with the remaining deployments, otherwise investigate "
+                "with `kubectl describe pods -n " + namespace + "`."
+            )
+        step = max(1, min(ROLLOUT_POLL_INTERVAL_S, math.ceil(remaining)))
+        cmd = ["kubectl", "rollout", "status", f"deployment/{name}", "-n", namespace, f"--timeout={step}s"]
+        print(f"$ {shlex.join(cmd)}")
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if result.stdout:
+            print(result.stdout.rstrip())
+        if result.returncode == 0:
+            return
+        if "timed out" not in result.stdout:
+            raise subprocess.CalledProcessError(result.returncode, cmd)
+        broken = _broken_pods(_deployment_new_pods(name, namespace))
+        if broken:
+            raise RolloutBroken(
+                f"deployment/{name}'s new pods are failing - giving up on this rollout early:\n  " + "\n  ".join(broken)
+            )
+
+
 def _apply_and_wait(name: str, manifest: Path, namespace: str, rollout_timeout: str) -> None:
     print(f"\n==> Applying {manifest} (deployment/{name})")
     run(["kubectl", "apply", "-f", str(manifest), "-n", namespace])
-    run(["kubectl", "rollout", "status", f"deployment/{name}", "-n", namespace, f"--timeout={rollout_timeout}"])
+    _wait_for_rollout(name, namespace, rollout_timeout)
 
 
-def apply_phase(plan: Plan, registry: str, namespace: str, rollout_timeout: str, no_rollback: bool) -> int:
+def _rollback_baseline(d: DeploymentPlan, image_ref_prefix: str) -> bytes:
+    """The manifest content a rollback of `d` restores: the git-committed manifest at the live
+    tag's commit (so any non-tag manifest change HEAD carried - a resource limit, say - is undone
+    too), with its image line pinned to the tag the cluster is *actually* running.
+
+    The pin matters: the commit that the live tag names still contains the tag of the deploy
+    *before* it, because a tag only lands in a manifest in the follow-up "Deploy <tag>" commit.
+    Restoring that commit's bytes verbatim therefore rolled the cluster back two deploys, not one
+    (the real incident: api landed on an image two migrations behind the database)."""
+    committed = _manifest_at_ref(d.current_tag, d.manifest)
+    if committed is not None:
+        text, where = committed.decode(), f"{_display_path(d.manifest)} at {d.current_tag}"
+    else:
+        # Best effort: d.current_tag isn't a resolvable commit (legacy semver tag, shallow clone).
+        text, where = d.manifest.read_text(), str(d.manifest)
+    return replace_image_tag(text, image_ref_prefix, d.current_tag, where=where).encode()
+
+
+def _commit_hint(plan: Plan, manifests: list[Path]) -> str:
+    shown = sorted({_display_path(m) for m in manifests})
+    return (
+        "\n  ".join(shown)
+        + f"\n\n  git add {' '.join(shown)} && git commit -m 'Deploy {plan.head_short}'"
+    )
+
+
+def apply_phase(plan: Plan, registry: str, namespace: str, rollout_timeouts: dict[str, str], no_rollback: bool) -> int:
+    """Applies every Deployment the plan says needs it, in DEPLOYMENT_ORDER, and decides what to
+    do when one fails:
+
+      * RolloutSlow (timeout elapsed, new pods healthy): leave everything as it is, exit 1. The
+        rollout will most likely complete by itself; re-running --apply then finishes the rest.
+      * anything else (RolloutBroken, kubectl error, manifest error): roll every touched
+        Deployment back to its pre-run state - EXCEPT api and worker when this deploy changes
+        Alembic migrations and api was already applied (see MIGRATIONS_PREFIX): the database is
+        then ahead of the old image and rolling back could only crash-loop, so they stay on the
+        new image and the operator is told exactly what to check.
+    """
     order = [name for name in DEPLOYMENT_ORDER if plan.deployments[name].needs_apply]
     if not order:
         print("\nNothing to apply.")
         return 0
 
     touched: list[tuple[str, Path, bytes]] = []
+    applied: set[str] = set()  # kubectl apply was at least *attempted* for these
     failed_at: str | None = None
+    failure: BaseException | None = None
 
     for name in order:
         d = plan.deployments[name]
-        # The rollback baseline is the manifest's content as it was *last deployed*
-        # (git-committed at d.current_tag), not just its bytes right before this run's own
-        # mutation - those can already contain this run's other, non-tag manifest edits (e.g. a
-        # resource-limit change bundled in the same commit), which a real rollback must undo too.
-        baseline = _manifest_at_ref(d.current_tag, d.manifest)
-        if baseline is None:
-            baseline = d.manifest.read_bytes()  # best effort: d.current_tag isn't a resolvable commit
-        touched.append((name, d.manifest, baseline))
-
+        image_ref_prefix = f"{registry}/{IMAGES[d.image_key].repo}"
         try:
+            touched.append((name, d.manifest, _rollback_baseline(d, image_ref_prefix)))
             if d.needs_build:
-                image_repo = IMAGES[d.image_key].repo
-                set_image_tag(d.manifest, f"{registry}/{image_repo}", plan.head_short)
-            _apply_and_wait(name, d.manifest, namespace, rollout_timeout)
+                set_image_tag(d.manifest, image_ref_prefix, plan.head_short)
+            applied.add(name)
+            _apply_and_wait(name, d.manifest, namespace, rollout_timeouts[name])
         except (subprocess.CalledProcessError, DeployError) as exc:
             if isinstance(exc, DeployError):
                 print(f"\n!! {exc}", file=sys.stderr)
-            failed_at = name
+            failed_at, failure = name, exc
             break
+
+    retagged = [m for n, m, _ in touched if plan.deployments[n].needs_build]
 
     if failed_at is None:
         print("\nAll deployments applied and healthy.")
-        retagged = sorted({_display_path(m) for n, m, _ in touched if plan.deployments[n].needs_build})
         if retagged:
             print(
                 "\nThe following manifest(s) were updated with the new image tag on disk and "
                 "still need to be committed to keep git in sync with the cluster:\n  "
-                + "\n  ".join(retagged)
-                + f"\n\n  git add {' '.join(retagged)} && git commit -m 'Deploy {plan.head_short}'"
+                + _commit_hint(plan, retagged)
             )
         return 0
+
+    if isinstance(failure, RolloutSlow):
+        print(f"\n!! deployment/{failed_at} is still rolling out - NOT rolling back a healthy rollout.", file=sys.stderr)
+        pending = [n for n in order if n not in applied]
+        if pending:
+            print(
+                f"!! not yet applied in this run: {', '.join(pending)} - once deployment/{failed_at} completes, "
+                "re-run `deploy.py --apply` and it will pick up where this run stopped.",
+                file=sys.stderr,
+            )
+        if retagged:
+            print(
+                "!! the manifest(s) below already carry the new tag on disk, matching the cluster; commit them "
+                "once the rollout has completed:\n  " + _commit_hint(plan, retagged),
+                file=sys.stderr,
+            )
+        return 1
 
     print(f"\n!! deployment/{failed_at} failed to roll out.", file=sys.stderr)
 
@@ -558,13 +800,37 @@ def apply_phase(plan: Plan, registry: str, namespace: str, rollout_timeout: str,
         )
         return 1
 
-    print("!! rolling back every deployment touched in this run to its pre-run state...", file=sys.stderr)
+    locked: set[str] = set()
+    if plan.migrations_changed and "api" in applied:
+        locked = {n for n, _, _ in touched if plan.deployments[n].image_key == "core"}
+        print(
+            "!! NOT rolling back "
+            + "/".join(n for n in DEPLOYMENT_ORDER if n in locked)
+            + ": this deploy changes Alembic migration(s)\n!!   "
+            + "\n!!   ".join(plan.migrations_changed)
+            + "\n!! and api has already been applied, so the database is (or may be) at HEAD's schema revision. An older\n"
+            "!! core image's `alembic upgrade head` would fail with \"Can't locate revision\" and crash-loop. Kubernetes\n"
+            "!! keeps the previous api ReplicaSet serving until a new pod is ready, so this alone is not an outage.\n"
+            f"!!   - if api's new pod failed BEFORE running the migration (`kubectl logs deployment/api -n {namespace}`),\n"
+            f"!!     `kubectl rollout undo deployment/api -n {namespace}` is safe;\n"
+            "!!   - otherwise fix forward: commit a fix and re-run `deploy.py --apply`.",
+            file=sys.stderr,
+        )
+
+    to_roll_back = [(n, m, o) for n, m, o in touched if n not in locked]
+    if to_roll_back:
+        print(
+            "!! rolling back " + ", ".join(n for n, _, _ in to_roll_back) + " to the pre-run state...",
+            file=sys.stderr,
+        )
     rollback_failed: list[str] = []
-    for name, manifest, original in touched:
+    for name, manifest, original in to_roll_back:
         manifest.write_bytes(original)
         try:
-            _apply_and_wait(name, manifest, namespace, rollout_timeout)
-        except subprocess.CalledProcessError:
+            _apply_and_wait(name, manifest, namespace, rollout_timeouts[name])
+        except (subprocess.CalledProcessError, DeployError) as exc:
+            if isinstance(exc, DeployError):
+                print(f"\n!! {exc}", file=sys.stderr)
             rollback_failed.append(name)
 
     if rollback_failed:
@@ -573,8 +839,18 @@ def apply_phase(plan: Plan, registry: str, namespace: str, rollout_timeout: str,
             "mixed state, investigate by hand immediately.",
             file=sys.stderr,
         )
+    elif locked:
+        print("!! rollback complete for everything that could be rolled back (see above).", file=sys.stderr)
     else:
         print("!! rollback complete - cluster restored to its pre-run state.", file=sys.stderr)
+
+    kept = [m for n, m, _ in touched if n in locked and plan.deployments[n].needs_build]
+    if kept:
+        print(
+            "!! the manifest(s) below stay on the new tag on disk, matching the cluster; commit them once "
+            "the situation is resolved:\n  " + _commit_hint(plan, kept),
+            file=sys.stderr,
+        )
 
     print(
         f"!! the image that failed was pushed to the registry as tag {plan.head_short} - it was "
@@ -596,7 +872,18 @@ def preflight(namespace: str) -> None:
         raise DeployError(f"cannot reach namespace '{namespace}': {result.stderr.strip()}")
 
 
+def rollout_timeouts_from_args(args: argparse.Namespace) -> dict[str, str]:
+    """One `kubectl rollout status --timeout` value per Deployment: --worker-rollout-timeout for
+    worker, --rollout-timeout for the rest. Validated here so a typo fails before anything is
+    built or pushed."""
+    timeouts = {name: (args.worker_rollout_timeout if name == "worker" else args.rollout_timeout) for name in DEPLOYMENT_ORDER}
+    for value in timeouts.values():
+        parse_duration(value)
+    return timeouts
+
+
 def run_deploy(args: argparse.Namespace) -> int:
+    rollout_timeouts = rollout_timeouts_from_args(args)
     preflight(args.namespace)
 
     if args.apply and git_dirty_outside_k8s():
@@ -623,7 +910,7 @@ def run_deploy(args: argparse.Namespace) -> int:
     for image_key in sorted(plan.images_to_build):
         build_and_push(image_key, plan.head_short, args.registry)
 
-    return apply_phase(plan, args.registry, args.namespace, args.rollout_timeout, args.no_rollback)
+    return apply_phase(plan, args.registry, args.namespace, rollout_timeouts, args.no_rollback)
 
 
 # --------------------------------------------------------------------------------------
@@ -771,15 +1058,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--rollout-timeout",
-        default="180s",
+        default=ROLLOUT_TIMEOUT_DEFAULT,
         metavar="DURATION",
-        help="Passed to 'kubectl rollout status --timeout' for each deployment (default: 180s).",
+        help="How long a *healthy* api/web rollout may take before the run stops and asks you to wait "
+        f"(kubectl duration syntax; default: {ROLLOUT_TIMEOUT_DEFAULT}). A broken rollout (crash loop, "
+        "unpullable image) is detected and rolled back within ~30s regardless.",
+    )
+    parser.add_argument(
+        "--worker-rollout-timeout",
+        default=WORKER_ROLLOUT_TIMEOUT_DEFAULT,
+        metavar="DURATION",
+        help="Same, for worker, whose replicas roll one at a time and take ~2 min each "
+        f"(default: {WORKER_ROLLOUT_TIMEOUT_DEFAULT}).",
     )
     parser.add_argument(
         "--no-rollback",
         action="store_true",
-        help="On a failed rollout, leave the cluster as-is for debugging instead of automatically "
-        "rolling every deployment touched in this run back to its previous state.",
+        help="On a broken rollout, leave the cluster as-is for debugging instead of automatically "
+        "rolling every deployment touched in this run back to its previous state. (api/worker are "
+        "never rolled back once a migration-changing deploy has applied api - see --help's notes.)",
     )
     parser.add_argument(
         "-y", "--yes", action="store_true", help="Skip the confirmation prompt before --apply takes action."

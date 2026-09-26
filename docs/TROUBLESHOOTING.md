@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | `OPENROUTER_API_KEY` missing error at startup | Using OpenRouter without an API key | Export `OPENROUTER_API_KEY` or set `AUTOGENBOOK_LLM_BASE_URL` to a local endpoint | `openrouter_llm.py:OpenRouterLLM.__init__` |
 | `LuaLaTeX not available` error | `lualatex` binary not found | Install LuaLaTeX or pass `--no-pdf` | `book_builder.py:compile_pdf`, `main.py:parse_args` |
+| `Chyba při kompilaci LaTeXu` with `File \`lastpage.sty' not found` (or `physics.sty`, `xurl.sty`, `czech.ldf`) | TeX Live is installed without the bundles the generated preamble needs | Install `texlive-latex-recommended texlive-latex-extra texlive-science texlive-lang-czechslovak` (Debian names; see the root `Dockerfile`) | `book_builder.py:build_latex_document`, `book_builder.py:compile_pdf` |
 | Book/paper input file not found | `--input` path is wrong | Fix the path or use the sample input | `autogenbook/pipelines/book_pipeline.py:run_book`, `autogenbook/pipelines/paper_pipeline.py:run_paper` |
 | Proposal mode fails with MCP tools unavailable | MCP gateway not running or missing tools | Enable MCP gateway and required paper tools, rerun with `--enable-web-rag` | `autogenbook/pipelines/proposal_pipeline.py:run_proposal`, `mcp_gateway.py:MCPGatewayClient` |
 | Proposal mode fails due to missing KB1/KB2 | Required directories not provided or empty | Provide valid `--kb1-dir` and `--kb2-dir` | `autogenbook/pipelines/proposal_pipeline.py:run_proposal` |
