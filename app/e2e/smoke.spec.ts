@@ -44,9 +44,7 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
   const chapterTitles = ['Chapter 1: Introduction', 'Chapter 2: Findings'];
   for (const title of chapterTitles) {
     await page.getByRole('button', { name: 'Add chapter' }).click();
-    const titleField = page
-      .getByRole('textbox', { name: /^Rename "Untitled chapter"/ })
-      .last();
+    const titleField = page.getByRole('textbox', { name: /^Rename "Untitled chapter"/ }).last();
     await titleField.dblclick();
     const input = page.getByRole('textbox', { name: /^Rename "Untitled chapter"/ }).last();
     await input.fill(title);
@@ -57,6 +55,17 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
     // violation from matching both.
     await expect(page.getByRole('textbox', { name: `Rename "${title}"` })).toBeVisible();
   }
+
+  // --- A row's hover actions are actually clickable ---
+  // Regression guard: the status badge fades to `opacity-0` on hover, which gives it a stacking
+  // context painted above the action group, and without an explicit z-index on the group the
+  // invisible badge swallowed every click on Add/Properties/Delete.
+  const firstRow = page.getByRole('treeitem').filter({ hasText: chapterTitles[0] });
+  await firstRow.hover();
+  await firstRow.getByRole('button', { name: 'Properties' }).click();
+  await expect(page.getByRole('dialog', { name: chapterTitles[0] })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: chapterTitles[0] })).not.toBeVisible();
 
   // --- Start a run ---
   await page.getByRole('button', { name: 'Run', exact: true }).click();
