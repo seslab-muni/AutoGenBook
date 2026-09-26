@@ -186,6 +186,12 @@ def build_command(
     # (`book_pipeline.py`), but a locked node is skipped by it. So this
     # field's effect is already baked into the graph this command's `-j`
     # flag points at by the time `build_command` runs.
+    #
+    # Content locks (issue #113) have no flag here either, by design: a
+    # content-locked leaf's `content_locked: true` + `content_file` ride the
+    # same `book_structure.json` `_prepare_work_dir` writes (with the text
+    # itself under `out/locked_sections/<node id>.md`), and
+    # `book_builder.py:generate_contents` honours them from there.
 
     env: dict[str, str] = {}
     for key in ENV_ALLOWLIST:

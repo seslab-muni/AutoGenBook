@@ -29,6 +29,7 @@ from api.application.book_spec import (
     SpecRenderer,
     StructureBuilder,
     sync_kb_scopes_into_graph,
+    locked_section_files,
 )
 from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.core.settings import Settings, default_llm_model
@@ -185,6 +186,16 @@ class RunService:
                 "auditBook has no effect with outputFormat 'markdown' (the audit runs "
                 "against the LaTeX build, which a markdown-only run never produces)"
             )
+        if legacy_tex and outline == "project":
+            # Issue #113: the legacy path generates LaTeX, and a locked
+            # section's text is Markdown - the CLI would copy it verbatim
+            # into a `.tex` file.
+            flat = await self._outline.list(project_id)
+            if any(node.content_locked for node in flat):
+                raise ValidationFailed(
+                    "legacyTex cannot be combined with content-locked sections (their "
+                    "text is Markdown); unlock them first or run without legacyTex"
+                )
 
         # Resolution order (issue #128): the request's own `llmModel`, else the project's -
         # `project.llm_model` is never `None` (see `Project.llm_model`'s docstring), so this is
@@ -409,6 +420,14 @@ class RunService:
             raise Conflict(
                 f"outline node {node_id} has child sections; regenerate only "
                 "applies to leaf nodes"
+            )
+        if node.content_locked:
+            # Issue #113: `_prepare_regenerate` deletes the target's
+            # `sections/<cli_key>.md` - precisely what the lock exists to
+            # prevent - and regenerating a section the user asked to keep is
+            # self-contradictory.
+            raise Conflict(
+                f"outline node {node_id} is content-locked; unlock it first to regenerate it"
             )
         if node.status == NodeStatus.DRAFTING:
             # Issue #134: with a project no longer limited to one
@@ -1039,19 +1058,36 @@ class GenerationService:
         include_outline = run.options.outline == "project"
         txt = SpecRenderer.render(project, outline_tree, include_outline=include_outline)
         structure = None
+        locked_sections: dict[str, str] = {}
         if run.options.outline == "project":
+            # Issue #113: content-locked leaves ship their text from the
+            # database into this run's own work dir, so a lock keeps working
+            # after `sweep_stale_work_dirs` has GC'd every earlier run.
+            # `outline == "generate"` sends no outline at all, so locks are
+            # inapplicable there.
             structure = StructureBuilder.build(
-                project, outline_tree, lock_nodes=not run.options.allow_subdivision
+                project,
+                outline_tree,
+                lock_nodes=not run.options.allow_subdivision,
+                include_locked_content=True,
             )
+            locked_sections = locked_section_files(outline_tree)
         # Local disk writes, kept off the event loop (same reasoning as
         # `_run_subprocess_and_drain`'s `run_in_threadpool` below): with
         # `WORKER_CONCURRENCY > 1` every slot shares one event loop, and a
         # blocking write here would stall every other slot's drain loop
         # (heartbeat, event flushing, cancellation) until it returns.
-        await run_in_threadpool(self._write_work_dir_sync, work_dir, txt, structure)
+        await run_in_threadpool(
+            self._write_work_dir_sync, work_dir, txt, structure, locked_sections
+        )
 
     @staticmethod
-    def _write_work_dir_sync(work_dir: Path, txt: str, structure: dict[str, Any] | None) -> None:
+    def _write_work_dir_sync(
+        work_dir: Path,
+        txt: str,
+        structure: dict[str, Any] | None,
+        locked_sections: dict[str, str] | None = None,
+    ) -> None:
         work_dir.mkdir(parents=True, exist_ok=True)
         (work_dir / book_command.INPUT_FILENAME).write_text(txt, encoding="utf-8")
         if structure is not None:
@@ -1066,6 +1102,12 @@ class GenerationService:
             (out_dir / book_command.BOOK_STRUCTURE_FILENAME).write_text(
                 json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            # Same `out_dir`-relative convention as `content_file` in the
+            # structure above (issue #113).
+            for relative_path, content in (locked_sections or {}).items():
+                target = out_dir / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
 
     async def _sync_kb_scopes(self, run: Run, flat_nodes: list[OutlineNode]) -> None:
         graph_path = Path(run.work_dir) / book_command.OUT_DIRNAME / "structure_graph.json"

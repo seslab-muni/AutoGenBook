@@ -793,6 +793,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/outline/unlock-all:
+    post:
+      tags:
+      - outline
+      summary: Unlock All Outline Nodes
+      description: 'Clear `contentLocked` on every node of the project (issue #113)
+        so
+
+        the next full run regenerates everything. Idempotent. Returns the
+
+        whole outline, like `PUT /outline` does.'
+      operationId: outline-unlock_all_outline_nodes
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_OutlineNode_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/projects/{project_id}/outline/{node_id}:
     get:
       tags:
@@ -1431,6 +1466,16 @@ components:
           - type: boolean
           - type: 'null'
           title: Structure Locked
+        content_locked:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Content Locked
+        content_file:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Content File
         kb_scope:
           anyOf:
           - type: string
@@ -1672,6 +1717,9 @@ components:
         structureLocked:
           type: boolean
           title: Structurelocked
+        contentLocked:
+          type: boolean
+          title: Contentlocked
         sourceScope:
           $ref: '#/components/schemas/SourceScope'
         sourceIds:
@@ -1706,6 +1754,7 @@ components:
       - contentMarkdown
       - contentLatex
       - structureLocked
+      - contentLocked
       - sourceScope
       - sourceIds
       - createdAt
@@ -1857,6 +1906,9 @@ components:
         structureLocked:
           type: boolean
           title: Structurelocked
+        contentLocked:
+          type: boolean
+          title: Contentlocked
         sourceScope:
           $ref: '#/components/schemas/SourceScope'
         sourceIds:
@@ -1896,6 +1948,7 @@ components:
       - contentMarkdown
       - contentLatex
       - structureLocked
+      - contentLocked
       - sourceScope
       - sourceIds
       - createdAt
@@ -1980,6 +2033,11 @@ components:
           - type: boolean
           - type: 'null'
           title: Structurelocked
+        contentLocked:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Contentlocked
         sourceScope:
           anyOf:
           - $ref: '#/components/schemas/SourceScope'

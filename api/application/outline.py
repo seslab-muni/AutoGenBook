@@ -87,6 +87,38 @@ class OutlineService:
         changes["source_scope"] = scope
         changes["source_ids"] = ids
 
+    @staticmethod
+    def _normalize_content_lock(
+        node: OutlineNode, flat: Sequence[OutlineNode], changes: dict[str, Any]
+    ) -> None:
+        """Validate a `content_locked` change in place (issue #113). A lock
+        only makes sense on a leaf that already has text: the CLI only ever
+        writes `sections/<key>.md` for leaves, and there is nothing to keep
+        on a blank node. A `content_markdown` write that blanks a currently
+        locked node clears the lock in the same write instead of 422-ing -
+        that write is typically the editor's debounced autosave, and a
+        validation toast mid-typing would be confusing."""
+        if "content_locked" in changes and changes["content_locked"] is None:
+            # An explicit `null` means "leave it alone", never "write NULL".
+            changes.pop("content_locked")
+        if "content_locked" not in changes and "content_markdown" not in changes:
+            return
+        content = changes.get("content_markdown", node.content_markdown) or ""
+        wants_lock = changes.get("content_locked", node.content_locked)
+        if not wants_lock:
+            return
+        if not content.strip():
+            if "content_locked" in changes:
+                raise ValidationFailed(
+                    "contentLocked requires the node to have content; write the section first"
+                )
+            changes["content_locked"] = False
+            return
+        if "content_locked" in changes and any(other.parent_id == node.id for other in flat):
+            raise Conflict(
+                f"outline node {node.id} has child sections; only a leaf's content can be locked"
+            )
+
     async def _get_project(self, project_id: uuid.UUID) -> Project:
         project = await self._project_repository.get(project_id)
         if project is None:
@@ -249,6 +281,7 @@ class OutlineService:
         await self._normalize_source_scope(project_id, node, changes)
         if "content_markdown" in changes:
             changes["actual_words"] = _word_count(changes["content_markdown"] or "")
+        self._normalize_content_lock(node, flat, changes)
         if "target_pages" in changes and "word_budget" not in changes:
             # Keep `word_budget` in sync with `target_pages` unless the
             # caller explicitly set both in this same request - `word_budget`
@@ -434,6 +467,16 @@ class OutlineService:
                 )
             )
         return await self._outline_repository.replace_all(target_project_id, copies)
+
+    async def unlock_all(self, project_id: uuid.UUID) -> list[OutlineNode]:
+        """Clear `content_locked` on every node of the project in one
+        statement (issue #113's "Unlock all") and return the whole outline.
+        Idempotent; allowed while a run is active for the same reason a
+        single lock toggle is - it cannot affect an in-flight run, whose
+        `book_structure.json` was already written."""
+        await self._get_project(project_id)
+        await self._outline_repository.clear_content_locked(project_id)
+        return assign_positions(await self._outline_repository.list(project_id))
 
     async def count(self, project_id: uuid.UUID) -> int:
         return await self._outline_repository.count(project_id)

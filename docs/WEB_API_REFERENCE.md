@@ -268,7 +268,7 @@ Source (all five): `api/application/sources.py:SourceService`, `api/presentation
 
 Outline nodes, mounted under `/api/v1/projects/{projectId}/outline`. The **flat** shape (`parentId` + `orderIndex`) is canonical; `?format=tree` (nested `children`) is a rendering convenience derived from it on every read. `level`, `sectionNumber`, and `cliKey` are always server-derived from the current tree shape (`api/domain/outline.py:assign_positions`) — never client-supplied. Deletes are soft (`deletedAt` set on the whole subtree via `delete_subtree`); reads only ever see live rows.
 
-`OutlineNode` fields: `id`, `parentId`, `orderIndex`, `cliKey` (nullable — set once a run's CLI graph is imported back), `title`, `summary`, `level`, `sectionNumber`, `status` (`not_started|drafting|review_ready|compiled`), `targetPages`, `wordBudget` (`= 350 × targetPages` when not explicit), `actualWords` (word count of `contentMarkdown`, recomputed server-side whenever it changes), `equationDensityLevel` (1–5), `mathLevel` (`introductory|rigorous|formal_proof|applied`), `subPrompt`, `contentMarkdown`/`contentLatex`, `ragCitations`, `reviewerScore`/`reviewerNotes`, `structureLocked`, `sourceScope` (`inherit|all|selected`, issue #138 — which project sources this node's sections retrieve from; `inherit` uses the nearest ancestor's scope, i.e. all sources at the top level), `sourceIds` (non-empty only when `sourceScope` is `selected`), timestamps.
+`OutlineNode` fields: `id`, `parentId`, `orderIndex`, `cliKey` (nullable — set once a run's CLI graph is imported back), `title`, `summary`, `level`, `sectionNumber`, `status` (`not_started|drafting|review_ready|compiled`), `targetPages`, `wordBudget` (`= 350 × targetPages` when not explicit), `actualWords` (word count of `contentMarkdown`, recomputed server-side whenever it changes), `equationDensityLevel` (1–5), `mathLevel` (`introductory|rigorous|formal_proof|applied`), `subPrompt`, `contentMarkdown`/`contentLatex`, `ragCitations`, `reviewerScore`/`reviewerNotes`, `structureLocked`, `contentLocked` (issue #113 — keep this leaf's `contentMarkdown` as-is across full runs while still feeding it into the cross-section context; only a leaf with non-blank content can be locked), `sourceScope` (`inherit|all|selected`, issue #138 — which project sources this node's sections retrieve from; `inherit` uses the nearest ancestor's scope, i.e. all sources at the top level), `sourceIds` (non-empty only when `sourceScope` is `selected`), timestamps.
 
 #### `GET /api/v1/projects/{projectId}/outline`
 
@@ -296,7 +296,15 @@ Status codes: `200`; `404` if the project or node doesn't exist.
 
 Partial update (`extra="forbid"` — `level`/`sectionNumber`/`cliKey`/`actualWords` are server-derived and rejected with `422` if sent, as is any other unknown key). Sending `parentId` and/or `orderIndex` re-parents/reorders the node (and re-sequences old and new sibling lists); moving a node into its own subtree, or to a depth that would exceed `maxOutlineLevels`, is rejected. `sourceScope`/`sourceIds` (issue #138): setting `sourceScope` to `inherit`/`all` clears `sourceIds`; `selected` requires at least one id of a live source of this project (duplicates are dropped, order kept); sending only `sourceIds` implies `selected`. Unlike structural edits, a scope change is allowed while a run is active — it takes effect on the next run, regenerate, or retry (`GenerationService` syncs current scopes into a reused `structure_graph.json`). The CLI receives them as `kb_scope`/`kb_sources` (`kb_sources` = source ids, i.e. the `kb/<sourceId>/` directories) in `book_structure.json`.
 
-Status codes: `200`; `404` if the project/node/new-parent doesn't exist; `422` on the validation cases above.
+`contentLocked` (issue #113): `true` marks the leaf as content-locked — the next full run ships its `contentMarkdown` into the work dir (`out/locked_sections/<nodeId>.md`, referenced from `book_structure.json` as `content_locked`/`content_file`) and the CLI keeps it byte-for-byte instead of re-writing it, while still folding it into `context_memory.json`/`previous_sections` so later sections stop re-covering it; `graph_import` never overwrites a locked node's content on the way back. Setting it to `true` is rejected with `422` when `contentMarkdown` is blank and with `409` when the node has children (the CLI only writes section files for leaves); `null` leaves it unchanged. A `contentMarkdown` write that blanks a locked node clears the lock in the same write rather than failing a debounced autosave. Editing a locked node's text is allowed — the edited text is what the next run sees. A lock toggle is allowed while a run is active (it applies from the next run) and is deliberately *not* part of the spec the regenerate drift check hashes, so toggling it never invalidates `--resume`/regenerate.
+
+Status codes: `200`; `404` if the project/node/new-parent doesn't exist; `409` if `contentLocked: true` targets a node with children; `422` on the validation cases above.
+
+#### `POST /api/v1/projects/{projectId}/outline/unlock-all`
+
+Clears `contentLocked` on every node of the project in one `UPDATE` (issue #113's "Unlock all", the way to get a clean-slate full run — a normal run always honours locks; there is no "ignore locks" run kind). Idempotent; content itself is untouched. Returns the whole flat outline as `Page<OutlineNode>` (sized to the result, like `PUT /outline`).
+
+Status codes: `200`; `404` if the project doesn't exist.
 
 #### `DELETE /api/v1/projects/{projectId}/outline/{nodeId}`
 
@@ -304,7 +312,7 @@ Soft-deletes the node and its entire subtree.
 
 Status codes: `204`; `404`.
 
-Source (all six): `api/application/outline.py:OutlineService`, `api/domain/outline.py`, `api/presentation/routers/outline.py`
+Source (all seven): `api/application/outline.py:OutlineService`, `api/domain/outline.py`, `api/presentation/routers/outline.py`
 
 ## Runs
 
@@ -332,7 +340,9 @@ Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use th
 
 `legacyTex` and `auditBook` both require the resolved `outputFormat` (the explicit body value, or the project's own if omitted) to be `latex` or `pdf` — with `markdown`, `legacyTex` would otherwise "succeed" with no document assembled at all, and `auditBook` would silently be a no-op (both need a `tex_path` the markdown-only assembly path never produces).
 
-Status codes: `202`; `404` if the project doesn't exist; `409` if the project's queue is full (`MAX_QUEUED_RUNS_PER_PROJECT` queued runs already); `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format.
+`legacyTex` is also rejected when `outline` is `project` and any outline node is `contentLocked` (issue #113): the legacy path generates LaTeX, and a locked section's text is Markdown. Locked sections otherwise always apply to a `project`-outline full run — their text is written to `out/locked_sections/<nodeId>.md` in the run's own work dir (so locks keep working after older work dirs are swept) and referenced from `book_structure.json`; `generate` sends no outline, so locks are inapplicable there.
+
+Status codes: `202`; `404` if the project doesn't exist; `409` if the project's queue is full (`MAX_QUEUED_RUNS_PER_PROJECT` queued runs already); `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format, or `legacyTex` with a content-locked node.
 
 Source: `api/application/runs.py:RunService.create`
 
@@ -350,7 +360,9 @@ Re-runs the CLI with `--resume` against the project's last succeeded `full`/`reg
 
 The node must already have a `cliKey` (i.e. was produced by a prior run). Before queuing, the current project/outline is re-rendered to the same spec text the base run would have produced and hashed; if that hash doesn't match what the base run actually saw (`structure_graph.json`'s `input_sha256`), the outline has drifted structurally since — the endpoint rejects with `409` rather than let a `--resume` desync from a `structure_graph.json` it can no longer trust.
 
-Status codes: `202`; `404` if the project/node doesn't exist; `409` if the node already has a `regenerate` queued/running (`status=drafting`), a `full` run is already queued/running for the project, the project's queue is full, the node has no `cliKey`, there's no resumable base run, or the outline has drifted since the base run; `422` on request validation.
+A `contentLocked` node is rejected with `409` ("unlock it first"): regenerating deletes `sections/<cliKey>.md`, which is precisely what the lock exists to prevent. Toggling `contentLocked` on any node is *not* outline drift — the flag is deliberately absent from the rendered spec the drift check hashes — so a lock toggle alone never turns a later regenerate into a `409`.
+
+Status codes: `202`; `404` if the project/node doesn't exist; `409` if the node already has a `regenerate` queued/running (`status=drafting`), a `full` run is already queued/running for the project, the project's queue is full, the node has no `cliKey`, the node is `contentLocked`, there's no resumable base run, or the outline has drifted since the base run; `422` on request validation.
 
 Source: `api/application/runs.py:RunService.regenerate_node`, `api/application/runs.py:GenerationService._prepare_regenerate`
 

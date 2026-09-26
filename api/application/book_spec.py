@@ -121,8 +121,17 @@ class StructureBuilder:
 
     @staticmethod
     def build(
-        project: Project, outline_tree: list[OutlineTree], *, lock_nodes: bool
+        project: Project,
+        outline_tree: list[OutlineTree],
+        *,
+        lock_nodes: bool,
+        include_locked_content: bool = False,
     ) -> dict[str, Any]:
+        """`include_locked_content` (issue #113) makes a content-locked leaf
+        emit `content_locked`/`content_file` pointing at the file
+        `locked_section_files` names, for a run whose work dir actually
+        holds those files. `GET /projects/{id}/spec?format=json` keeps the
+        default - a downloaded spec has no content files to point at."""
         return {
             "title": project.title.strip(),
             "summary": _project_summary(project),
@@ -135,14 +144,18 @@ class StructureBuilder:
             "max_depth": project.max_outline_levels,
             "max_output_pages": 1.5,
             "childs": [
-                StructureBuilder._build_node(tree, lock_nodes) for tree in outline_tree
+                StructureBuilder._build_node(tree, lock_nodes, include_locked_content)
+                for tree in outline_tree
             ],
         }
 
     @staticmethod
-    def _build_node(tree: OutlineTree, lock_nodes: bool) -> dict[str, Any]:
+    def _build_node(
+        tree: OutlineTree, lock_nodes: bool, include_locked_content: bool = False
+    ) -> dict[str, Any]:
         child_dicts = [
-            StructureBuilder._build_node(child, lock_nodes) for child in tree.children
+            StructureBuilder._build_node(child, lock_nodes, include_locked_content)
+            for child in tree.children
         ]
         out: dict[str, Any] = {
             "title": tree.node.title.strip(),
@@ -154,8 +167,50 @@ class StructureBuilder:
             out["childs"] = child_dicts
         if lock_nodes:
             out["structure_locked"] = True
+        if include_locked_content and not child_dicts and _has_locked_content(tree.node):
+            # The CLI keeps this leaf byte-for-byte (`book_builder.py:
+            # generate_contents`). `content_locked` implies
+            # `structure_locked` CLI-side too, but say so explicitly so the
+            # written JSON is self-describing. Keyed by the node's UUID, not
+            # its positional `cli_key` - no key agreement between API and
+            # CLI is needed anywhere for this.
+            out["content_locked"] = True
+            out["structure_locked"] = True
+            out["content_file"] = locked_section_path(tree.node)
         out.update(kb_scope_fields(tree.node))
         return out
+
+
+# Where `GenerationService._write_work_dir_sync` puts a content-locked leaf's
+# text inside the run's `out/` dir; `content_file` in `book_structure.json`
+# is relative to `out_dir`, exactly like a relative `-j` (issue #113).
+LOCKED_SECTIONS_DIRNAME = "locked_sections"
+
+
+def _has_locked_content(node: OutlineNode) -> bool:
+    return bool(node.content_locked) and bool((node.content_markdown or "").strip())
+
+
+def locked_section_path(node: OutlineNode) -> str:
+    return f"{LOCKED_SECTIONS_DIRNAME}/{node.id}.md"
+
+
+def locked_section_files(outline_tree: list[OutlineTree]) -> dict[str, str]:
+    """`{relative path under out_dir: content_markdown}` for every
+    content-locked leaf of `outline_tree` - the files
+    `StructureBuilder.build(..., include_locked_content=True)`'s
+    `content_file` entries point at (issue #113)."""
+    files: dict[str, str] = {}
+
+    def walk(trees: list[OutlineTree]) -> None:
+        for tree in trees:
+            if tree.children:
+                walk(tree.children)
+            elif _has_locked_content(tree.node):
+                files[locked_section_path(tree.node)] = tree.node.content_markdown
+
+    walk(outline_tree)
+    return files
 
 
 def kb_scope_fields(node: OutlineNode) -> dict[str, Any]:

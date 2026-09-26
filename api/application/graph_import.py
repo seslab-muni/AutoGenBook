@@ -193,6 +193,14 @@ async def _matched_node_changes(
         # leaving it stale relative to the `target_pages` shown right next
         # to it (issue #65).
         changes["word_budget"] = word_budget_for(float(cli_pages))
+    if node.content_locked:
+        # Issue #113: the CLI was told to keep this leaf verbatim, so the
+        # file it wrote back is (at best) a copy of what the row already
+        # holds - and a truncated or partially-written file must never
+        # clobber curated content on the way back in. Title/summary/pages
+        # above still sync: the node is structure-locked, so the CLI does
+        # not change them, but a stale `word_budget` would.
+        return changes
     changes.update(await _leaf_content_changes(out_dir, cli_key, kb_index))
     return changes
 

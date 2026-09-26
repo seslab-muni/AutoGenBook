@@ -41,6 +41,7 @@ def _to_domain(record: OutlineNodeRecord) -> OutlineNode:
         ),
         reviewer_notes=record.reviewer_notes,
         structure_locked=record.structure_locked,
+        content_locked=record.content_locked,
         created_at=_as_aware_utc(record.created_at),
         updated_at=_as_aware_utc(record.updated_at),
         deleted_at=(
@@ -72,6 +73,7 @@ _ALL_MUTABLE_FIELDS = (
     "reviewer_score",
     "reviewer_notes",
     "structure_locked",
+    "content_locked",
     "source_scope",
     "source_ids",
 )
@@ -277,6 +279,22 @@ class SqlAlchemyOutlineRepository:
             if record is not None:
                 record.order_index = index
         await self._session.commit()
+
+    async def clear_content_locked(self, project_id: uuid.UUID) -> int:
+        """Clear `content_locked` on every live node of `project_id` in one
+        `UPDATE` (issue #113's "Unlock all"; one statement, not a per-row
+        round trip - see issue #51). Returns how many rows were locked."""
+        result = await self._session.execute(
+            update(OutlineNodeRecord)
+            .where(
+                OutlineNodeRecord.project_id == project_id,
+                OutlineNodeRecord.deleted_at.is_(None),
+                OutlineNodeRecord.content_locked.is_(True),
+            )
+            .values(content_locked=False, updated_at=datetime.now(timezone.utc))
+        )
+        await self._session.commit()
+        return int(result.rowcount or 0)
 
     async def count(self, project_id: uuid.UUID) -> int:
         total = await self._session.scalar(
