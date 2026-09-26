@@ -22,3 +22,7 @@ api/coverage.xml
 semgrep-results.json
 
 info.txt
+
+# Scratch output of `python -m autogenbook.smoke_test` (repo-root only; tests/out_smoke* fixtures stay tracked)
+/out_smoke/
+/out_smoke_*/
