@@ -20,3 +20,5 @@ api/coverage.xml
 # Static analysis (docs/STATIC_ANALYSIS.md)
 .scannerwork/
 semgrep-results.json
+
+info.txt
