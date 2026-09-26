@@ -330,6 +330,16 @@ def _normalize_book_child(raw: Dict[str, Any]) -> Dict[str, Any]:
         out["needsSubdivision"] = True
     if ensure_bool(raw.get("structure_locked", False), False):
         out["structure_locked"] = True
+    # Content lock (issue #113): keep this leaf's existing text verbatim on the next run instead
+    # of re-writing it. It implies a structure lock, otherwise subdivision could split the node
+    # away from the text that belongs to it. ``content_file`` is where that text lives; a
+    # relative path resolves against --out-dir, like -j does.
+    if ensure_bool(raw.get("content_locked", False), False):
+        out["content_locked"] = True
+        out["structure_locked"] = True
+    content_file = str(raw.get("content_file", "") or "").strip()
+    if content_file:
+        out["content_file"] = content_file
     out.update(_normalize_kb_scope(raw))
     return out
 
@@ -441,6 +451,14 @@ def build_graph_from_book_json(book_json: Dict[str, Any]) -> nx.DiGraph:
             }
             if ensure_bool(ch.get("structure_locked", False), False):
                 attrs["structure_locked"] = True
+            if ensure_bool(ch.get("content_locked", False), False):
+                # A content-locked leaf must stay the leaf its text belongs to, so it is
+                # implicitly structure-locked as well (subdivide_graph never splits it).
+                attrs["content_locked"] = True
+                attrs["structure_locked"] = True
+            content_file = str(ch.get("content_file", "") or "").strip()
+            if content_file:
+                attrs["content_file"] = content_file
             attrs.update(_normalize_kb_scope(ch))
             g.add_node(node_key, **attrs)
             g.add_edge(parent_key, node_key)
@@ -655,6 +673,46 @@ def subdivide_graph(
         frontier = next_frontier
 
 
+def _load_locked_section(node: Dict[str, Any], out_dir: Path) -> Optional[bytes]:
+    """
+    Return the raw bytes of a content-locked node's ``content_file`` (issue #113), or ``None``
+    when the lock cannot be honoured: the node is not locked, has no ``content_file``, the file
+    is missing/unreadable, or it is blank.
+
+    Fail-open by design. A hand-run of a downloaded ``book_structure.json`` must never hard-fail
+    on a lock, so every unhonourable lock prints a ``[WARN]`` and the caller generates the
+    section normally instead.
+    """
+    if not bool(node.get("content_locked", False)):
+        return None
+    title = str(node.get("title", "")).strip() or "(untitled)"
+    raw_path = str(node.get("content_file", "") or "").strip()
+    if not raw_path:
+        print(
+            f"[WARN] Section '{title}' is content-locked but has no content_file; "
+            "generating it instead."
+        )
+        return None
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = out_dir / path
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        print(
+            f"[WARN] Section '{title}' is content-locked but '{path}' could not be read "
+            f"({exc}); generating it instead."
+        )
+        return None
+    if not data.strip():
+        print(
+            f"[WARN] Section '{title}' is content-locked but '{path}' is empty; "
+            "generating it instead."
+        )
+        return None
+    return data
+
+
 def generate_contents(
     llm: OpenRouterLLM,
     g: nx.DiGraph,
@@ -738,9 +796,77 @@ def generate_contents(
             return "n/a"
         return f"${cost:.6f}"
 
+    def _remember_section(node_key: str, node: Dict[str, Any], tex: str, retrieved_context: str) -> None:
+        """
+        Post-generation bookkeeping shared by freshly generated and content-locked sections:
+        fold the section into ``ContextMemory`` (best-effort) and make it the most recent
+        ``prev_list`` entry. Both paths must go through here so a locked section feeds later
+        sections' context exactly like a written one does (issue #113).
+        """
+        nonlocal prev_list
+        memory_payload = {
+            "terms": context_memory.terms,
+            "citations": context_memory.citations,
+            "figures": context_memory.figures,
+            "tables": context_memory.tables,
+            "open_threads": context_memory.open_threads,
+        }
+        try:
+            memory_update = memory_agent.run(
+                {
+                    "context_memory_json": json.dumps(memory_payload, ensure_ascii=False, indent=2),
+                    "section_title": node.get("title", ""),
+                    "node_key": node_key,
+                    "section_latex": tex,
+                    "book_outline_text": toc_and_summary,
+                    "retrieved_context": retrieved_context,
+                },
+                agent_ctx,
+            )
+        except Exception as exc:
+            # context_memory is a best-effort consistency aid, not required to produce the
+            # section itself; a bad/unparseable LLM reply here must not abort the whole run
+            # and discard an already-written, already-reviewed section.
+            print(
+                f"[GEN] WARNING: context_memory update failed for '{node_key}' "
+                f"({type(exc).__name__}: {exc}). Skipping memory update for this section."
+            )
+        else:
+            context_memory.apply_agent_update(memory_update, node_key, node.get("title", ""))
+            context_memory.save(memory_path)
+
+        # Update previous sections
+        if n_prev:
+            prev_list = [{"title": node.get("title", ""), "content": tex}] + prev_list
+            prev_list = prev_list[:n_prev]
+
     for node_key in nodes:
         node = g.nodes[node_key]
         completed += 1
+
+        # Content-locked leaf (issue #113): keep its text byte-for-byte and skip every LLM pass
+        # that would rewrite it (writer/reviewer/reviser/length enforcement), but still do all
+        # the bookkeeping a generated section gets, so later sections see it in
+        # previous_sections / context_memory and stop re-covering it. Ahead of the resume block
+        # on purpose: a lock always wins over whatever an earlier run left in sections/.
+        # Note: the Markdown->LaTeX fallback re-enters here with content_format="latex", which
+        # copies the locked Markdown verbatim into a .tex file; acceptable for a path that only
+        # fires after pandoc conversion already failed.
+        locked_bytes = _load_locked_section(node, out_dir)
+        if locked_bytes is not None:
+            section_path = sections_dir / f"{node_key}{section_ext}"
+            section_path.write_bytes(locked_bytes)
+            attach_content_path(g, node_key, section_path)
+            if progress_path is not None:
+                save_graph_json(g, progress_path)
+            _remember_section(
+                node_key, node, locked_bytes.decode("utf-8", errors="replace"), "(none)"
+            )
+            print(
+                f"[GEN] {completed}/{total} Locked section '{node.get('title','')}'"
+                " (kept, used as context)"
+            )
+            continue
 
         existing_path = node.get("content_file_path")
         if resume:
@@ -943,36 +1069,7 @@ def generate_contents(
         else:
             tex = normalize_markdown_paragraphs(tex).strip()
 
-        memory_payload = {
-            "terms": context_memory.terms,
-            "citations": context_memory.citations,
-            "figures": context_memory.figures,
-            "tables": context_memory.tables,
-            "open_threads": context_memory.open_threads,
-        }
-        try:
-            memory_update = memory_agent.run(
-                {
-                    "context_memory_json": json.dumps(memory_payload, ensure_ascii=False, indent=2),
-                    "section_title": node.get("title", ""),
-                    "node_key": node_key,
-                    "section_latex": tex,
-                    "book_outline_text": toc_and_summary,
-                    "retrieved_context": retrieved_context,
-                },
-                agent_ctx,
-            )
-        except Exception as exc:
-            # context_memory is a best-effort consistency aid, not required to produce the
-            # section itself; a bad/unparseable LLM reply here must not abort the whole run
-            # and discard an already-written, already-reviewed section.
-            print(
-                f"[GEN] WARNING: context_memory update failed for '{node_key}' "
-                f"({type(exc).__name__}: {exc}). Skipping memory update for this section."
-            )
-        else:
-            context_memory.apply_agent_update(memory_update, node_key, node.get("title", ""))
-            context_memory.save(memory_path)
+        _remember_section(node_key, node, tex, retrieved_context)
 
         # Persist section content
         section_path = sections_dir / f"{node_key}{section_ext}"
@@ -988,11 +1085,6 @@ def generate_contents(
             f"[GEN] {completed}/{total} Generated section '{node.get('title','')}'"
             f" | ETA { _format_eta(eta) }"
         )
-
-        # Update previous sections
-        if n_prev:
-            prev_list = [{"title": node.get("title", ""), "content": tex}] + prev_list
-            prev_list = prev_list[:n_prev]
 
 
 def build_tree_snapshot(g: nx.DiGraph) -> Dict[str, Dict[str, Any]]:
