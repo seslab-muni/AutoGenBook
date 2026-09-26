@@ -1152,6 +1152,8 @@ export interface components {
             exitCode: number | null;
             /** Error */
             error: string | null;
+            /** Errordetail */
+            errorDetail?: string | null;
             /** Totaltokens */
             totalTokens: number | null;
             /** Totalcostusd */

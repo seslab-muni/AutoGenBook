@@ -50,6 +50,13 @@ function rememberSectionNode(queryClient: QueryClient, runId: string, event: Run
   });
 }
 
+/** What a failed run's toast tells the user to do next - the toast carries the API's
+ * user-facing `error` message only, never the original CLI/exception text
+ * (`errorDetail`), which lives on the run detail page. */
+export const FAILED_RUN_TOAST_HINT = 'Check the run details for the full error.';
+/** A failure message needs longer than sonner's 4 s default to actually be read. */
+const FAILED_RUN_TOAST_DURATION_MS = 12_000;
+
 function outcomeToast(run: Run): void {
   const tokens = run.totalTokens != null ? `${run.totalTokens.toLocaleString()} tokens` : null;
   const cost = run.totalCostUsd != null ? `$${run.totalCostUsd.toFixed(2)}` : null;
@@ -59,7 +66,10 @@ function outcomeToast(run: Run): void {
   if (run.status === 'succeeded') {
     toast.success('Run succeeded', description ? { description } : undefined);
   } else if (run.status === 'failed') {
-    toast.error(run.error ?? 'Run failed', description ? { description } : undefined);
+    toast.error(run.error ?? 'Run failed', {
+      description: description ? `${FAILED_RUN_TOAST_HINT} ${description}` : FAILED_RUN_TOAST_HINT,
+      duration: FAILED_RUN_TOAST_DURATION_MS,
+    });
   } else if (run.status === 'cancelled') {
     toast.info('Run cancelled', description ? { description } : undefined);
   }

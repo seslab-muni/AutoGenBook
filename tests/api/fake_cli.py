@@ -34,6 +34,7 @@ regenerated.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -125,6 +126,34 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     sections_dir = out_dir / "sections"
     sections_dir.mkdir(parents=True, exist_ok=True)
+
+    # Simulate the real CLI dying on its first LLM call: `book_pipeline.py`
+    # catches the exception, writes `run_meta.json` with `status: "error"`
+    # and `error: str(exc)` (`llm_usage.write_run_meta`) and exits 1. Lets
+    # `GenerationService` tests exercise `run_errors.describe_cli_failure`
+    # end to end with the exact text an OpenAI-client error produces.
+    fail_error = os.environ.get("FAKE_CLI_FAIL_ERROR")
+    if fail_error:
+        print("[GEN] 1/2 Starting section 'Chapter One'")
+        (out_dir / "run_meta.json").write_text(
+            json.dumps(
+                {
+                    "status": "error",
+                    "error": fail_error,
+                    "mode": "book",
+                    # `_finalize` only attributes a run_meta.json to this
+                    # attempt if it finished after the attempt started.
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "args": vars(args),
+                },
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        print(f"Chyba: {fail_error}", file=sys.stderr)
+        return 1
 
     # One chunk per file, shaped like `autogenbook.retrieval.kb_citations.
     # build_kb_index`'s real `kb_sources.json` (`cite_keys`/`rids`/`chunks`),

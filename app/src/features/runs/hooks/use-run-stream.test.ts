@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from 'sonner';
 
 import { runKeys, projectKeys } from '@/api/queries/keys';
 import { subscribeRunEvents } from '@/api/sse';
@@ -7,7 +8,7 @@ import { db } from '@/mocks/db';
 import { renderWithQueryClient, waitFor } from '@/test/query-test-utils';
 import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
-import { useRunStream } from './use-run-stream';
+import { FAILED_RUN_TOAST_HINT, useRunStream } from './use-run-stream';
 
 /**
  * `subscribeRunEvents` is mocked for every test in this file: the project's
@@ -24,7 +25,12 @@ vi.mock('@/api/sse', async (importOriginal) => {
   return { ...actual, subscribeRunEvents: vi.fn() };
 });
 
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+
 const mockedSubscribe = vi.mocked(subscribeRunEvents);
+const mockedToast = vi.mocked(toast);
 
 function seedRun(runId: string, projectId: string, status: 'queued' | 'running' = 'running') {
   db.runs.set(runId, {
@@ -65,6 +71,9 @@ describe('useRunStream', () => {
     // test (React Testing Library's cleanup) throws trying to call `undefined()`. Tests that
     // care about the specific unsubscribe function override this with their own `mockReturnValue`.
     mockedSubscribe.mockReturnValue(vi.fn());
+    mockedToast.success.mockReset();
+    mockedToast.error.mockReset();
+    mockedToast.info.mockReset();
   });
 
   it('subscribes once and appends events into the shared live-events cache, deduped by seq', () => {
@@ -200,5 +209,54 @@ describe('useRunStream', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: runKeys.detail('run-g') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: runKeys.artifacts('run-g') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: projectKeys.runs('proj-g') });
+  });
+
+  it("a failed run toasts the API's user-facing error and points at the run details, never the original exception text", async () => {
+    seedRun('run-h', 'proj-h');
+
+    renderWithQueryClient(() => useRunStream('run-h', 'proj-h'));
+    const { onDone } = mockedSubscribe.mock.calls[0]![1];
+
+    const error =
+      'Generation with model "deepseek-v4-flash" failed: the LLM endpoint refused this model (HTTP 403: Model is blocked). Pick a different model in the project settings or the run dialog and retry.';
+    const errorDetail =
+      "Error code: 403 - {'error': {'message': 'litellm.PermissionDeniedError: Model is blocked', 'type': None, 'param': None, 'code': '403'}}";
+    db.runs.set('run-h', {
+      ...db.runs.get('run-h')!,
+      status: 'failed',
+      exitCode: 1,
+      error,
+      errorDetail,
+      totalTokens: 0,
+    });
+    onDone!(makeEvent(3, { stage: 'done', level: 'error', message: 'Run failed' }));
+
+    await waitFor(() => expect(mockedToast.error).toHaveBeenCalledTimes(1));
+    const [title, options] = mockedToast.error.mock.calls[0]!;
+    expect(title).toBe(error);
+    expect(options?.description).toBe(`${FAILED_RUN_TOAST_HINT} 0 tokens`);
+    expect(JSON.stringify(mockedToast.error.mock.calls)).not.toContain('litellm');
+    expect(mockedToast.success).not.toHaveBeenCalled();
+  });
+
+  it('a failed run with no usage stats still gets the run-details hint as its description', async () => {
+    seedRun('run-i', 'proj-i');
+
+    renderWithQueryClient(() => useRunStream('run-i', 'proj-i'));
+    const { onDone } = mockedSubscribe.mock.calls[0]![1];
+
+    db.runs.set('run-i', {
+      ...db.runs.get('run-i')!,
+      status: 'failed',
+      exitCode: 1,
+      error: 'CLI exited with code 1',
+    });
+    onDone!(makeEvent(3, { stage: 'done', level: 'error', message: 'Run failed' }));
+
+    await waitFor(() => expect(mockedToast.error).toHaveBeenCalledTimes(1));
+    expect(mockedToast.error).toHaveBeenCalledWith('CLI exited with code 1', {
+      description: FAILED_RUN_TOAST_HINT,
+      duration: 12_000,
+    });
   });
 });

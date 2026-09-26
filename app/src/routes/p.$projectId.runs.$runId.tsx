@@ -257,7 +257,22 @@ function RunPage() {
       {run.error ? (
         <div className="m-4 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span>{run.error}</span>
+          <div className="min-w-0 flex-1 space-y-2">
+            <span>{run.error}</span>
+            {run.errorDetail ? (
+              // The CLI's original error text, kept when the API rewrote `error` into the
+              // user-facing message above (an LLM endpoint failure such as a blocked model) -
+              // what to paste into a bug report, collapsed so it never crowds the message.
+              <details className="group">
+                <summary className="cursor-pointer font-medium text-destructive/80 select-none hover:text-destructive">
+                  Original error
+                </summary>
+                <pre className="mt-1 max-h-48 overflow-auto rounded border border-destructive/20 bg-background/60 p-2 font-mono text-[11px] break-words whitespace-pre-wrap text-foreground">
+                  {run.errorDetail}
+                </pre>
+              </details>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

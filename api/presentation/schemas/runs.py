@@ -101,7 +101,15 @@ class Run(BaseSchema):
     base_run_id: uuid.UUID | None
     target_node_id: uuid.UUID | None
     exit_code: int | None
+    # A user-facing message: for an LLM endpoint failure, "Generation with
+    # model X failed: <reason>. <hint>." (the model is the run's own
+    # `options.llmModel`); otherwise the CLI's own text. The failure toast
+    # shows this and points at the run detail page.
     error: str | None
+    # The CLI's original error text when `error` was rewritten from it,
+    # `null` otherwise. The run detail page shows it under `error` as the
+    # "original error"; the toast never does.
+    error_detail: str | None = None
     total_tokens: int | None
     total_cost_usd: float | None
     queued_at: datetime
@@ -178,6 +186,7 @@ async def run_to_schema(run: RunDomain, *, queue_position: int | None = None) ->
         target_node_id=run.target_node_id,
         exit_code=run.exit_code,
         error=run.error,
+        error_detail=run.error_detail,
         total_tokens=run.total_tokens,
         total_cost_usd=run.total_cost_usd,
         queued_at=run.queued_at,

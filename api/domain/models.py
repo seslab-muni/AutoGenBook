@@ -369,6 +369,12 @@ class Run:
     total_tokens: int | None
     total_cost_usd: float | None
     started_by: uuid.UUID | None = None
+    # The CLI's original error text when `error` was rewritten into a
+    # user-facing message by `api.application.run_errors.describe_cli_failure`
+    # (an LLM endpoint failure such as a blocked model); `None` when `error`
+    # already *is* the original text. Shown under the message on the run
+    # detail page, never in the failure toast.
+    error_detail: str | None = None
     # Derived, never persisted - see `Project.owner_name`'s docstring; joined
     # in by `SqlAlchemyRunRepository`.
     started_by_name: str | None = None
