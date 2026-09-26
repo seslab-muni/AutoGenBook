@@ -281,7 +281,9 @@ function OutlineRowComponent({
             )}
 
             <span className="shrink-0 font-mono text-[11px] font-semibold text-muted-foreground">
-              {highlightQuery ? highlightMatch(node.sectionNumber, highlightQuery) : node.sectionNumber}
+              {highlightQuery
+                ? highlightMatch(node.sectionNumber, highlightQuery)
+                : node.sectionNumber}
             </span>
 
             {highlightQuery ? (
@@ -329,7 +331,12 @@ function OutlineRowComponent({
                 // directly on top of the spinner/`StatusBadge` at the row's right edge (see their
                 // `group-hover:opacity-0` below), and a translucent or row-bg-matched fill let
                 // that trailing content visibly bleed through behind the icons.
-                'pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 rounded bg-accent px-0.5 opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
+                //
+                // `z-10` is load-bearing: fading the spinner/`StatusBadge` to `opacity-0` gives
+                // them a stacking context, and a stacking context is painted in the same layer
+                // as this positioned group, in DOM order — they come later, so without an explicit
+                // z-index the invisible badge sat on top and swallowed every click on the buttons.
+                'pointer-events-none absolute top-1/2 right-1 z-10 flex -translate-y-1/2 items-center gap-0.5 rounded bg-accent px-0.5 opacity-0 shadow-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100',
               )}
             >
               {canAddChild ? (
@@ -373,13 +380,13 @@ function OutlineRowComponent({
 
             {generating ? (
               <Loader2
-                className="size-3 shrink-0 animate-spin text-primary transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+                className="size-3 shrink-0 animate-spin text-primary transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
                 aria-label="Generating"
               />
             ) : null}
             <StatusBadge
               status={node.status}
-              className="ml-0.5 shrink-0 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+              className="ml-0.5 shrink-0 transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
             />
           </div>
         </ContextMenuTrigger>
