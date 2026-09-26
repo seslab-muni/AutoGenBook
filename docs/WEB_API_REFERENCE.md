@@ -286,7 +286,7 @@ Status codes: `200`; `404`; `422` if the tree would exceed `maxOutlineLevels`.
 
 Creates one node. Body: `parentId` (nullable), `title`, `orderIndex` (nullable — appended after existing siblings when omitted), `summary`, `targetPages`, `subPrompt`, `mathLevel` (default `rigorous`), `equationDensityLevel` (defaults to the project's `equationFrequencyLevel`).
 
-Status codes: `201`; `404` if the project or `parentId` doesn't exist; `422` if the new depth would exceed `maxOutlineLevels`.
+Status codes: `201`; `404` if the project or `parentId` doesn't exist; `409` if `parentId` is a content-locked node (issue #113 — a lock only means something on a leaf; unlock it first); `422` if the new depth would exceed `maxOutlineLevels`.
 
 #### `GET /api/v1/projects/{projectId}/outline/{nodeId}`
 
@@ -298,7 +298,7 @@ Partial update (`extra="forbid"` — `level`/`sectionNumber`/`cliKey`/`actualWor
 
 `contentLocked` (issue #113): `true` marks the leaf as content-locked — the next full run ships its `contentMarkdown` into the work dir (`out/locked_sections/<nodeId>.md`, referenced from `book_structure.json` as `content_locked`/`content_file`) and the CLI keeps it byte-for-byte instead of re-writing it, while still folding it into `context_memory.json`/`previous_sections` so later sections stop re-covering it; `graph_import` never overwrites a locked node's content on the way back. Setting it to `true` is rejected with `422` when `contentMarkdown` is blank and with `409` when the node has children (the CLI only writes section files for leaves); `null` leaves it unchanged. A `contentMarkdown` write that blanks a locked node clears the lock in the same write rather than failing a debounced autosave. Editing a locked node's text is allowed — the edited text is what the next run sees. A lock toggle is allowed while a run is active (it applies from the next run) and is deliberately *not* part of the spec the regenerate drift check hashes, so toggling it never invalidates `--resume`/regenerate.
 
-Status codes: `200`; `404` if the project/node/new-parent doesn't exist; `409` if `contentLocked: true` targets a node with children; `422` on the validation cases above.
+Status codes: `200`; `404` if the project/node/new-parent doesn't exist; `409` if `contentLocked: true` targets a node with children, or if `parentId` moves the node under a content-locked node; `422` on the validation cases above.
 
 #### `POST /api/v1/projects/{projectId}/outline/unlock-all`
 
@@ -336,11 +336,11 @@ The outline structural-edit guard (`OutlineService._reject_if_run_active`) and `
 
 #### `POST /api/v1/projects/{projectId}/runs`
 
-Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use the project's own outline | `generate` — let the CLI structure it), `outputFormat` (nullable — defaults to the project's own `outputFormat`), `allowSubdivision`, `enableWebRag`, `auditBook`, `auditBookMode` (`off|warn|strict`, default `warn`), `legacyTex`, `rebuildKb`, `failFastSchema`, `resume`, `exportTexOnly` (all booleans, default `false`), `llmModel` (nullable string, issue #128 — omitted/null uses the project's own `llmModel`; the resolved value is what `Run.options.llmModel` echoes back and what the worker sets `AUTOGENBOOK_LLM_MODEL` to for the CLI subprocess).
+Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use the project's own outline | `generate` — let the CLI structure it), `outputFormat` (nullable — defaults to the project's own `outputFormat`), `allowSubdivision`, `enableWebRag`, `auditBook`, `auditBookMode` (`off|warn|strict`, default `warn`), `legacyTex`, `rebuildKb`, `failFastSchema`, `resume`, `exportTexOnly` (all booleans, default `false`), `unlockAll` (boolean, default `false`, issue #113 — clear every content lock of the project as part of queueing this run, only after every validation/admission check has passed, so a rejected request never leaves the project unlocked with no run; not a run option and not echoed back on `Run.options`), `llmModel` (nullable string, issue #128 — omitted/null uses the project's own `llmModel`; the resolved value is what `Run.options.llmModel` echoes back and what the worker sets `AUTOGENBOOK_LLM_MODEL` to for the CLI subprocess).
 
 `legacyTex` and `auditBook` both require the resolved `outputFormat` (the explicit body value, or the project's own if omitted) to be `latex` or `pdf` — with `markdown`, `legacyTex` would otherwise "succeed" with no document assembled at all, and `auditBook` would silently be a no-op (both need a `tex_path` the markdown-only assembly path never produces).
 
-`legacyTex` is also rejected when `outline` is `project` and any outline node is `contentLocked` (issue #113): the legacy path generates LaTeX, and a locked section's text is Markdown. Locked sections otherwise always apply to a `project`-outline full run — their text is written to `out/locked_sections/<nodeId>.md` in the run's own work dir (so locks keep working after older work dirs are swept) and referenced from `book_structure.json`; `generate` sends no outline, so locks are inapplicable there.
+`legacyTex` is also rejected when `outline` is `project` and any outline node is `contentLocked` (issue #113) unless `unlockAll` is set: the legacy path generates LaTeX, and a locked section's text is Markdown. Locked sections otherwise always apply to a `project`-outline full run — their text is written to `out/locked_sections/<nodeId>.md` in the run's own work dir (so locks keep working after older work dirs are swept) and referenced from `book_structure.json`; `generate` sends no outline, so locks are inapplicable there.
 
 Status codes: `202`; `404` if the project doesn't exist; `409` if the project's queue is full (`MAX_QUEUED_RUNS_PER_PROJECT` queued runs already); `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format, or `legacyTex` with a content-locked node.
 
@@ -360,7 +360,7 @@ Re-runs the CLI with `--resume` against the project's last succeeded `full`/`reg
 
 The node must already have a `cliKey` (i.e. was produced by a prior run). Before queuing, the current project/outline is re-rendered to the same spec text the base run would have produced and hashed; if that hash doesn't match what the base run actually saw (`structure_graph.json`'s `input_sha256`), the outline has drifted structurally since — the endpoint rejects with `409` rather than let a `--resume` desync from a `structure_graph.json` it can no longer trust.
 
-A `contentLocked` node is rejected with `409` ("unlock it first"): regenerating deletes `sections/<cliKey>.md`, which is precisely what the lock exists to prevent. Toggling `contentLocked` on any node is *not* outline drift — the flag is deliberately absent from the rendered spec the drift check hashes — so a lock toggle alone never turns a later regenerate into a `409`.
+A `contentLocked` node is rejected with `409` ("unlock it first"): regenerating deletes `sections/<cliKey>.md`, which is precisely what the lock exists to prevent. Because a regenerate (and a retry) reuses the base run's `structure_graph.json`, the worker first syncs the outline's *current* locks into it (`sync_content_locks_into_graph`, the lock-side twin of the kb-scope sync): a node unlocked since the base run loses its stale `content_locked`/`content_file` and is generated, a node locked or edited-while-locked since gets its current text written to `out/locked_sections/`, and the CLI's `--resume` skips the context bookkeeping for a locked leaf whose kept text is already in `sections/`. Toggling `contentLocked` on any node is *not* outline drift — the flag is deliberately absent from the rendered spec the drift check hashes — so a lock toggle alone never turns a later regenerate into a `409`.
 
 Status codes: `202`; `404` if the project/node doesn't exist; `409` if the node already has a `regenerate` queued/running (`status=drafting`), a `full` run is already queued/running for the project, the project's queue is full, the node has no `cliKey`, the node is `contentLocked`, there's no resumable base run, or the outline has drifted since the base run; `422` on request validation.
 

@@ -1307,6 +1307,11 @@ export interface components {
              * @default false
              */
             failFastSchema?: boolean;
+            /**
+             * Unlockall
+             * @default false
+             */
+            unlockAll?: boolean;
             /** Llmmodel */
             llmModel?: string | null;
         };

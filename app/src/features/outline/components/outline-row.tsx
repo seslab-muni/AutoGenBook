@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/context-menu';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import {
+  ADD_UNDER_LOCKED_MESSAGE,
   CONTENT_LOCKED_BADGE_LABEL,
   contentLockDisabledReason,
   contentLockToggleLabel,
@@ -208,6 +209,12 @@ function OutlineRowComponent({
   // children out of the visible tree, and a parent must never look lockable because of that.
   const contentLockDisabledMessage = contentLockDisabledReason(node, flat);
   const contentLockLabel = contentLockToggleLabel(node);
+  // The API 409s a create/move under a content-locked leaf (a lock means nothing on a parent).
+  const addChildDisabledMessage = structuralEditsDisabled
+    ? STRUCTURE_LOCKED_MESSAGE
+    : node.contentLocked
+      ? ADD_UNDER_LOCKED_MESSAGE
+      : undefined;
 
   function rename(title: string) {
     updateMutation.mutate(
@@ -377,8 +384,9 @@ function OutlineRowComponent({
               {canAddChild ? (
                 <button
                   type="button"
-                  title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : 'Add sub-section'}
-                  disabled={structuralEditsDisabled}
+                  title={addChildDisabledMessage ?? 'Add sub-section'}
+                  aria-label="Add sub-section"
+                  disabled={Boolean(addChildDisabledMessage)}
                   className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -448,8 +456,8 @@ function OutlineRowComponent({
         <ContextMenuContent>
           {canAddChild ? (
             <ContextMenuItem
-              disabled={structuralEditsDisabled}
-              title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : undefined}
+              disabled={Boolean(addChildDisabledMessage)}
+              title={addChildDisabledMessage}
               onSelect={() => actions.onAddChild(node.id)}
             >
               Add sub-section

@@ -4,7 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
-import { outline, useUnlockAllOutlineMutation } from '@/api/queries/outline';
+import { outline } from '@/api/queries/outline';
 import { useCreateRunMutation } from '@/api/queries/runs';
 import type { AuditMode, OutputFormat, Project, RunOptionsIn } from '@/api/types';
 import { Button } from '@/components/ui/button';
@@ -71,7 +71,6 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
   // Issue #113: only leaves can be locked, so the banner counts against leaves ("sections").
   const leafCount = flatNodes.filter((node) => isLeaf(node.id, flatNodes)).length;
   const lockedCount = lockedNodes(flatNodes).length;
-  const unlockAllMutation = useUnlockAllOutlineMutation(project.id);
 
   const [outputFormat, setOutputFormat] = useState<OutputFormat>(project.outputFormat);
   const [allowSubdivision, setAllowSubdivision] = useState(false);
@@ -91,17 +90,12 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
     }
   }
 
-  function handleUnlockAllAndSubmit() {
-    unlockAllMutation.mutate(undefined, {
-      onSuccess: () => handleSubmit(),
-      onError: (error) => {
-        const problem = error instanceof ApiError ? error.problem : undefined;
-        toast.error(problem?.detail ?? problem?.title ?? 'Could not unlock the sections');
-      },
-    });
-  }
-
-  function handleSubmit() {
+  /**
+   * `unlockAll` rides the run request itself (issue #113) rather than being a separate
+   * `unlock-all` call first: the API clears the locks only once the run has passed every
+   * validation/admission check, so a 409/422 here never leaves the project unlocked with no run.
+   */
+  function handleSubmit(extra: Pick<RunOptionsIn, 'unlockAll'> = {}) {
     const body: RunOptionsIn = {
       outline: 'project',
       outputFormat,
@@ -110,6 +104,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
       ...(llmModel.trim() && llmModel.trim() !== project.llmModel
         ? { llmModel: llmModel.trim() }
         : {}),
+      ...extra,
     };
     createMutation.mutate(body, {
       onSuccess: (run) => {
@@ -179,12 +174,10 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={unlockAllMutation.isPending || createMutation.isPending}
-                  onClick={handleUnlockAllAndSubmit}
+                  disabled={createMutation.isPending}
+                  onClick={() => handleSubmit({ unlockAll: true })}
                 >
-                  {unlockAllMutation.isPending
-                    ? 'Unlocking…'
-                    : 'Unlock all and regenerate everything'}
+                  Unlock all and regenerate everything
                 </Button>
               </div>
             ) : null}
@@ -273,7 +266,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
           <Button type="button" variant="outline" onClick={closeModal}>
             Cancel
           </Button>
-          <Button type="button" onClick={handleSubmit} disabled={createMutation.isPending}>
+          <Button type="button" onClick={() => handleSubmit()} disabled={createMutation.isPending}>
             {createMutation.isPending ? 'Starting…' : 'Start run'}
           </Button>
         </DialogFooter>

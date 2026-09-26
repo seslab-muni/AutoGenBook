@@ -3,7 +3,10 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
+import { http } from 'msw';
+
 import { db } from '@/mocks/db';
+import { server } from '@/mocks/server';
 import { useUiStore } from '@/stores/ui-store';
 import { renderRouterApp } from '@/test/router-test-utils';
 import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
@@ -210,9 +213,20 @@ describe('StartRunDialog', () => {
     expect(banner).toHaveTextContent('2 of 6 sections are locked.');
     expect(banner).toHaveTextContent('kept as-is and used as context for the rest');
 
+    // The unlock rides the run request (`unlockAll: true`) rather than a separate call, so a
+    // rejected run can never leave the project unlocked with nothing started.
+    const runBodies: Record<string, unknown>[] = [];
+    server.use(
+      http.post('*/api/v1/projects/:projectId/runs', async ({ request }) => {
+        runBodies.push((await request.clone().json()) as Record<string, unknown>);
+        return undefined;
+      }),
+    );
     await user.click(
       within(banner).getByRole('button', { name: 'Unlock all and regenerate everything' }),
     );
+    await waitFor(() => expect(runBodies).toHaveLength(1));
+    expect(runBodies[0]).toMatchObject({ outline: 'project', unlockAll: true });
 
     await waitFor(() =>
       expect(screen.queryByRole('heading', { name: 'Start a run' })).not.toBeInTheDocument(),

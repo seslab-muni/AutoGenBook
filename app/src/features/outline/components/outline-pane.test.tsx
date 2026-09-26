@@ -8,6 +8,7 @@ import { renderWithProviders } from '@/test/component-test-utils';
 import { DEFAULT_RUN_OPTIONS } from '@/test/run-options-fixture';
 
 import {
+  ADD_UNDER_LOCKED_MESSAGE,
   CONTENT_LOCK_LEAF_ONLY_MESSAGE,
   CONTENT_LOCK_NEEDS_CONTENT_MESSAGE,
   LOCK_CONTENT_LABEL,
@@ -252,6 +253,10 @@ describe('OutlinePane content locks (issue #113)', () => {
       'true',
     );
     expect(screen.getByTestId('outline-locked-count')).toHaveTextContent('1 locked');
+    // Nothing can be added under a locked leaf (the API 409s it) - the row says why.
+    const addChild = within(lockedRow).getByRole('button', { name: 'Add sub-section' });
+    expect(addChild).toBeDisabled();
+    expect(addChild).toHaveAttribute('title', ADD_UNDER_LOCKED_MESSAGE);
 
     // A second lock, then the bulk clear from the toolbar.
     const other = await findRow('Byzantine Quorum Intersection & Threshold Bounds');

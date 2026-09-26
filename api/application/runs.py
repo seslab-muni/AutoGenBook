@@ -29,7 +29,9 @@ from api.application.book_spec import (
     SpecRenderer,
     StructureBuilder,
     sync_kb_scopes_into_graph,
+    LOCKED_SECTIONS_DIRNAME,
     locked_section_files,
+    sync_content_locks_into_graph,
 )
 from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.core.settings import Settings, default_llm_model
@@ -154,7 +156,13 @@ class RunService:
         fail_fast_schema: bool = False,
         llm_model: str | None = None,
         started_by: uuid.UUID | None = None,
+        unlock_all: bool = False,
     ) -> Run:
+        """`unlock_all` (issue #113) clears every content lock of the project
+        as part of queueing this run - only once every validation and
+        admission check has passed, so a rejected request (409 lane full,
+        422 options) never leaves the project unlocked with no run started,
+        which a client-side "unlock, then create" sequence could."""
         project = await self._projects.get(project_id)
         if project is None:
             raise NotFound(f"project {project_id} does not exist")
@@ -186,7 +194,7 @@ class RunService:
                 "auditBook has no effect with outputFormat 'markdown' (the audit runs "
                 "against the LaTeX build, which a markdown-only run never produces)"
             )
-        if legacy_tex and outline == "project":
+        if legacy_tex and outline == "project" and not unlock_all:
             # Issue #113: the legacy path generates LaTeX, and a locked
             # section's text is Markdown - the CLI would copy it verbatim
             # into a `.tex` file.
@@ -237,6 +245,11 @@ class RunService:
             total_cost_usd=None,
             started_by=started_by,
         )
+        if unlock_all:
+            # Last thing before the insert: everything that can reject this
+            # request has already run. The worker reads the outline fresh
+            # when the run *starts*, so the cleared locks are what it sees.
+            await self._outline.clear_content_locked(project_id)
         created = await self._runs.add(run)
 
         # `last_run_id` is deliberately *not* set to this just-queued run
@@ -989,8 +1002,10 @@ class GenerationService:
                 if run.options.resume:
                     # `--resume` reads the previous attempt's
                     # `structure_graph.json`, not the `book_structure.json`
-                    # just rewritten - carry current source scopes into it.
+                    # just rewritten - carry current source scopes and
+                    # content locks (issue #113) into it.
                     await self._sync_kb_scopes(run, flat_nodes)
+                    await self._sync_content_locks(run, flat_nodes)
                 await self._download_sources(run)
             elif run.kind == RunKind.regenerate_section:
                 await self._prepare_regenerate(run)
@@ -1104,10 +1119,24 @@ class GenerationService:
             )
             # Same `out_dir`-relative convention as `content_file` in the
             # structure above (issue #113).
-            for relative_path, content in (locked_sections or {}).items():
-                target = out_dir / relative_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
+            GenerationService._write_locked_sections_sync(out_dir, locked_sections or {}, [])
+
+    @staticmethod
+    def _write_locked_sections_sync(
+        out_dir: Path, files: dict[str, str], stale: list[str]
+    ) -> None:
+        """Materialise `files` (out_dir-relative path -> text) and delete
+        `stale` ones - both only ever under `locked_sections/`, guarded here
+        so a malformed graph can never make this delete anything else."""
+        locked_dir = (out_dir / LOCKED_SECTIONS_DIRNAME).resolve()
+        for relative_path in stale:
+            target = (out_dir / relative_path).resolve()
+            if target.parent == locked_dir:
+                target.unlink(missing_ok=True)
+        for relative_path, content in files.items():
+            target = out_dir / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
 
     async def _sync_kb_scopes(self, run: Run, flat_nodes: list[OutlineNode]) -> None:
         graph_path = Path(run.work_dir) / book_command.OUT_DIRNAME / "structure_graph.json"
@@ -1117,6 +1146,24 @@ class GenerationService:
             lambda: json.loads(graph_path.read_text(encoding="utf-8"))
         )
         if sync_kb_scopes_into_graph(graph_data, assign_positions(flat_nodes)):
+            await run_in_threadpool(self._write_json_sync, graph_path, graph_data)
+
+    async def _sync_content_locks(self, run: Run, flat_nodes: list[OutlineNode]) -> None:
+        """Retry (issue #124) twin of the regenerate path's lock sync below:
+        carry the outline's current content locks (issue #113) into the
+        reused `structure_graph.json` and (re)write / delete their files."""
+        out_dir = Path(run.work_dir) / book_command.OUT_DIRNAME
+        graph_path = out_dir / "structure_graph.json"
+        if not await run_in_threadpool(graph_path.is_file):
+            return
+        graph_data = await run_in_threadpool(
+            lambda: json.loads(graph_path.read_text(encoding="utf-8"))
+        )
+        changed, files, stale = sync_content_locks_into_graph(
+            graph_data, assign_positions(flat_nodes)
+        )
+        await run_in_threadpool(self._write_locked_sections_sync, out_dir, files, stale)
+        if changed:
             await run_in_threadpool(self._write_json_sync, graph_path, graph_data)
 
     async def _prepare_regenerate(self, run: Run) -> None:
@@ -1191,6 +1238,18 @@ class GenerationService:
             )
             graph_changed = True
         if sync_kb_scopes_into_graph(graph_data, list(positioned.values())):
+            graph_changed = True
+        # Issue #113: the target itself can't be locked (`RunService.
+        # regenerate_node` 409s), but a node *unlocked* since the base run
+        # would otherwise still carry the base run's `content_locked` here,
+        # and every other node's lock/text may have changed too.
+        lock_changed, locked_files, stale_locked = sync_content_locks_into_graph(
+            graph_data, list(positioned.values())
+        )
+        await run_in_threadpool(
+            self._write_locked_sections_sync, out_dir, locked_files, stale_locked
+        )
+        if lock_changed:
             graph_changed = True
         if graph_changed:
             await run_in_threadpool(self._write_json_sync, graph_path, graph_data)

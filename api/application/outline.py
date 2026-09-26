@@ -88,6 +88,19 @@ class OutlineService:
         changes["source_ids"] = ids
 
     @staticmethod
+    def _reject_if_content_locked_parent(parent: OutlineNode) -> None:
+        """A content lock only means something on a leaf (issue #113): the
+        CLI writes section files for leaves only, and `StructureBuilder`
+        emits no lock for a node with children - so a child added or moved
+        under a locked leaf would silently drop its kept text from the book
+        while the UI still counts it as locked. Refuse instead."""
+        if parent.content_locked:
+            raise Conflict(
+                f"outline node {parent.id} is content-locked; unlock it before adding "
+                "sections under it"
+            )
+
+    @staticmethod
     def _normalize_content_lock(
         node: OutlineNode, flat: Sequence[OutlineNode], changes: dict[str, Any]
     ) -> None:
@@ -188,6 +201,7 @@ class OutlineService:
             parent = by_id.get(parent_id)
             if parent is None or parent.project_id != project_id:
                 raise NotFound(f"parent node {parent_id} does not exist")
+            self._reject_if_content_locked_parent(parent)
             depth = depth_of(parent_id, flat) + 1
         else:
             depth = 1
@@ -306,6 +320,7 @@ class OutlineService:
                 )
                 if new_parent is None:
                     raise NotFound(f"parent node {new_parent_id} does not exist")
+                self._reject_if_content_locked_parent(new_parent)
                 if new_parent_id in subtree_ids(node_id, flat):
                     raise ValidationFailed("cannot move a node into its own subtree")
             target_depth = (depth_of(new_parent_id, flat) if new_parent_id else 0) + 1

@@ -2885,6 +2885,10 @@ components:
           type: boolean
           title: Failfastschema
           default: false
+        unlockAll:
+          type: boolean
+          title: Unlockall
+          default: false
         llmModel:
           anyOf:
           - type: string

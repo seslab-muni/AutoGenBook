@@ -61,6 +61,7 @@ async def create_run(
         fail_fast_schema=body.fail_fast_schema,
         llm_model=body.llm_model,
         started_by=user.id,
+        unlock_all=body.unlock_all,
     )
     return await run_to_schema(run, queue_position=await service.queue_position(run))
 

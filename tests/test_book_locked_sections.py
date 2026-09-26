@@ -256,6 +256,43 @@ class ContentLockGenerationTests(unittest.TestCase):
 
             self.assertEqual((out_dir / "sections" / "1.md").read_bytes(), LOCKED_ONE)
 
+    def test_resume_skips_bookkeeping_for_an_unchanged_locked_leaf(self):
+        """A --resume run (regenerate/retry) must not pay a memory-agent call per locked leaf
+        whose kept text is already in sections/ - mirrors the 'Skip existing section' path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            (out_dir / "locked_sections").mkdir()
+            (out_dir / "locked_sections" / "one.md").write_bytes(LOCKED_ONE)
+            (out_dir / "locked_sections" / "two.md").write_bytes(LOCKED_THREE)
+            (out_dir / "sections").mkdir()
+            (out_dir / "sections" / "1.md").write_bytes(LOCKED_ONE)  # identical -> skip
+            (out_dir / "sections" / "2.md").write_bytes(b"edited since")  # differs -> re-kept
+
+            book_json = {
+                "title": "Book",
+                "summary": "",
+                "childs": [
+                    _leaf("Kept one", content_locked=True, content_file="locked_sections/one.md"),
+                    _leaf("Kept two", content_locked=True, content_file="locked_sections/two.md"),
+                ],
+            }
+            memory_agent = FakeMemoryAgent()
+            stdout = io.StringIO()
+            with (
+                patch.object(book_builder, "BookSectionWriterAgent", lambda llm: FakeWriter(out_dir / "x")),
+                patch.object(book_builder, "ContextMemoryAgent", lambda llm: memory_agent),
+                patch.object(book_builder, "enforce_section_length", lambda llm, tex, **kw: (tex, None)),
+                contextlib.redirect_stdout(stdout),
+            ):
+                graph = book_builder.build_graph_from_book_json(book_json)
+                book_builder.generate_contents(DummyLLM(), graph, out_dir, kb=None, cfg=_cfg(), resume=True)
+
+            self.assertEqual([c["node_key"] for c in memory_agent.calls], ["2"])
+            self.assertEqual((out_dir / "sections" / "2.md").read_bytes(), LOCKED_THREE)
+            self.assertIn("[GEN] 1/2 Skip existing locked section 'Kept one'", stdout.getvalue())
+            self.assertIn("[GEN] 2/2 Locked section 'Kept two' (kept, used as context)", stdout.getvalue())
+            self.assertTrue(graph.nodes["1"]["content_file_path"].endswith("sections/1.md"))
+
     def test_missing_or_blank_content_file_falls_back_to_generation(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)

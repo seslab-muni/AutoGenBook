@@ -300,8 +300,9 @@ export function useUpdateOutlineNodesMutation(projectId: string) {
 /**
  * `POST .../outline/unlock-all` (issue #113): clears `contentLocked` on every node of the
  * project in one request, so the next full run regenerates everything. Optimistically clears
- * the flag on every cached row; rolls back on error; on success replaces the flat cache with the
- * outline the server returned and invalidates the tree view.
+ * the flag on every cached row; rolls back on error; on success replaces every cached flat page
+ * with the outline the server returned (the endpoint answers with the whole outline, so no
+ * refetch is needed) and invalidates the tree view.
  */
 export function useUnlockAllOutlineMutation(projectId: string) {
   const queryClient = useQueryClient();
@@ -323,8 +324,9 @@ export function useUnlockAllOutlineMutation(projectId: string) {
     onError: (_error, _variables, context) => {
       if (context) restoreFlat(queryClient, context.previous);
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
+    onSuccess: (page) => {
+      patchFlat(queryClient, projectId, () => page.items);
+      void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
     },
   });
 }

@@ -17,6 +17,8 @@ export const CONTENT_LOCK_LEAF_ONLY_MESSAGE =
   'Only leaf sections can be locked — lock the sections below it instead.';
 export const CONTENT_LOCKED_BADGE_LABEL =
   'Content locked — kept as-is on the next run and used as context for the sections after it.';
+export const ADD_UNDER_LOCKED_MESSAGE =
+  "Unlock this section's content before adding sections under it.";
 export const LOCK_CONTENT_LABEL = 'Lock content — keep as-is on the next run';
 export const UNLOCK_CONTENT_LABEL = 'Unlock content';
 

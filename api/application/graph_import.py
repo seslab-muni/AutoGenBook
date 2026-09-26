@@ -36,6 +36,7 @@ new, unlocked outline row under the right parent.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from dataclasses import replace as dataclass_replace
@@ -65,6 +66,8 @@ _PAGE_RE = re.compile(r"(?:page|p\.?)[\s:]*([0-9]+)", re.IGNORECASE)
 # back would bake the trailer into `summary` and, on every subsequent full
 # run, compound another copy of it on top.
 _WRITING_INSTRUCTIONS_RE = re.compile(r"(?:\A|\n\n)Writing instructions:.*\Z", re.DOTALL)
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_synthesized_writing_instructions(summary: str) -> str:
@@ -200,6 +203,23 @@ async def _matched_node_changes(
         # clobber curated content on the way back in. Title/summary/pages
         # above still sync: the node is structure-locked, so the CLI does
         # not change them, but a stale `word_budget` would.
+        #
+        # The CLI is fail-open: with its `content_file` missing/unreadable
+        # it *generates* the section (and pays for it) after a `[WARN]`
+        # line that `stdout_parser` surfaces as a warning run event. That
+        # text is dropped here by design; log it so the discard is at least
+        # traceable server-side too.
+        cli_content = await run_in_threadpool(
+            _read_section_sync, out_dir / "sections" / f"{cli_key}.md"
+        )
+        if cli_content is not None and cli_content != node.content_markdown:
+            logger.warning(
+                "content-locked outline node %s (cli key %s) came back from the CLI with "
+                "different text; keeping the database copy - see the run's [WARN] events "
+                "for why the lock was not honoured",
+                node.id,
+                cli_key,
+            )
         return changes
     changes.update(await _leaf_content_changes(out_dir, cli_key, kb_index))
     return changes

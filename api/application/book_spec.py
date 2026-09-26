@@ -226,6 +226,51 @@ def kb_scope_fields(node: OutlineNode) -> dict[str, Any]:
     return {}
 
 
+def sync_content_locks_into_graph(
+    graph_data: dict[str, Any], nodes: list[OutlineNode]
+) -> tuple[bool, dict[str, str], list[str]]:
+    """Overwrite `content_locked`/`content_file` on a CLI `structure_graph.
+    json` payload's nodes from the outline's *current* locks, matched by
+    `cli_key` (issue #113) - the lock-side twin of `sync_kb_scopes_into_graph`
+    for runs that reuse a base run's graph (`regenerate`, retry). Without it
+    a node unlocked (or locked, or edited while locked) after the base run
+    would keep the base run's stale flag and file, and `book_builder.py`'s
+    lock check runs *ahead* of its `--resume` skip, so an unlocked node's
+    regenerate would silently re-copy the old text.
+
+    Returns `(changed, files, stale)`: `files` maps out_dir-relative paths
+    to the locked text that must be on disk for the flags just set (always
+    rewritten, so an edit made while locked is what the run sees), `stale`
+    lists files a now-unlocked node used to point at, to delete."""
+    graph_nodes = graph_data.get("nodes") or {}
+    parents = {node.parent_id for node in nodes if node.parent_id is not None}
+    changed = False
+    files: dict[str, str] = {}
+    stale: list[str] = []
+    for node in nodes:
+        if not node.cli_key:
+            continue
+        cli_node = graph_nodes.get(node.cli_key)
+        if not isinstance(cli_node, dict):
+            continue
+        previous_file = str(cli_node.get("content_file") or "")
+        if _has_locked_content(node) and node.id not in parents:
+            path = locked_section_path(node)
+            files[path] = node.content_markdown
+            if cli_node.get("content_locked") is not True or previous_file != path:
+                cli_node["content_locked"] = True
+                cli_node["structure_locked"] = True
+                cli_node["content_file"] = path
+                changed = True
+        elif "content_locked" in cli_node or "content_file" in cli_node:
+            cli_node.pop("content_locked", None)
+            cli_node.pop("content_file", None)
+            if previous_file:
+                stale.append(previous_file)
+            changed = True
+    return changed, files, stale
+
+
 def sync_kb_scopes_into_graph(graph_data: dict[str, Any], nodes: list[OutlineNode]) -> bool:
     """Overwrite `kb_scope`/`kb_sources` on a CLI `structure_graph.json`
     payload's nodes from the outline's *current* scopes, matched by

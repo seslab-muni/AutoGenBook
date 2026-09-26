@@ -625,6 +625,13 @@ const outlineHandlers = [
     if (body.parentId && !db.outlineNodes.get(body.parentId)) {
       return notFound('Parent node', new URL(request.url).pathname);
     }
+    if (body.parentId && db.outlineNodes.get(body.parentId)?.contentLocked) {
+      return problemResponse(
+        409,
+        `outline node ${body.parentId} is content-locked; unlock it before adding sections under it`,
+        new URL(request.url).pathname,
+      );
+    }
     const depth = outlineDepthOf(body.parentId ?? null) + 1;
     if (depth > row.maxOutlineLevels) {
       return problemResponse(
@@ -706,6 +713,17 @@ const outlineHandlers = [
     const lock = normalizeContentLock(node, body);
     if ('error' in lock) {
       return problemResponse(lock.status, lock.error, new URL(request.url).pathname);
+    }
+    if (
+      body.parentId &&
+      body.parentId !== node.parentId &&
+      db.outlineNodes.get(body.parentId)?.contentLocked
+    ) {
+      return problemResponse(
+        409,
+        `outline node ${body.parentId} is content-locked; unlock it before adding sections under it`,
+        new URL(request.url).pathname,
+      );
     }
     const updated: OutlineNode & { projectId: string } = {
       ...node,
@@ -858,6 +876,7 @@ const runHandlers = [
     const body = (await request.json().catch(() => ({}))) as RunOptionsIn;
     if (
       body.legacyTex &&
+      !body.unlockAll &&
       (body.outline ?? 'project') === 'project' &&
       db.outlineFlatForProject(projectId).some((node) => node.contentLocked)
     ) {
@@ -866,6 +885,14 @@ const runHandlers = [
         'legacyTex cannot be combined with content-locked sections (their text is Markdown); unlock them first or run without legacyTex',
         new URL(request.url).pathname,
       );
+    }
+    if (body.unlockAll) {
+      // Issue #113: cleared only now, after every check above has passed.
+      for (const node of db.outlineNodes.values()) {
+        if (node.projectId === projectId && node.contentLocked) {
+          db.outlineNodes.set(node.id, { ...node, contentLocked: false, updatedAt: db.now() });
+        }
+      }
     }
     const runId = db.nextId();
     const run: Run = {

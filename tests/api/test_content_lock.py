@@ -17,7 +17,11 @@ from pathlib import Path
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.application.book_spec import StructureBuilder, locked_section_files
+from api.application.book_spec import (
+    StructureBuilder,
+    locked_section_files,
+    sync_content_locks_into_graph,
+)
 from api.application.graph_import import import_graph
 from api.core.settings import get_settings
 from api.domain.models import RunOptions
@@ -34,6 +38,7 @@ from tests.api.test_graph_import import _write_structure_graph
 from tests.api.test_regenerate_and_export import (
     _create_node,
     _create_project,
+    _drive_generation,
     _get_node,
     _run_full,
     _settings,
@@ -434,3 +439,138 @@ async def test_legacy_tex_422_when_any_node_is_locked(authed_client: AsyncClient
     # Without legacyTex the same project runs fine.
     plain = await authed_client.post(f"/api/v1/projects/{project['id']}/runs", json={"outline": "project"})
     assert plain.status_code == 202, plain.text
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups
+# ---------------------------------------------------------------------------
+
+
+async def test_no_sections_can_be_added_or_moved_under_a_locked_leaf(authed_client: AsyncClient) -> None:
+    project = await _create_project(authed_client)
+    kept = await _create_node(authed_client, project["id"], "Kept")
+    other = await _create_node(authed_client, project["id"], "Other")
+    await _lock(authed_client, project["id"], kept["id"])
+
+    created = await authed_client.post(
+        f"/api/v1/projects/{project['id']}/outline", json={"title": "Child", "parentId": kept["id"]}
+    )
+    assert created.status_code == 409, created.text
+    assert "content-locked" in created.json()["detail"]
+
+    moved = await _patch(authed_client, project["id"], other["id"], {"parentId": kept["id"]})
+    assert moved.status_code == 409, moved.text
+
+    # Still a leaf, still locked.
+    outline = await authed_client.get(f"/api/v1/projects/{project['id']}/outline")
+    assert [n["parentId"] for n in outline.json()["items"]] == [None, None]
+    assert (await _get_node(authed_client, project["id"], kept["id"]))["contentLocked"] is True
+
+
+def test_sync_content_locks_into_graph_follows_the_outline_not_the_base_run() -> None:
+    unlocked_since = _make_node(title="Was locked", content_markdown=CURATED, cli_key="1")
+    locked_since = _make_node(title="Now locked", content_locked=True, content_markdown="New text", cli_key="2")
+    parent = _make_node(title="Parent", content_locked=True, content_markdown=CURATED, cli_key="3")
+    child = _make_node(title="Child", parent_id=parent.id, cli_key="3-1", level=2, section_number="3.1")
+    graph = {
+        "nodes": {
+            "book": {},
+            "1": {"title": "Was locked", "content_locked": True, "content_file": f"locked_sections/{unlocked_since.id}.md"},
+            "2": {"title": "Now locked"},
+            "3": {"title": "Parent"},
+            "3-1": {"title": "Child"},
+        },
+        "edges": [["book", "1"], ["book", "2"], ["book", "3"], ["3", "3-1"]],
+    }
+
+    changed, files, stale = sync_content_locks_into_graph(graph, [unlocked_since, locked_since, parent, child])
+
+    assert changed is True
+    assert "content_locked" not in graph["nodes"]["1"] and "content_file" not in graph["nodes"]["1"]
+    assert stale == [f"locked_sections/{unlocked_since.id}.md"]
+    assert graph["nodes"]["2"]["content_locked"] is True
+    assert graph["nodes"]["2"]["structure_locked"] is True
+    assert graph["nodes"]["2"]["content_file"] == f"locked_sections/{locked_since.id}.md"
+    assert files == {f"locked_sections/{locked_since.id}.md": "New text"}
+    # A locked node with children is not a lock the CLI can honour.
+    assert "content_locked" not in graph["nodes"]["3"]
+
+    # Idempotent.
+    assert sync_content_locks_into_graph(graph, [unlocked_since, locked_since, parent, child])[0] is False
+
+
+async def test_regenerate_after_unlocking_actually_regenerates(
+    app,
+    authed_client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    """The regenerate path reuses the base run's structure_graph.json, whose node still says
+    content_locked from when the base run started; without syncing the outline's current
+    locks into it the CLI would re-copy the old text and the regenerate would be a no-op."""
+    settings = _settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+    project = await _create_project(authed_client)
+    kept = await _create_node(authed_client, project["id"], "Kept")
+    await _create_node(authed_client, project["id"], "Other")
+
+    # Base run with `kept` locked -> its graph node carries content_locked + content_file.
+    await _lock(authed_client, project["id"], kept["id"])
+    base = await _run_full(authed_client, project["id"], session_factory, file_storage, settings)
+    graph_path = Path(settings.runs_dir) / base["id"] / "out" / "structure_graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    kept_key = (await _get_node(authed_client, project["id"], kept["id"]))["cliKey"]
+    assert graph["nodes"][kept_key]["content_locked"] is True
+
+    # Unlock, regenerate, drive it.
+    response = await _patch(authed_client, project["id"], kept["id"], {"contentLocked": False})
+    assert response.status_code == 200, response.text
+    regenerate = await authed_client.post(
+        f"/api/v1/projects/{project['id']}/outline/{kept['id']}/regenerate", json={}
+    )
+    assert regenerate.status_code == 202, regenerate.text
+    finished = await _drive_generation(regenerate.json()["id"], session_factory, file_storage, settings)
+    assert finished.status.value == "succeeded", finished.error
+
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert "content_locked" not in graph["nodes"][kept_key]
+    assert "content_file" not in graph["nodes"][kept_key]
+    assert not (graph_path.parent / "locked_sections" / f"{kept['id']}.md").exists()
+    after = await _get_node(authed_client, project["id"], kept["id"])
+    assert after["contentMarkdown"] != CURATED
+    assert "Fake generated content" in after["contentMarkdown"]
+
+
+async def test_unlock_all_on_run_creation_is_atomic_with_admission(
+    app,
+    authed_client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path, max_queued_runs_per_project=1)
+    app.dependency_overrides[get_settings] = lambda: settings
+    project = await _create_project(authed_client)
+    kept = await _create_node(authed_client, project["id"], "Kept")
+    await _lock(authed_client, project["id"], kept["id"])
+
+    # Fill the lane so the next creation is rejected: the lock must survive that.
+    first = await authed_client.post(f"/api/v1/projects/{project['id']}/runs", json={"outline": "project"})
+    assert first.status_code == 202, first.text
+    rejected = await authed_client.post(
+        f"/api/v1/projects/{project['id']}/runs", json={"outline": "project", "unlockAll": True}
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert (await _get_node(authed_client, project["id"], kept["id"]))["contentLocked"] is True
+
+    # legacyTex + unlockAll is fine: the locks are gone by the time the run starts.
+    cancel = await authed_client.post(f"/api/v1/runs/{first.json()['id']}/cancel")
+    assert cancel.status_code in (200, 202, 204), cancel.text
+    accepted = await authed_client.post(
+        f"/api/v1/projects/{project['id']}/runs",
+        json={"outline": "project", "outputFormat": "latex", "legacyTex": True, "unlockAll": True},
+    )
+    assert accepted.status_code == 202, accepted.text
+    assert "unlockAll" not in accepted.json()["options"]
+    assert (await _get_node(authed_client, project["id"], kept["id"]))["contentLocked"] is False
