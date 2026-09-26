@@ -49,6 +49,20 @@ function wordCount(markdown: string): number {
   return markdown.trim().length === 0 ? 0 : markdown.trim().split(/\s+/).length;
 }
 
+/**
+ * Mirrors `OutlineService._normalize_content_lock` (issue #113) for the optimistic row: an
+ * explicit `contentLocked` wins over the current value, and a write that blanks a locked node's
+ * content clears the lock in the same write.
+ */
+function contentLockedAfter(
+  current: OutlineNode,
+  body: OutlineNodeUpdate,
+  contentMarkdown: string,
+): boolean {
+  const next = body.contentLocked ?? current.contentLocked;
+  return next && contentMarkdown.trim().length > 0;
+}
+
 export const outline = {
   /** `format=flat` — the canonical shape, one row per node addressed by `parentId`/`orderIndex`. */
   flat: (projectId: string, params: { limit?: number; offset?: number } = {}) =>
@@ -153,6 +167,7 @@ export function useCreateOutlineNodeMutation(projectId: string) {
           reviewerScore: null,
           reviewerNotes: null,
           structureLocked: true,
+          contentLocked: false,
           sourceScope: 'inherit',
           sourceIds: [],
           createdAt: new Date().toISOString(),
@@ -212,6 +227,7 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
           contentMarkdown,
           contentLatex: body.contentLatex ?? current.contentLatex,
           structureLocked: body.structureLocked ?? current.structureLocked,
+          contentLocked: contentLockedAfter(current, body, contentMarkdown),
           ...mergeSourceScope(current, body),
           actualWords:
             body.contentMarkdown !== undefined ? wordCount(contentMarkdown) : current.actualWords,
@@ -277,6 +293,40 @@ export function useUpdateOutlineNodesMutation(projectId: string) {
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
+    },
+  });
+}
+
+/**
+ * `POST .../outline/unlock-all` (issue #113): clears `contentLocked` on every node of the
+ * project in one request, so the next full run regenerates everything. Optimistically clears
+ * the flag on every cached row; rolls back on error; on success replaces every cached flat page
+ * with the outline the server returned (the endpoint answers with the whole outline, so no
+ * refetch is needed) and invalidates the tree view.
+ */
+export function useUnlockAllOutlineMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        apiClient.POST('/api/v1/projects/{project_id}/outline/unlock-all', {
+          params: { path: { project_id: projectId } },
+        }),
+      ),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
+      const previous = snapshotFlat(queryClient, projectId);
+      patchFlat(queryClient, projectId, (items) =>
+        items.map((item) => (item.contentLocked ? { ...item, contentLocked: false } : item)),
+      );
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context) restoreFlat(queryClient, context.previous);
+    },
+    onSuccess: (page) => {
+      patchFlat(queryClient, projectId, () => page.items);
+      void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
     },
   });
 }

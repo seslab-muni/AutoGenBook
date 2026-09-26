@@ -24,6 +24,18 @@ See `docs/API_REFERENCE.md` for the full CLI reference. (`docs/API_REFERENCE.md`
 | `input/presentation/presentation_input.txt` | Sample presentation input. | `input/presentation/presentation_input.txt` |
 | `input/proposal/proposal_input.txt` | Sample proposal input (requires language line). | `autogenbook/pipelines/proposal_pipeline.py:run_proposal`, `input/proposal/proposal_input.txt` |
 
+### Per-node keys in `book_structure.json` (book mode)
+
+Every node under `childs` accepts, besides `title` / `summary` / `n_pages`:
+
+| Key | Type | Effect | Source |
+| --- | --- | --- | --- |
+| `needsSubdivision` | bool | Ask the subdivider to split this node into sub-sections (implied when the node has `childs`). | `book_builder.py:_normalize_book_child`, `book_builder.py:subdivide_graph` |
+| `structure_locked` | bool | Never subdivide this node; set automatically for nodes taken from an explicit TXT outline. | `book_builder.py:subdivide_graph` |
+| `kb_scope`, `kb_sources` | `"selected"`/`"all"`, list | Restrict (or lift a restriction on) which `--kb-dir` sources this node's sections may retrieve from; inherited by descendants. | `book_builder.py:resolve_kb_sources` |
+| `content_locked` | bool | Leaf only: keep the text in `content_file` byte-for-byte instead of generating the section, while still feeding it into `context_memory.json` / `previous_sections` for later sections. Implies `structure_locked`. | `book_builder.py:_load_locked_section`, `book_builder.py:generate_contents` |
+| `content_file` | string | Path to the locked text; relative paths resolve against `--out-dir` (same rule as `-j`). Missing/unreadable/blank files log a `[WARN]` and the section is generated normally. | `book_builder.py:_load_locked_section` |
+
 ## Environment variables
 
 ### OpenRouter

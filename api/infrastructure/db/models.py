@@ -328,6 +328,10 @@ class OutlineNodeRecord(Base):
     structure_locked: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=True, server_default=sa.true()
     )
+    # Issue #113: keep this leaf's content as-is across full runs.
+    content_locked: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
     # Issue #138. Plain text + CHECK rather than a Postgres enum type: the
     # value set may grow, and `ALTER TYPE ... ADD VALUE` can't run inside the
     # migration's transaction.

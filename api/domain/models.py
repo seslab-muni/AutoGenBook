@@ -198,6 +198,13 @@ class OutlineNode:
     # enforces it); it lists live `project_sources.id`s of this project.
     source_scope: SourceScope = SourceScope.INHERIT
     source_ids: list[uuid.UUID] = field(default_factory=list)
+    # Issue #113: a content-locked leaf is never re-written by a run - its
+    # `content_markdown` ships into the run's work dir verbatim and the CLI
+    # keeps it, while still feeding it into the cross-section context. Not
+    # the same thing as `structure_locked` (above), which is about CLI
+    # imports not overwriting API-authored *structure*. Only settable on a
+    # leaf with non-blank content (`OutlineService.update`).
+    content_locked: bool = False
 
 
 class FileKind(str, enum.Enum):

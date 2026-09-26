@@ -49,6 +49,7 @@ def to_schema(node: OutlineNodeDomain) -> OutlineNode:
         reviewer_score=node.reviewer_score,
         reviewer_notes=node.reviewer_notes,
         structure_locked=node.structure_locked,
+        content_locked=node.content_locked,
         source_scope=node.source_scope,
         source_ids=node.source_ids,
         created_at=node.created_at,
@@ -115,6 +116,19 @@ async def create_outline_node(
         equation_density_level=body.equation_density_level,
     )
     return to_schema(node)
+
+
+@router.post("/unlock-all", response_model=Page[OutlineNode])
+async def unlock_all_outline_nodes(
+    project_id: uuid.UUID,
+    service: OutlineService = Depends(get_outline_service),
+) -> Page[OutlineNode]:
+    """Clear `contentLocked` on every node of the project (issue #113) so
+    the next full run regenerates everything. Idempotent. Returns the
+    whole outline, like `PUT /outline` does."""
+    nodes = await service.unlock_all(project_id)
+    items = [to_schema(node) for node in nodes]
+    return Page[OutlineNode](items=items, total=len(items), limit=max(len(items), 1), offset=0)
 
 
 @router.get("/{node_id}", response_model=OutlineNode)

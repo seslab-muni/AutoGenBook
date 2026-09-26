@@ -1,3 +1,5 @@
+import { Lock } from 'lucide-react';
+
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { Badge } from '@/components/ui/badge';
 import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
@@ -16,6 +18,8 @@ interface EditorStatusBarProps {
   equationCount: number;
   status: SaveStatus;
   reviewerScore?: number | null;
+  /** Issue #113: the section is content-locked (kept as-is by full runs). Editing stays enabled. */
+  contentLocked?: boolean;
   className?: string;
 }
 
@@ -26,6 +30,7 @@ export function EditorStatusBar({
   equationCount,
   status,
   reviewerScore,
+  contentLocked = false,
   className,
 }: EditorStatusBarProps) {
   const words = isDirty ? draftWords : serverWords;
@@ -46,6 +51,19 @@ export function EditorStatusBar({
             <span className="text-muted-foreground/50">·</span>
             <Badge variant="secondary" className="font-mono">
               Review {reviewerScore.toFixed(1)}
+            </Badge>
+          </>
+        ) : null}
+        {contentLocked ? (
+          <>
+            <span className="text-muted-foreground/50">·</span>
+            <Badge
+              variant="outline"
+              className="gap-1 font-mono"
+              title="Content locked — the next full run keeps this section as-is; what you edit here is what it sees."
+            >
+              <Lock className="size-3" aria-hidden="true" />
+              Locked
             </Badge>
           </>
         ) : null}

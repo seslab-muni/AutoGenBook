@@ -16,6 +16,24 @@ Playwright e2e/a11y suite).
 | `/p/$projectId` | `routes/p.$projectId.index.tsx` | The studio: outline pane (left), editor pane (center), copilot/citations/review tabs (right). Dialogs for sources, export, settings, and starting a run are mounted here, each gated by `useUiStore`'s `activeModal`. |
 | `/p/$projectId/runs/$runId` | `routes/p.$projectId.runs.$runId.tsx` → `features/runs` | Run detail: live status, event log, artifacts, cost summary. Header actions include Cancel (while active), Regenerate again (for a `regenerate_section` run), and Resume (issue #124 — only when `run.retryable`; the only place this action appears). |
 
+**Content locks (issue #113).** In the studio's outline pane a drafted leaf
+section can be *content-locked* from its row's hover action or context menu
+(“Lock content — keep as-is on the next run”), from the properties sheet's
+“Lock content” switch, or unlocked from the Copilot panel's inline hint. A
+locked row shows a persistent lock badge, the pane's status bar counts
+`N locked`, and an “Unlock all” toolbar action (with a confirm) appears once
+anything is locked. The start-run dialog shows “N of M sections are locked.
+They will be kept as-is and used as context for the rest.” with an “Unlock all
+and regenerate everything” shortcut; the Copilot panel disables regeneration
+for a locked node and offers to unlock it; the editor's status bar shows a
+`Locked` badge but stays editable — what you edit is what the next run keeps
+and hands to later sections as context. The rule for *when* a node may be
+locked (leaf only, non-blank content) lives in
+`src/features/outline/content-lock.ts`, mirroring the API's 409/422 checks;
+the API contract is in `docs/WEB_API_REFERENCE.md` (`contentLocked`,
+`POST .../outline/unlock-all`). This is distinct from `structureLocked`, which
+only controls whether the CLI may split a node.
+
 `routes/__root.tsx` mounts the app shell once (theme toggle, toaster, the
 `NewProjectDialog` — reachable from both the hub and the studio header) and
 owns the top-level `notFoundComponent`/`errorComponent` (the latter reports

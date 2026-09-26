@@ -121,8 +121,17 @@ class StructureBuilder:
 
     @staticmethod
     def build(
-        project: Project, outline_tree: list[OutlineTree], *, lock_nodes: bool
+        project: Project,
+        outline_tree: list[OutlineTree],
+        *,
+        lock_nodes: bool,
+        include_locked_content: bool = False,
     ) -> dict[str, Any]:
+        """`include_locked_content` (issue #113) makes a content-locked leaf
+        emit `content_locked`/`content_file` pointing at the file
+        `locked_section_files` names, for a run whose work dir actually
+        holds those files. `GET /projects/{id}/spec?format=json` keeps the
+        default - a downloaded spec has no content files to point at."""
         return {
             "title": project.title.strip(),
             "summary": _project_summary(project),
@@ -135,14 +144,18 @@ class StructureBuilder:
             "max_depth": project.max_outline_levels,
             "max_output_pages": 1.5,
             "childs": [
-                StructureBuilder._build_node(tree, lock_nodes) for tree in outline_tree
+                StructureBuilder._build_node(tree, lock_nodes, include_locked_content)
+                for tree in outline_tree
             ],
         }
 
     @staticmethod
-    def _build_node(tree: OutlineTree, lock_nodes: bool) -> dict[str, Any]:
+    def _build_node(
+        tree: OutlineTree, lock_nodes: bool, include_locked_content: bool = False
+    ) -> dict[str, Any]:
         child_dicts = [
-            StructureBuilder._build_node(child, lock_nodes) for child in tree.children
+            StructureBuilder._build_node(child, lock_nodes, include_locked_content)
+            for child in tree.children
         ]
         out: dict[str, Any] = {
             "title": tree.node.title.strip(),
@@ -154,8 +167,50 @@ class StructureBuilder:
             out["childs"] = child_dicts
         if lock_nodes:
             out["structure_locked"] = True
+        if include_locked_content and not child_dicts and _has_locked_content(tree.node):
+            # The CLI keeps this leaf byte-for-byte (`book_builder.py:
+            # generate_contents`). `content_locked` implies
+            # `structure_locked` CLI-side too, but say so explicitly so the
+            # written JSON is self-describing. Keyed by the node's UUID, not
+            # its positional `cli_key` - no key agreement between API and
+            # CLI is needed anywhere for this.
+            out["content_locked"] = True
+            out["structure_locked"] = True
+            out["content_file"] = locked_section_path(tree.node)
         out.update(kb_scope_fields(tree.node))
         return out
+
+
+# Where `GenerationService._write_work_dir_sync` puts a content-locked leaf's
+# text inside the run's `out/` dir; `content_file` in `book_structure.json`
+# is relative to `out_dir`, exactly like a relative `-j` (issue #113).
+LOCKED_SECTIONS_DIRNAME = "locked_sections"
+
+
+def _has_locked_content(node: OutlineNode) -> bool:
+    return bool(node.content_locked) and bool((node.content_markdown or "").strip())
+
+
+def locked_section_path(node: OutlineNode) -> str:
+    return f"{LOCKED_SECTIONS_DIRNAME}/{node.id}.md"
+
+
+def locked_section_files(outline_tree: list[OutlineTree]) -> dict[str, str]:
+    """`{relative path under out_dir: content_markdown}` for every
+    content-locked leaf of `outline_tree` - the files
+    `StructureBuilder.build(..., include_locked_content=True)`'s
+    `content_file` entries point at (issue #113)."""
+    files: dict[str, str] = {}
+
+    def walk(trees: list[OutlineTree]) -> None:
+        for tree in trees:
+            if tree.children:
+                walk(tree.children)
+            elif _has_locked_content(tree.node):
+                files[locked_section_path(tree.node)] = tree.node.content_markdown
+
+    walk(outline_tree)
+    return files
 
 
 def kb_scope_fields(node: OutlineNode) -> dict[str, Any]:
@@ -169,6 +224,51 @@ def kb_scope_fields(node: OutlineNode) -> dict[str, Any]:
     if node.source_scope == SourceScope.SELECTED:
         return {"kb_scope": "selected", "kb_sources": [str(sid) for sid in node.source_ids]}
     return {}
+
+
+def sync_content_locks_into_graph(
+    graph_data: dict[str, Any], nodes: list[OutlineNode]
+) -> tuple[bool, dict[str, str], list[str]]:
+    """Overwrite `content_locked`/`content_file` on a CLI `structure_graph.
+    json` payload's nodes from the outline's *current* locks, matched by
+    `cli_key` (issue #113) - the lock-side twin of `sync_kb_scopes_into_graph`
+    for runs that reuse a base run's graph (`regenerate`, retry). Without it
+    a node unlocked (or locked, or edited while locked) after the base run
+    would keep the base run's stale flag and file, and `book_builder.py`'s
+    lock check runs *ahead* of its `--resume` skip, so an unlocked node's
+    regenerate would silently re-copy the old text.
+
+    Returns `(changed, files, stale)`: `files` maps out_dir-relative paths
+    to the locked text that must be on disk for the flags just set (always
+    rewritten, so an edit made while locked is what the run sees), `stale`
+    lists files a now-unlocked node used to point at, to delete."""
+    graph_nodes = graph_data.get("nodes") or {}
+    parents = {node.parent_id for node in nodes if node.parent_id is not None}
+    changed = False
+    files: dict[str, str] = {}
+    stale: list[str] = []
+    for node in nodes:
+        if not node.cli_key:
+            continue
+        cli_node = graph_nodes.get(node.cli_key)
+        if not isinstance(cli_node, dict):
+            continue
+        previous_file = str(cli_node.get("content_file") or "")
+        if _has_locked_content(node) and node.id not in parents:
+            path = locked_section_path(node)
+            files[path] = node.content_markdown
+            if cli_node.get("content_locked") is not True or previous_file != path:
+                cli_node["content_locked"] = True
+                cli_node["structure_locked"] = True
+                cli_node["content_file"] = path
+                changed = True
+        elif "content_locked" in cli_node or "content_file" in cli_node:
+            cli_node.pop("content_locked", None)
+            cli_node.pop("content_file", None)
+            if previous_file:
+                stale.append(previous_file)
+            changed = True
+    return changed, files, stale
 
 
 def sync_kb_scopes_into_graph(graph_data: dict[str, Any], nodes: list[OutlineNode]) -> bool:

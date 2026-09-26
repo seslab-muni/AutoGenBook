@@ -16,7 +16,11 @@ import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
 import { runs as runQueries } from '@/api/queries/runs';
-import { outline, useRegenerateOutlineNodeMutation } from '@/api/queries/outline';
+import {
+  outline,
+  useRegenerateOutlineNodeMutation,
+  useUpdateOutlineNodeMutation,
+} from '@/api/queries/outline';
 import type { Project, Run } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -104,6 +108,8 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
   }
 
   const regenerateMutation = useRegenerateOutlineNodeMutation(projectId, node?.id ?? '');
+  // Only ever used for the "Unlock content" affordance below (issue #113).
+  const unlockMutation = useUpdateOutlineNodeMutation(projectId, node?.id ?? '');
 
   // A queued regenerate targeting this exact node (issue #134: several runs can be queued at
   // once, so this is no longer necessarily the same run as `runningRun`).
@@ -134,13 +140,20 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
   // leaves only); the API rejects a regenerate targeting a non-leaf with a 409 (issue #77), so
   // gate it here too rather than letting the user submit and hit that as a generic error.
   const nodeIsLeaf = node ? isLeaf(node.id, flat) : false;
-  const canRegenerate = Boolean(node) && nodeIsLeaf && hasCliKey && hasResumableBaseRun && !isBusy;
+  // Issue #113: the API 409s a regenerate of a content-locked node (regenerating deletes the
+  // very section file the lock exists to keep), so gate it here with an "unlock" affordance
+  // instead of surfacing that as a generic conflict.
+  const isContentLocked = Boolean(node?.contentLocked);
+  const canRegenerate =
+    Boolean(node) && nodeIsLeaf && !isContentLocked && hasCliKey && hasResumableBaseRun && !isBusy;
 
   let disabledReason: string | null = null;
   if (node) {
     if (!nodeIsLeaf) {
       disabledReason =
         'This is a container node — only leaf sections can be generated. Select a leaf section below it.';
+    } else if (isContentLocked) {
+      disabledReason = "This section's content is locked — unlock it to regenerate it.";
     } else if (!hasCliKey) {
       disabledReason = 'This section has no CLI key yet — it appears after the next full run.';
     } else if (!hasResumableBaseRun) {
@@ -287,6 +300,40 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
             </Button>
           </div>
         </div>
+
+        {node.contentLocked ? (
+          <div
+            className="space-y-2 rounded-xl border border-warning/40 bg-warning/10 p-3 text-xs"
+            data-testid="copilot-content-locked"
+          >
+            <p className="font-semibold text-foreground">Content locked</p>
+            <p className="text-muted-foreground">
+              Unlock this section to regenerate it. Locked sections are kept as-is on full runs and
+              handed to the sections after them as context.
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={unlockMutation.isPending}
+              onClick={() =>
+                unlockMutation.mutate(
+                  { contentLocked: false },
+                  {
+                    onError: (error) => {
+                      const problem = error instanceof ApiError ? error.problem : undefined;
+                      toast.error(
+                        problem?.detail ?? problem?.title ?? 'Could not unlock this section',
+                      );
+                    },
+                  },
+                )
+              }
+            >
+              {unlockMutation.isPending ? 'Unlocking…' : 'Unlock content'}
+            </Button>
+          </div>
+        ) : null}
 
         {conflict ? (
           <div className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-xs">

@@ -34,6 +34,7 @@ function node(overrides: Partial<OutlineNode> & Pick<OutlineNode, 'id'>): Outlin
     reviewerScore: null,
     reviewerNotes: null,
     structureLocked: true,
+    contentLocked: false,
     sourceScope: 'inherit',
     sourceIds: [],
     createdAt: '2026-01-01T00:00:00Z',

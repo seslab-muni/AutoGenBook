@@ -20,6 +20,10 @@ class BookStructureNode(BaseModel):
     needsSubdivision: bool
     childs: list["BookStructureNode"] = Field(default_factory=list)
     structure_locked: bool | None = None
+    # Issue #113: only emitted into a run's own work dir (never into this
+    # endpoint's download, which has no content files to point at).
+    content_locked: bool | None = None
+    content_file: str | None = None
     # Issue #138: only present when the node restricts KB retrieval.
     kb_scope: Literal["all", "selected"] | None = None
     kb_sources: list[str] | None = None

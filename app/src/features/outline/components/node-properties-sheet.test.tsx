@@ -10,6 +10,10 @@ import { db } from '@/mocks/db';
 import { server } from '@/mocks/server';
 import { renderWithProviders } from '@/test/component-test-utils';
 
+import {
+  CONTENT_LOCK_LEAF_ONLY_MESSAGE,
+  CONTENT_LOCK_NEEDS_CONTENT_MESSAGE,
+} from '../content-lock';
 import { NodePropertiesSheet } from './node-properties-sheet';
 
 const PROJECT_ID = 'book-consensus-quantum-2026';
@@ -117,5 +121,37 @@ describe('NodePropertiesSheet sources section (issue #138)', () => {
     expect(
       await screen.findByRole('radio', { name: 'Inherit (all sources)', checked: true }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('NodePropertiesSheet content lock (issue #113)', () => {
+  it('offers the switch on a drafted leaf and PATCHes contentLocked when toggled', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness nodeId="sec-1-1" />);
+
+    const toggle = await screen.findByRole('switch', { name: 'Lock content' });
+    expect(toggle).toBeEnabled();
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    await user.click(toggle);
+    await waitFor(() => expect(patchBodies).toContainEqual({ contentLocked: true }));
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Lock content' })).toHaveAttribute(
+        'aria-checked',
+        'true',
+      ),
+    );
+    expect(screen.getByText(/keep this section byte-for-byte/i)).toBeInTheDocument();
+  });
+
+  it('disables the switch and explains why on a blank leaf and on a node with children', async () => {
+    const { unmount } = renderWithProviders(<Harness nodeId="sec-3-1" />);
+    expect(await screen.findByRole('switch', { name: 'Lock content' })).toBeDisabled();
+    expect(screen.getByText(CONTENT_LOCK_NEEDS_CONTENT_MESSAGE)).toBeInTheDocument();
+    unmount();
+
+    renderWithProviders(<Harness nodeId="ch-1" />);
+    expect(await screen.findByRole('switch', { name: 'Lock content' })).toBeDisabled();
+    expect(screen.getByText(CONTENT_LOCK_LEAF_ONLY_MESSAGE)).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import {
   ChevronsUpDown,
   ListTree,
   Lock,
+  LockOpen,
   Plus,
   Search,
   Sparkles,
@@ -17,8 +18,10 @@ import {
   outline,
   useCreateOutlineNodeMutation,
   useDeleteOutlineNodeMutation,
+  useUnlockAllOutlineMutation,
 } from '@/api/queries/outline';
 import type { OutlineNode } from '@/api/types';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
@@ -33,6 +36,7 @@ import {
   STRUCTURE_LOCKED_MESSAGE,
   type OutlineRowActions,
 } from '@/features/outline/components/outline-row';
+import { lockedNodes } from '@/features/outline/content-lock';
 import {
   ancestorIds,
   buildTree,
@@ -85,8 +89,11 @@ export function OutlinePane({
   const [deletingNode, setDeletingNode] = useState<OutlineNode | null>(null);
   const [propertiesNodeId, setPropertiesNodeId] = useState<string | null>(null);
   const [draftEditorOpen, setDraftEditorOpen] = useState(false);
+  const [unlockAllOpen, setUnlockAllOpen] = useState(false);
   const [filterInput, setFilterInput] = useState('');
   const [filterQuery, setFilterQuery] = useState('');
+  const lockedCount = useMemo(() => lockedNodes(flat).length, [flat]);
+  const unlockAllMutation = useUnlockAllOutlineMutation(projectId);
 
   useEffect(() => {
     const timer = setTimeout(() => setFilterQuery(filterInput), FILTER_DEBOUNCE_MS);
@@ -261,6 +268,24 @@ export function OutlinePane({
       <PaneToolbar>
         <span className="text-xs font-semibold text-foreground">Outline</span>
         <div className="flex items-center gap-1">
+          {lockedCount > 0 ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Unlock all"
+                  onClick={() => setUnlockAllOpen(true)}
+                >
+                  <LockOpen className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Unlock all — {lockedCount} locked section{lockedCount === 1 ? '' : 's'}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
           {tree.length > 0 ? (
             <>
               <Tooltip>
@@ -405,10 +430,41 @@ export function OutlinePane({
       </div>
 
       <PaneStatusBar>
-        {isFiltering
-          ? `${matchCount} of ${flat.length} node${flat.length === 1 ? '' : 's'}`
-          : `${flat.length} node${flat.length === 1 ? '' : 's'}`}
+        <span>
+          {isFiltering
+            ? `${matchCount} of ${flat.length} node${flat.length === 1 ? '' : 's'}`
+            : `${flat.length} node${flat.length === 1 ? '' : 's'}`}
+        </span>
+        {lockedCount > 0 ? (
+          <span
+            className="flex items-center gap-1"
+            title="Content-locked sections are kept as-is on the next run."
+            data-testid="outline-locked-count"
+          >
+            <span aria-hidden="true">·</span>
+            <Lock className="size-3" aria-hidden="true" />
+            {lockedCount} locked
+          </span>
+        ) : null}
       </PaneStatusBar>
+
+      <ConfirmDialog
+        open={unlockAllOpen}
+        onOpenChange={setUnlockAllOpen}
+        title={`Unlock all ${lockedCount} locked section${lockedCount === 1 ? '' : 's'}?`}
+        description="Their text stays exactly as it is now, but the next full run will regenerate every section instead of keeping these as-is."
+        confirmLabel="Unlock all"
+        tone="warning"
+        onConfirm={() =>
+          unlockAllMutation.mutate(undefined, {
+            onSuccess: () => toast.success('All sections unlocked'),
+            onError: (error) => {
+              const problem = error instanceof ApiError ? error.problem : undefined;
+              toast.error(problem?.detail ?? problem?.title ?? 'Could not unlock the sections');
+            },
+          })
+        }
+      />
 
       <DeleteNodeDialog
         node={deletingNode}

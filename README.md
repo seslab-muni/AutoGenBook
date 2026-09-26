@@ -199,6 +199,8 @@ Book mode now generates Markdown sections by default and only exports TeX/PDF wh
 
 Per-chapter KB sources: any node in a `--use-json` `book_structure.json` may set `"kb_scope": "selected"` with `"kb_sources": [...]` (files or directories relative to `--kb-dir`) to restrict that node's sections to those sources, or `"kb_scope": "all"` to lift a restriction set higher up. Nodes without `kb_scope` inherit the nearest ancestor's scope (all sources at the top level); subdivided sections inherit their parent's. A scoped section with no matching passages is drafted without KB context and logs a `[WARN]` line. Web RAG is never restricted. (`book_builder.py:resolve_kb_sources`, `rag_kb.py:make_source_filter`)
 
+Content-locked sections: any leaf in a `--use-json` `book_structure.json` may set `"content_locked": true` with `"content_file": "<path>"` (relative paths resolve against `--out-dir`, like `-j`). The run copies that file byte-for-byte to `sections/<key>.md` instead of writing the section (no writer/reviewer/reviser/length-enforcement calls), but still folds its text into `context_memory.json` and hands it to the next section as `previous_sections`, so later sections know what it already covers. `content_locked` implies `structure_locked` (the leaf is never subdivided). Locks are fail-open: a missing, unreadable or blank `content_file` logs a `[WARN]` line and the section is generated normally. The `[GEN] i/N Locked section '...' (kept, used as context)` log line marks each kept section, and kept sections are excluded from the ETA average. (`book_builder.py:_load_locked_section`, `book_builder.py:generate_contents`)
+
 Example: book with KB rebuild, web RAG, and resume:
 
 ```bash
