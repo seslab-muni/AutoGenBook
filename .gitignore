@@ -22,3 +22,6 @@ api/coverage.xml
 semgrep-results.json
 
 info.txt
+
+# Root-level output of `python -m autogenbook.smoke_test`
+out_smoke/
