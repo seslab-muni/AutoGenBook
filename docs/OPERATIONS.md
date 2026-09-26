@@ -21,7 +21,7 @@ The run context writes artifacts to `--out-dir` and stores metadata in `run_meta
 ## Run in production
 
 - Ensure `OPENROUTER_API_KEY` is set for OpenRouter or set `AUTOGENBOOK_LLM_BASE_URL` for local endpoints. (`openrouter_llm.py:OpenRouterLLM.__init__`)
-- Install LuaLaTeX if you need PDF output. (`book_builder.py:compile_pdf`)
+- Install LuaLaTeX if you need PDF output. (`book_builder.py:compile_pdf`) The generated preamble needs more than a minimal TeX Live: on Debian/Ubuntu install `texlive-luatex texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-science texlive-lang-czechslovak` (`lastpage`, `xurl`, `physics`, `unicode-math`, Czech babel, ...) - the same set the root `Dockerfile` installs for the `api`/`worker` images. A `File \`lastpage.sty' not found` compile error means one of these bundles is missing.
 - Use `--audit-mode strict` for CI-style gating when audits are enabled. (`autogenbook/audit/latex_auditor.py:audit_latex`, `autogenbook/pipelines/paper_pipeline.py:run_paper`)
 
 The bare CLI itself has no container/orchestration logic (`main.py`, `autogenbook/orchestrator.py`); deployment of the web UI/API/worker stack is codified separately as a Docker Compose stack — see "Docker stack" below.

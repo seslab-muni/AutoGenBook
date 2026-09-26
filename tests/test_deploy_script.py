@@ -28,6 +28,8 @@ assert _spec.loader is not None
 sys.modules["deploy_script"] = deploy
 _spec.loader.exec_module(deploy)
 
+TIMEOUTS = {"api": "180s", "worker": "900s", "web": "180s"}
+
 
 class ClassifyPathTests(unittest.TestCase):
     def test_app_prefix_is_web(self):
@@ -279,7 +281,7 @@ class ApplyPhaseRollbackTests(unittest.TestCase):
                 # Simulate a successful `kubectl apply` having no other side effect we need here.
 
             with patch.object(deploy, "_apply_and_wait", side_effect=fake_apply_and_wait):
-                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", "180s", no_rollback=False)
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
 
             self.assertEqual(exit_code, 1)
             # api's manifest had its tag rewritten to head_short by apply_phase, then must have
@@ -312,7 +314,7 @@ class ApplyPhaseRollbackTests(unittest.TestCase):
             with patch.object(deploy, "set_image_tag", side_effect=fake_set_image_tag), patch.object(
                 deploy, "_apply_and_wait", return_value=None
             ):
-                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", "180s", no_rollback=False)
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
 
             self.assertEqual(exit_code, 1)
             self.assertEqual(manifests["api"].read_bytes(), original_bytes["api"])
@@ -332,7 +334,7 @@ class ApplyPhaseRollbackTests(unittest.TestCase):
                     raise subprocess.CalledProcessError(1, ["kubectl", "rollout", "status"])
 
             with patch.object(deploy, "_apply_and_wait", side_effect=fake_apply_and_wait):
-                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", "180s", no_rollback=True)
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=True)
 
             self.assertEqual(exit_code, 1)
             # api's manifest was rewritten to the new tag and NOT rolled back.
@@ -347,7 +349,7 @@ class ApplyPhaseRollbackTests(unittest.TestCase):
             plan = _fake_plan(tmp, api_manifest=manifests["api"], worker_manifest=manifests["worker"], web_manifest=manifests["web"])
 
             with patch.object(deploy, "_apply_and_wait", return_value=None):
-                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", "180s", no_rollback=False)
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
 
             self.assertEqual(exit_code, 0)
             for name in ("api", "worker", "web"):
@@ -392,10 +394,293 @@ class ApplyPhaseRollbackTests(unittest.TestCase):
             with patch.object(deploy, "_manifest_at_ref", return_value=historical_content), patch.object(
                 deploy, "_apply_and_wait", side_effect=fake_apply_and_wait
             ):
-                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", "180s", no_rollback=False)
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
 
             self.assertEqual(exit_code, 1)
-            self.assertEqual(api_manifest.read_bytes(), historical_content)
+            # Historical non-tag content restored, image line pinned to the live tag ("sometag").
+            self.assertEqual(
+                api_manifest.read_bytes(),
+                b"image: cerit.io/conerzyo/autogenbook:sometag\n# this is what was actually last deployed\n",
+            )
+
+    def test_rollback_pins_image_to_live_tag_not_the_committed_one(self):
+        # Regression test for the incident that motivated the hardening: the committed manifest
+        # at the live tag's commit still names the tag of the deploy *before* it (the tag only
+        # lands in the follow-up "Deploy <tag>" commit), so restoring its bytes verbatim rolled
+        # the cluster back two deploys, onto an image two Alembic migrations behind the database.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            manifests = self._make_manifests(tmp)
+            plan = _fake_plan(tmp, api_manifest=manifests["api"], worker_manifest=manifests["worker"], web_manifest=manifests["web"])
+            committed_at_live_tag = b"image: cerit.io/conerzyo/autogenbook:twodeploysago\n# committed-comment\n"
+
+            def fake_apply_and_wait(name, manifest, namespace, timeout):
+                if name == "worker":
+                    raise deploy.RolloutBroken("simulated crash loop")
+
+            with patch.object(deploy, "_manifest_at_ref", return_value=committed_at_live_tag), patch.object(
+                deploy, "_apply_and_wait", side_effect=fake_apply_and_wait
+            ):
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(manifests["api"].read_bytes(), b"image: cerit.io/conerzyo/autogenbook:oldtag\n# committed-comment\n")
+            self.assertNotIn(b"twodeploysago", manifests["api"].read_bytes())
+
+    def test_rollback_uses_the_rolled_back_deployments_own_timeout(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            manifests = self._make_manifests(tmp)
+            plan = _fake_plan(tmp, api_manifest=manifests["api"], worker_manifest=manifests["worker"], web_manifest=manifests["web"])
+            seen: list[tuple[str, str]] = []
+
+            def fake_apply_and_wait(name, manifest, namespace, timeout):
+                seen.append((name, timeout))
+                if name == "web" and len(seen) == 3:
+                    raise deploy.RolloutBroken("simulated")
+
+            with patch.object(deploy, "_apply_and_wait", side_effect=fake_apply_and_wait):
+                deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
+
+            self.assertEqual(
+                seen,
+                [("api", "180s"), ("worker", "900s"), ("web", "180s"), ("api", "180s"), ("worker", "900s"), ("web", "180s")],
+            )
+
+
+class MigrationLockTests(unittest.TestCase):
+    """Once a deploy that changes Alembic migrations has applied api, the database is at HEAD's
+    revision and an older core image can only crash-loop on `alembic upgrade head` - so api and
+    worker must stay on the new image while anything else touched still rolls back."""
+
+    def _manifests(self, tmp: Path):
+        manifests = {}
+        for name, repo in (("api", "autogenbook"), ("worker", "autogenbook"), ("web", "autogenbook-web")):
+            path = tmp / f"{name}.yaml"
+            path.write_text(f"image: cerit.io/conerzyo/{repo}:oldtag\n")
+            manifests[name] = path
+        return manifests
+
+    def test_core_stays_on_new_image_after_api_applied(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            manifests = self._manifests(tmp)
+            plan = _fake_plan(tmp, api_manifest=manifests["api"], worker_manifest=manifests["worker"], web_manifest=manifests["web"])
+            plan.migrations_changed = ["api/infrastructure/db/alembic/versions/0019_outline_source_scope.py"]
+            rolled_back: list[str] = []
+
+            def fake_apply_and_wait(name, manifest, namespace, timeout):
+                if name == "web" and b"deadbee" in manifest.read_bytes():
+                    raise deploy.RolloutBroken("simulated: web image unpullable")
+                if b"oldtag" in manifest.read_bytes():
+                    rolled_back.append(name)
+
+            with patch.object(deploy, "_apply_and_wait", side_effect=fake_apply_and_wait):
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn(b"deadbee", manifests["api"].read_bytes())
+            self.assertIn(b"deadbee", manifests["worker"].read_bytes())
+            self.assertIn(b"oldtag", manifests["web"].read_bytes())
+            self.assertEqual(rolled_back, ["web"])
+
+    def test_core_rolls_back_when_api_was_never_applied(self):
+        # The lock is about the migration having *run*, which needs api to have been applied at
+        # all - a failure before that (e.g. the manifest's image line missing) must still restore
+        # api's manifest like any other failure.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            manifests = self._manifests(tmp)
+            plan = _fake_plan(tmp, api_manifest=manifests["api"], worker_manifest=manifests["worker"], web_manifest=manifests["web"])
+            plan.migrations_changed = ["api/infrastructure/db/alembic/versions/0019_outline_source_scope.py"]
+
+            with patch.object(deploy, "set_image_tag", side_effect=deploy.DeployError("simulated")), patch.object(
+                deploy, "_apply_and_wait", return_value=None
+            ):
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn(b"oldtag", manifests["api"].read_bytes())
+
+    def test_no_migrations_means_core_rolls_back_as_before(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            manifests = self._manifests(tmp)
+            plan = _fake_plan(tmp, api_manifest=manifests["api"], worker_manifest=manifests["worker"], web_manifest=manifests["web"])
+
+            def fake_apply_and_wait(name, manifest, namespace, timeout):
+                if name == "worker" and b"deadbee" in manifest.read_bytes():
+                    raise deploy.RolloutBroken("simulated")
+
+            with patch.object(deploy, "_apply_and_wait", side_effect=fake_apply_and_wait):
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn(b"oldtag", manifests["api"].read_bytes())
+            self.assertIn(b"oldtag", manifests["worker"].read_bytes())
+
+
+class SlowRolloutTests(unittest.TestCase):
+    """A timeout with healthy pods is not a failure: nothing is rolled back and the operator is
+    told to wait and re-run. (The worker's five one-at-a-time replicas were what tripped the old
+    180s timeout and triggered the rollback in the real incident.)"""
+
+    def test_slow_rollout_is_left_in_place(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            manifests = {}
+            for name, repo in (("api", "autogenbook"), ("worker", "autogenbook"), ("web", "autogenbook-web")):
+                manifests[name] = tmp / f"{name}.yaml"
+                manifests[name].write_text(f"image: cerit.io/conerzyo/{repo}:oldtag\n")
+            plan = _fake_plan(tmp, api_manifest=manifests["api"], worker_manifest=manifests["worker"], web_manifest=manifests["web"])
+            calls: list[str] = []
+
+            def fake_apply_and_wait(name, manifest, namespace, timeout):
+                calls.append(name)
+                if name == "worker":
+                    raise deploy.RolloutSlow("simulated: healthy but slow")
+
+            with patch.object(deploy, "_apply_and_wait", side_effect=fake_apply_and_wait):
+                exit_code = deploy.apply_phase(plan, "cerit.io/conerzyo", "autogenbook", TIMEOUTS, no_rollback=False)
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(calls, ["api", "worker"])  # no rollback applies, web never reached
+            self.assertIn(b"deadbee", manifests["api"].read_bytes())
+            self.assertIn(b"deadbee", manifests["worker"].read_bytes())
+            self.assertIn(b"oldtag", manifests["web"].read_bytes())
+
+
+class ParseDurationTests(unittest.TestCase):
+    def test_kubectl_style_durations(self):
+        self.assertEqual(deploy.parse_duration("180s"), 180)
+        self.assertEqual(deploy.parse_duration("15m"), 900)
+        self.assertEqual(deploy.parse_duration("1h30m"), 5400)
+        self.assertEqual(deploy.parse_duration("1h2m3s"), 3723)
+        self.assertEqual(deploy.parse_duration("900"), 900)
+
+    def test_invalid_durations_raise_deploy_error(self):
+        for bad in ("", "abc", "5x", "1.5m", "-5s"):
+            with self.subTest(bad=bad), self.assertRaises(deploy.DeployError):
+                deploy.parse_duration(bad)
+
+
+class BrokenPodsTests(unittest.TestCase):
+    def _pod(self, name, *, waiting=None, restarts=0, phase="Running"):
+        container = {"name": "c", "restartCount": restarts, "state": {}}
+        if waiting:
+            container["state"] = {"waiting": {"reason": waiting, "message": "boom"}}
+        return {"metadata": {"name": name}, "status": {"phase": phase, "containerStatuses": [container]}}
+
+    def test_healthy_or_still_starting_pods_are_not_broken(self):
+        pods = [
+            self._pod("a"),
+            self._pod("b", waiting="ContainerCreating"),
+            self._pod("c", waiting="PodInitializing"),
+            self._pod("d", restarts=1),  # one restart tolerated (transient DB connection on boot)
+        ]
+        self.assertEqual(deploy._broken_pods(pods), [])
+
+    def test_crash_loop_image_pull_and_repeated_restarts_are_broken(self):
+        reasons = deploy._broken_pods(
+            [
+                self._pod("a", waiting="CrashLoopBackOff"),
+                self._pod("b", waiting="ImagePullBackOff"),
+                self._pod("c", restarts=2),
+                self._pod("d", phase="Failed"),
+            ]
+        )
+        self.assertEqual(len(reasons), 4)
+        self.assertTrue(any("CrashLoopBackOff" in r for r in reasons))
+        self.assertTrue(any("ImagePullBackOff" in r for r in reasons))
+        self.assertTrue(any("restarted 2 times" in r for r in reasons))
+        self.assertTrue(any("phase Failed" in r for r in reasons))
+
+
+class WaitForRolloutTests(unittest.TestCase):
+    """_wait_for_rollout with kubectl and the clock faked: it must return on success, raise
+    RolloutBroken as soon as a poll sees failing pods, raise RolloutSlow only once the whole
+    timeout has elapsed with healthy pods, and re-raise other kubectl errors untouched."""
+
+    def _fake_clock(self, step=30):
+        state = {"now": 0.0}
+
+        def monotonic():
+            state["now"] += step
+            return state["now"]
+
+        return monotonic
+
+    def _run_result(self, returncode, stdout):
+        return subprocess.CompletedProcess(args=["kubectl"], returncode=returncode, stdout=stdout, stderr="")
+
+    def test_returns_on_success_after_a_timed_out_poll(self):
+        results = iter(
+            [
+                self._run_result(1, "Waiting...\nerror: timed out waiting for the condition\n"),
+                self._run_result(0, 'deployment "api" successfully rolled out\n'),
+            ]
+        )
+        with patch.object(deploy.subprocess, "run", side_effect=lambda *a, **k: next(results)), patch.object(
+            deploy, "_deployment_new_pods", return_value=[]
+        ), patch.object(deploy.time, "monotonic", side_effect=self._fake_clock(1)):
+            deploy._wait_for_rollout("api", "ns", "180s")  # no exception
+
+    def test_broken_pods_fail_fast(self):
+        timed_out = self._run_result(1, "error: timed out waiting for the condition\n")
+        crash = {"metadata": {"name": "api-x"}, "status": {"containerStatuses": [{"name": "api", "restartCount": 3, "state": {"waiting": {"reason": "CrashLoopBackOff"}}}]}}
+        with patch.object(deploy.subprocess, "run", return_value=timed_out) as run, patch.object(
+            deploy, "_deployment_new_pods", return_value=[crash]
+        ), patch.object(deploy.time, "monotonic", side_effect=self._fake_clock(1)):
+            with self.assertRaises(deploy.RolloutBroken) as ctx:
+                deploy._wait_for_rollout("api", "ns", "900s")
+        self.assertIn("CrashLoopBackOff", str(ctx.exception))
+        self.assertEqual(run.call_count, 1)
+
+    def test_healthy_timeout_is_slow_not_broken(self):
+        timed_out = self._run_result(1, "error: timed out waiting for the condition\n")
+        with patch.object(deploy.subprocess, "run", return_value=timed_out) as run, patch.object(
+            deploy, "_deployment_new_pods", return_value=[]
+        ), patch.object(deploy.time, "monotonic", side_effect=self._fake_clock(30)):
+            with self.assertRaises(deploy.RolloutSlow):
+                deploy._wait_for_rollout("worker", "ns", "90s")
+        self.assertGreaterEqual(run.call_count, 2)
+        # Every poll asked kubectl for at most the poll interval, never the whole timeout.
+        for call in run.call_args_list:
+            self.assertIn("--timeout=30s", call.args[0])
+
+    def test_other_kubectl_errors_propagate(self):
+        err = self._run_result(1, 'Error from server (NotFound): deployments.apps "api" not found\n')
+        with patch.object(deploy.subprocess, "run", return_value=err), patch.object(
+            deploy.time, "monotonic", side_effect=self._fake_clock(1)
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                deploy._wait_for_rollout("api", "ns", "180s")
+
+
+class RolloutTimeoutsFromArgsTests(unittest.TestCase):
+    def test_defaults_give_worker_its_own_longer_timeout(self):
+        args = deploy.build_arg_parser().parse_args([])
+        self.assertEqual(
+            deploy.rollout_timeouts_from_args(args),
+            {"api": deploy.ROLLOUT_TIMEOUT_DEFAULT, "worker": deploy.WORKER_ROLLOUT_TIMEOUT_DEFAULT, "web": deploy.ROLLOUT_TIMEOUT_DEFAULT},
+        )
+
+    def test_invalid_duration_is_rejected_before_anything_runs(self):
+        args = deploy.build_arg_parser().parse_args(["--worker-rollout-timeout", "soon"])
+        with self.assertRaises(deploy.DeployError):
+            deploy.rollout_timeouts_from_args(args)
 
 
 if __name__ == "__main__":
