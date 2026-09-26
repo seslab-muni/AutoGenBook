@@ -16,6 +16,7 @@
 - Glossary: `GLOSSARY.md`
 
 Existing design notes:
+- Engine rewrite (new engine package, frozen API contract, phases): `ENGINE_REWRITE.md`
 - Proposal mode repo analysis: `proposal_mode_repo_analysis.md`
 - Proposal mode design: `proposal_mode_design.md`
 - Proposal mode changes: `proposal_mode_changes.md`
