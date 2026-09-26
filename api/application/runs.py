@@ -34,6 +34,7 @@ from api.application.book_spec import (
     sync_content_locks_into_graph,
 )
 from api.core.errors import Conflict, NotFound, ValidationFailed
+from api.application.run_errors import describe_cli_failure
 from api.core.settings import Settings, default_llm_model
 from api.domain.models import (
     ArtifactKind,
@@ -805,6 +806,7 @@ def build_done_event(run: Run, seq: int) -> RunEvent:
             "status": run.status.value,
             "exitCode": run.exit_code,
             "error": run.error,
+            "errorDetail": run.error_detail,
         },
     )
 
@@ -1549,6 +1551,7 @@ class GenerationService:
         current = await self._runs.get(run.id)
         cancel_requested = current.cancel_requested if current is not None else run.cancel_requested
 
+        error_detail: str | None = None
         if cancel_requested and exit_code != 0:
             status = RunStatus.cancelled
             error = "run was cancelled"
@@ -1565,11 +1568,24 @@ class GenerationService:
                 # real failure.
                 error = f"killed by API after {self._settings.cli_run_timeout_s:g}s timeout"
             else:
-                error = (run_meta or {}).get("error") or f"CLI exited with code {exit_code}"
+                # An LLM endpoint failure (a blocked/unknown model, bad key,
+                # rate limit, ...) is rewritten into "Generation with model X
+                # failed: ..." naming the model this run actually used; the
+                # CLI's original text moves to `error_detail`. Anything else
+                # keeps the CLI's own wording.
+                failure = describe_cli_failure(
+                    (run_meta or {}).get("error"),
+                    exit_code=exit_code,
+                    llm_model=run.options.llm_model
+                    or project.llm_model
+                    or default_llm_model(self._settings),
+                )
+                error, error_detail = failure.message, failure.detail
 
         run.status = status
         run.exit_code = exit_code
         run.error = error
+        run.error_detail = error_detail
         run.cancel_requested = cancel_requested
         run.finished_at = datetime.now(timezone.utc)
         run.total_tokens = total_tokens

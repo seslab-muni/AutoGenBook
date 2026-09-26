@@ -2652,6 +2652,11 @@ components:
           - type: string
           - type: 'null'
           title: Error
+        errorDetail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Errordetail
         totalTokens:
           anyOf:
           - type: integer

@@ -57,6 +57,7 @@ def run_to_domain(record: RunRecord, started_by_name: str | None = None) -> Run:
         work_dir=record.work_dir,
         exit_code=record.exit_code,
         error=record.error,
+        error_detail=record.error_detail,
         cancel_requested=record.cancel_requested,
         locked_by=record.locked_by,
         heartbeat_at=_as_aware_utc(record.heartbeat_at),
@@ -83,6 +84,7 @@ def _apply_domain_to_record(run: Run, record: RunRecord) -> None:
     record.work_dir = run.work_dir
     record.exit_code = run.exit_code
     record.error = run.error
+    record.error_detail = run.error_detail
     record.cancel_requested = run.cancel_requested
     record.locked_by = run.locked_by
     record.heartbeat_at = run.heartbeat_at
@@ -269,6 +271,7 @@ class SqlAlchemyRunRepository:
                 status=run.status,
                 exit_code=run.exit_code,
                 error=run.error,
+                error_detail=run.error_detail,
                 cancel_requested=run.cancel_requested,
                 finished_at=run.finished_at,
                 total_tokens=run.total_tokens,

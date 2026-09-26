@@ -162,6 +162,71 @@ describe('run detail page', () => {
     expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
   });
 
+  it('shows the original CLI error under the user-facing message when the API rewrote it', async () => {
+    const user = userEvent.setup();
+    const runId = 'run-failed-blocked-model';
+    const error =
+      'Generation with model "deepseek-v4-flash" failed: the LLM endpoint refused this model (HTTP 403: Model is blocked). Pick a different model in the project settings or the run dialog and retry.';
+    const errorDetail =
+      "Error code: 403 - {'error': {'message': 'litellm.PermissionDeniedError: Model is blocked', 'type': None, 'param': None, 'code': '403'}}";
+    db.runs.set(runId, {
+      id: runId,
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'failed',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: 1,
+      error,
+      errorDetail,
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: false,
+      retryable: false,
+      queuedAt: '2026-09-07T00:00:00Z',
+      startedAt: '2026-09-07T00:00:01Z',
+      finishedAt: '2026-09-07T00:00:02Z',
+    });
+
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
+    expect(await screen.findByText(error)).toBeInTheDocument();
+    // Collapsed by default: the raw exception is there for a bug report, not in the way.
+    const details = screen.getByText('Original error').closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    await user.click(screen.getByText('Original error'));
+    expect(details).toHaveAttribute('open');
+    expect(screen.getByText(errorDetail)).toBeInTheDocument();
+  });
+
+  it('a failed run whose error is the CLI\'s own text has no "Original error" section', async () => {
+    const runId = 'run-failed-plain';
+    db.runs.set(runId, {
+      id: runId,
+      projectId: PROJECT_ID,
+      kind: 'full',
+      status: 'failed',
+      options: DEFAULT_RUN_OPTIONS,
+      baseRunId: null,
+      targetNodeId: null,
+      exitCode: 1,
+      error: 'CLI exited with code 1',
+      errorDetail: null,
+      totalTokens: null,
+      totalCostUsd: null,
+      resumable: false,
+      retryable: false,
+      queuedAt: '2026-09-07T00:00:00Z',
+      startedAt: '2026-09-07T00:00:01Z',
+      finishedAt: '2026-09-07T00:00:02Z',
+    });
+
+    renderRouterApp(`/p/${PROJECT_ID}/runs/${runId}`);
+    expect(await screen.findByText('CLI exited with code 1')).toBeInTheDocument();
+    expect(screen.queryByText('Original error')).not.toBeInTheDocument();
+  });
+
   it('the seeded successful run has no Resume action (issue #124: only a failed/cancelled full run is retryable)', async () => {
     renderRouterApp(`/p/${PROJECT_ID}/runs/${RUN_ID}`);
     await screen.findByText('Succeeded');

@@ -461,6 +461,7 @@ class RunRecord(Base):
     work_dir: Mapped[str] = mapped_column(sa.Text, nullable=False)
     exit_code: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )

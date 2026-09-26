@@ -441,6 +441,92 @@ async def test_execute_marks_failed_when_a_source_file_is_missing_from_storage(
     assert events[-1].payload["status"] == "failed"
 
 
+_BLOCKED_MODEL_ERROR = (
+    "Error code: 403 - {'error': {'message': 'litellm.PermissionDeniedError: "
+    "Model is blocked', 'type': None, 'param': None, 'code': '403'}}"
+)
+
+
+async def test_execute_rewrites_an_llm_endpoint_failure_naming_the_runs_model(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
+) -> None:
+    """A run whose model the LLM endpoint refuses used to surface the OpenAI
+    client's raw `str(exc)` ("Error code: 403 - {'error': {'message':
+    'litellm.PermissionDeniedError: Model is blocked', ...}}") as its
+    `error` - and therefore as the failure toast - without saying which
+    model was refused. `_finalize` now rewrites it via
+    `run_errors.describe_cli_failure` into a message naming the run's own
+    `options.llm_model` with a hint, keeps the original text in
+    `error_detail`, and the terminal `done` event carries both."""
+    monkeypatch.setenv("FAKE_CLI_FAIL_ERROR", _BLOCKED_MODEL_ERROR)
+    monkeypatch.setattr(
+        book_command,
+        "ENV_ALLOWLIST",
+        book_command.ENV_ALLOWLIST + ("FAKE_CLI_FAIL_ERROR",),
+    )
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(
+                project.id,
+                tmp_path / "run",
+                options=RunOptions(
+                    outline="generate", output_format="markdown", llm_model="deepseek-v4-flash"
+                ),
+            )
+        )
+        service = _make_service(session, InMemoryFileStorage(), _settings())
+
+        finished = await service.execute(run)
+        events, _ = await SqlAlchemyRunEventRepository(session).list(run.id, 0, 1000)
+        reloaded = await SqlAlchemyRunRepository(session).get(run.id)
+
+    assert finished.status == RunStatus.failed
+    assert finished.exit_code == 1
+    assert finished.error == (
+        'Generation with model "deepseek-v4-flash" failed: the LLM endpoint refused this '
+        "model (HTTP 403: Model is blocked). Pick a different model in the project settings "
+        "or the run dialog and retry."
+    )
+    assert finished.error_detail == _BLOCKED_MODEL_ERROR
+    # Persisted through `finalize`'s targeted UPDATE, not just on the in-memory object.
+    assert reloaded is not None
+    assert reloaded.error == finished.error
+    assert reloaded.error_detail == _BLOCKED_MODEL_ERROR
+    done = events[-1]
+    assert done.stage == "done"
+    assert done.payload["status"] == "failed"
+    assert done.payload["error"] == finished.error
+    assert done.payload["errorDetail"] == _BLOCKED_MODEL_ERROR
+
+
+async def test_execute_keeps_the_clis_own_error_text_for_a_non_llm_failure(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch
+) -> None:
+    """Only LLM endpoint failures are rewritten; a message the CLI wrote
+    deliberately passes through untouched, with no `error_detail`."""
+    monkeypatch.setenv("FAKE_CLI_FAIL_ERROR", "Struktura knihy neobsahuje zadne kapitoly")
+    monkeypatch.setattr(
+        book_command,
+        "ENV_ALLOWLIST",
+        book_command.ENV_ALLOWLIST + ("FAKE_CLI_FAIL_ERROR",),
+    )
+
+    async with session_factory() as session:
+        project = await SqlAlchemyProjectRepository(session).add(_make_project())
+        run = await SqlAlchemyRunRepository(session).add(
+            _make_run(project.id, tmp_path / "run")
+        )
+        service = _make_service(session, InMemoryFileStorage(), _settings())
+
+        finished = await service.execute(run)
+
+    assert finished.status == RunStatus.failed
+    assert finished.error == "Struktura knihy neobsahuje zadne kapitoly"
+    assert finished.error_detail is None
+
+
 async def test_execute_marks_failed_on_nonzero_cli_exit(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:

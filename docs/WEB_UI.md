@@ -76,7 +76,13 @@ artifacts and the project's outline/detail queries, so newly-uploaded
 sections and their content show up live while the run is still in progress
 instead of only once it finishes; `done` additionally invalidates
 sources/project and shows a `sonner` toast summarizing the outcome
-(succeeded/failed/cancelled).
+(succeeded/failed/cancelled). A failed run's toast shows the API's
+user-facing `error` (for an LLM endpoint failure, "Generation with model X
+failed: <reason>. <hint>.") with "Check the run details for the full
+error." as its description and a longer display time; the run detail page
+(`routes/p.$projectId.runs.$runId.tsx`) shows the same message with the
+CLI's original exception text (`errorDetail`, when the API rewrote the
+message) collapsed underneath as "Original error".
 
 ## Known limitations
 
