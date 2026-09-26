@@ -174,8 +174,8 @@ data:
   AUTOGENBOOK_KB_OCR_LANG: "eng"
   MCP_GATEWAY_ENABLE: "0"
   AUTOGENBOOK_LLM_MODEL: "glm-5.3"
-  AUTOGENBOOK_LLM_MINI_MODEL: "deepseek-v4-flash"
-  AUTOGENBOOK_FORCE_MINI_MODEL: "1"
+  AUTOGENBOOK_LLM_MINI_MODEL: "deepseek-v4.1-flash"
+  AUTOGENBOOK_FORCE_MINI_MODEL: "0"
 ```
 
 `DATABASE_URL`'s `$(POSTGRES_PASSWORD)` shell-style interpolation doesn't work inside a plain
