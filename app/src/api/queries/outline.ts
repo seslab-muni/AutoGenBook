@@ -153,6 +153,7 @@ export function useCreateOutlineNodeMutation(projectId: string) {
           reviewerScore: null,
           reviewerNotes: null,
           structureLocked: true,
+          contentLocked: false,
           sourceScope: 'inherit',
           sourceIds: [],
           createdAt: new Date().toISOString(),
@@ -212,6 +213,7 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
           contentMarkdown,
           contentLatex: body.contentLatex ?? current.contentLatex,
           structureLocked: body.structureLocked ?? current.structureLocked,
+          contentLocked: body.contentLocked ?? current.contentLocked,
           ...mergeSourceScope(current, body),
           actualWords:
             body.contentMarkdown !== undefined ? wordCount(contentMarkdown) : current.actualWords,
