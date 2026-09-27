@@ -92,9 +92,12 @@ class OldRetriever:
     def build(self, kb_dir: Path, work_dir: Path) -> None:
         from rag_kb import KnowledgeBase  # old engine, read-only use
 
+        # A fresh index cache every time (so the index is really rebuilt) but a
+        # shared extraction cache, so the second build measures a warm cache.
+        self._builds = getattr(self, "_builds", 0) + 1
         with contextlib.redirect_stdout(sys.stderr):
             self.kb = KnowledgeBase.build_from_directory(
-                kb_dir, cache_dir=work_dir / "old_kb_cache", force_rebuild=True,
+                kb_dir, cache_dir=work_dir / f"old_kb_cache_{self._builds}",
                 extract_cache_dir=work_dir / "old_extract_cache",
             )
 
@@ -137,9 +140,10 @@ class EngineRetriever:
 
 
 def make_retrievers(spec: str, transport: Any) -> list[BenchRetriever]:
-    names = [s.strip() for s in spec.split(",") if s.strip()]
-    if names == ["all"]:
-        names = ["old", "bm25-plain", "bm25-lemma", "dense", "hybrid", "hybrid-rerank"]
+    names: list[str] = []
+    for name in (s.strip() for s in spec.split(",") if s.strip()):
+        expanded = ["old", "bm25-plain", "bm25-lemma", "dense", "hybrid", "hybrid-rerank"] if name == "all" else [name]
+        names += [n for n in expanded if n not in names]
     out: list[BenchRetriever] = []
     for name in names:
         base, _, model = name.partition(":")
@@ -163,6 +167,9 @@ class SetResult:
     mrr: float
     build_s: float
     query_s: float
+    recall_at_1: float = 0.0
+    recall_at_3: float = 0.0
+    build_warm_s: float = 0.0
     misses: list[str] = field(default_factory=list)
 
 
@@ -171,9 +178,15 @@ def evaluate(retriever: BenchRetriever, kb: Path, k: int, work_dir: Path) -> lis
     t0 = time.perf_counter()
     retriever.build(kb / "kb", work_dir)
     build_s = time.perf_counter() - t0
+    close = getattr(retriever, "close", None)
+    if close:
+        close()
+    t0 = time.perf_counter()
+    retriever.build(kb / "kb", work_dir)  # warm extraction (and vector) cache, index rebuilt
+    build_warm_s = time.perf_counter() - t0
     results: list[SetResult] = []
     for set_name, items in questions["sets"].items():
-        hits = 0
+        hits = hits1 = hits3 = 0
         rr = 0.0
         misses: list[str] = []
         t1 = time.perf_counter()
@@ -184,6 +197,8 @@ def evaluate(retriever: BenchRetriever, kb: Path, k: int, work_dir: Path) -> lis
                 misses.append(item["id"])
             else:
                 hits += 1
+                hits1 += rank == 1
+                hits3 += rank <= 3
                 rr += 1.0 / rank
         n = len(items)
         results.append(
@@ -191,6 +206,7 @@ def evaluate(retriever: BenchRetriever, kb: Path, k: int, work_dir: Path) -> lis
                 kb=kb.name, set_name=set_name, retriever=retriever.name, n=n,
                 recall=hits / n if n else 0.0, mrr=rr / n if n else 0.0,
                 build_s=build_s, query_s=time.perf_counter() - t1, misses=misses,
+                recall_at_1=hits1 / n if n else 0.0, recall_at_3=hits3 / n if n else 0.0, build_warm_s=build_warm_s,
             )
         )
     return results
@@ -202,13 +218,13 @@ def render_markdown(results: list[SetResult], k: int, note: str) -> str:
         "",
         note,
         "",
-        f"| KB | set | retriever | n | recall@{k} | MRR@{k} | build s | query s |",
-        "|---|---|---|---:|---:|---:|---:|---:|",
+        f"| KB | set | retriever | n | recall@1 | recall@3 | recall@{k} | MRR@{k} | build cold s | build warm s | query s |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in results:
         lines.append(
-            f"| {r.kb} | {r.set_name} | {r.retriever} | {r.n} | {r.recall:.3f} | {r.mrr:.3f} | "
-            f"{r.build_s:.2f} | {r.query_s:.2f} |"
+            f"| {r.kb} | {r.set_name} | {r.retriever} | {r.n} | {r.recall_at_1:.3f} | {r.recall_at_3:.3f} | "
+            f"{r.recall:.3f} | {r.mrr:.3f} | {r.build_s:.2f} | {r.build_warm_s:.2f} | {r.query_s:.2f} |"
         )
     return "\n".join(lines) + "\n"
 
