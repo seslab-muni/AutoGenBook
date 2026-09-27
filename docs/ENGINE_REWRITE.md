@@ -447,3 +447,110 @@ Settled in the September 2026 review:
 | API scope | `api/` and `app/` frozen until the switch; `events.jsonl` and streaming adopted afterwards |
 | Retrieval | hybrid from the start: lemmatised BM25 + e-INFRA `qwen3-embedding-4b` + e-INFRA `qwen3-reranker-4b`; structure-aware chunking; no PyMuPDF |
 | Python | 3.12, matching the Docker image |
+
+## Appendix A. Running the tests and benchmarks locally
+
+Everything below runs from a fresh clone on Linux or macOS with Python 3.12. Commands are run
+from the repository root unless a step says otherwise.
+
+### A.1 Clone and virtualenv
+
+```bash
+git clone https://github.com/seslab-muni/AutoGenBook.git
+cd AutoGenBook
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r api/requirements-dev.txt   # engine, old CLI, API and pytest
+```
+
+Optional system tools. Tests that need a missing tool skip cleanly instead of failing:
+
+- `pandoc` for the LaTeX, Beamer and paper `.tex` tests.
+- `lualatex` and `bibtex` for the PDF tests. On Debian/Ubuntu, install `texlive-luatex`, `texlive-latex-extra`, `texlive-lang-czechslovak` and `texlive-bibtex-extra`.
+
+Optional Python extras are imported only when used (`pip install '.[local-embeddings]'`,
+`pip install '.[tts-local]'`).
+
+### A.2 Test suites
+
+```bash
+pytest tests/engine                              # engine: contract, golden, unit tests; fake LLM, no network
+python -m unittest discover -s tests -p "test_*.py"   # the old CLI's suite (unchanged)
+AUTH_JWT_SECRET="$(openssl rand -hex 32)" pytest tests/api   # the API's suite (uses tests/api/fake_cli.py)
+python -m autogenbook.smoke_prompts              # old prompt packs
+```
+
+`tests/engine/test_contract_*` is the frozen contract of section 3: argv, stdout, `structure_graph.json`, sections, reviews, `kb_sources.json`, `run_meta.json` and run kinds, for book, paper and presentation.
+
+The golden runs (`test_golden_{book,paper,presentation}.py`) replay recorded LLM replies. After an intentional prompt or assembly change, re-record them with `ENGINE_UPDATE_GOLDEN=1 pytest tests/engine/test_golden_*.py`.
+
+`ENGINE_TEST_COQUI=1` enables the single test that loads a real Coqui model. It is off by default because loading a model may download it.
+
+### A.3 Retrieval benchmark: old KB vs new hybrid (e-INFRA)
+
+```bash
+export AUTOGENBOOK_LLM_BASE_URL=https://llm.ai.e-infra.cz/v1/
+export AUTOGENBOOK_LLM_API_KEY=...            # your e-INFRA CZ API token
+unset OPENROUTER_API_KEY                      # it takes precedence over AUTOGENBOOK_LLM_API_KEY (API rule)
+# Embedding/reranker models default to qwen3-embedding-4b / qwen3-reranker-4b on the same
+# endpoint; override with AUTOGENBOOK_EMBED_MODEL / AUTOGENBOOK_RERANK_MODEL if the names differ
+# (curl -s -H "Authorization: Bearer $AUTOGENBOOK_LLM_API_KEY" "$AUTOGENBOOK_LLM_BASE_URL"models).
+# hybrid-llmrerank additionally needs a chat model: export AUTOGENBOOK_LLM_MINI_MODEL=<model id>
+
+python scripts/bench_retrieval.py --retriever old,bm25-plain,bm25-lemma,dense,hybrid,hybrid-rerank --k 6
+python scripts/bench_retrieval.py --retriever all --k 6    # everything, including hybrid-llmrerank and local e5
+```
+
+Both benchmark KBs (`input/bench/cs_book`, `input/bench/en_book`) and both question languages run by default. The script writes a Markdown table of recall@1/3/k, MRR and cold/warm build time, plus JSON, under `output/bench/retrieval-<timestamp>/`.
+
+`--fake-llm` proves the script works without a key, but its dense and rerank numbers are meaningless.
+
+### A.4 Engine benchmark: old vs new at concurrency 1 and 4, and the sweep
+
+Both engines see the same environment. Set the endpoint as in A.3, then:
+
+```bash
+export AUTOGENBOOK_LLM_MODEL=...          # chat model id on the endpoint (same for both engines)
+export AUTOGENBOOK_LLM_MINI_MODEL=...     # smaller model for reference formatting and the judge
+
+# Old (sequential) vs new at concurrency 1 and 4, with the blind pairwise judge (both orders)
+python scripts/bench_engines.py --compare --input input/bench/en_book --concurrency 1,4 --judge
+python scripts/bench_engines.py --compare --input input/bench/cs_book --concurrency 1,4 --judge
+
+# Concurrency sweep of the new engine: throughput, errors and 429s per level
+python scripts/bench_engines.py --engine new --input input/bench/en_book --sweep 1,2,4,8
+
+# Paper and presentation types
+python scripts/bench_engines.py --compare --input input/bench/en_paper --concurrency 1,4 --judge
+python scripts/bench_engines.py --compare --input input/bench/en_presentation --concurrency 1,4
+
+# Reuse an old-engine run instead of repeating it (it is the slow one)
+python scripts/bench_engines.py --compare --old-run output/bench/<ts>/old --input input/bench/en_book --concurrency 4 --judge
+```
+
+Every run starts through the API's own `build_command` and `subprocess_runner`. The script writes `report.md`, `report.json`, every work dir and every stdout log under `output/bench/<timestamp>/`.
+
+Append `--fake-llm` to any command to smoke-test the harness without a key. Those numbers are **fake-LLM smoke numbers**: timings, token counts and quality metrics measure the harness, not a model.
+
+### A.5 API end to end against the new engine
+
+The switch is a single setting: `CLI_ENTRYPOINT=run_engine.py` for the `api` and `worker` services (`docker-compose.engine.yml`). To exercise the web stack with the deterministic fake LLM, with no key and no network, add `docker-compose.engine-fake.yml`:
+
+```bash
+cp .env.example .env
+echo "AUTH_JWT_SECRET=$(openssl rand -hex 32)" >> .env
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.engine.yml -f docker-compose.engine-fake.yml"
+$COMPOSE up -d --wait --build
+$COMPOSE exec -T -e AUTOGENBOOK_USER_PASSWORD='E2ePassw0rd!' api \
+  python -m api.scripts.users create --email e2e@example.com --name "E2E User"
+
+AUTH_JWT_SECRET="$(openssl rand -hex 32)" pytest tests/api   # API suite (host venv from A.1)
+pytest tests/engine/test_contract_api_e2e.py                 # API adapter -> run_engine.py, no Docker
+
+cd app
+pnpm install
+pnpm exec playwright install --with-deps chromium   # once per machine
+pnpm e2e                                            # Playwright smoke + a11y against http://127.0.0.1:8080
+```
+
+To run the stack against a real endpoint instead, drop `docker-compose.engine-fake.yml` and set `AUTOGENBOOK_LLM_BASE_URL`, `AUTOGENBOOK_LLM_API_KEY` and `AUTOGENBOOK_LLM_MODEL` in `.env`. Rolling back means removing `docker-compose.engine.yml`, so the services run `main.py` again.
