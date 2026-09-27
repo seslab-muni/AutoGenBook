@@ -15,9 +15,21 @@ from api.application.runs import _extract_totals, _run_meta_belongs_to_this_atte
 from helpers import copy_legacy_work_dir, run_cli
 
 
-def test_finished_at_after_start_and_totals() -> None:
+def test_finished_at_after_start_and_totals(tmp_path: Path) -> None:
     """finished_at ISO > started; token_totals/cost_totals_usd numeric values sum to the ledger."""
-    pytest.skip("pending: implemented in phase #151")
+    from fake_llm import FakeLLM
+    from helpers import api_run, make_work_dir
+
+    started = datetime.now().astimezone()
+    run = api_run(make_work_dir(tmp_path), FakeLLM(report_cost=True), outline="generate")
+    assert run.exit_code == 0
+    meta = run.run_meta()
+    assert _run_meta_belongs_to_this_attempt(meta, started)
+    ledger = run.usage_lines()
+    tokens, cost = _extract_totals(meta)
+    assert tokens == sum(line["total_tokens"] for line in ledger) > 0
+    assert cost == pytest.approx(sum(line["cost_usd"] or 0 for line in ledger))
+    assert meta["status"] == "ok" and meta["error"] is None
 
 
 def test_error_is_written_on_failure(tmp_path: Path) -> None:
@@ -45,6 +57,16 @@ def test_run_meta_keys_on_an_export(tmp_path: Path) -> None:
     assert _extract_totals(meta) == (None, None)
 
 
-def test_every_request_is_itemised() -> None:
+def test_every_request_is_itemised(tmp_path: Path) -> None:
     """Every HTTP request the fake LLM saw appears in llm_usage.jsonl."""
-    pytest.skip("pending: implemented in phase #151")
+    from fake_llm import Fault, FakeLLM
+    from helpers import api_run, make_work_dir
+
+    fake = FakeLLM(faults=[Fault(status=429, retry_after=0, times=2)], overrides={})
+    run = api_run(make_work_dir(tmp_path), fake, outline="generate")
+    assert run.exit_code == 0
+    ledger = run.usage_lines()
+    model_calls = [c for c in fake.calls if not c.path.endswith("/models")]
+    assert len(ledger) == len(model_calls)
+    assert [l["status"] for l in ledger].count(429) == 2
+    assert len([l for l in ledger if l["kind"] == "chat"]) == len(fake.chat_calls())

@@ -74,3 +74,28 @@ def test_audit_strict_exits_4(tmp_path: Path) -> None:
     assert any(f["code"] == "UNKNOWN_CITE_KEY" for f in report["findings"])
     assert not (run.out_dir / f"{STEM}.pdf").exists()  # strict mode blocks the PDF
     assert "strict" in (run.run_meta()["error"] or "")
+
+
+def test_full_run_markdown_with_author_line(tmp_path: Path) -> None:
+    """A generated book: the final Markdown carries the API's author and a bibliography."""
+    from helpers import api_run, make_work_dir
+
+    work = make_work_dir(tmp_path, name="full")
+    run = api_run(work, FakeLLM(), outline="generate", output_format="markdown")
+    assert run.exit_code == 0, run.text
+    [final] = [p for p in run.out_dir.glob("*.md")]
+    text = final.read_text(encoding="utf-8")
+    assert "\n**Author:** Ada Lovelace\n" in text
+    assert "## References" in text and "[1]" in text
+    assert not list(run.out_dir.glob("*.tex")) and not list(run.out_dir.glob("*.pdf"))
+
+
+@requires_lualatex
+def test_full_run_pdf(tmp_path: Path) -> None:
+    """output_format pdf on a generated book: .md, .tex, .pdf and refs.bib."""
+    from helpers import api_run, make_work_dir
+
+    work = make_work_dir(tmp_path, name="pdf")
+    run = api_run(work, FakeLLM(), outline="generate", output_format="pdf")
+    assert run.exit_code == 0, run.text
+    assert list(run.out_dir.glob("*.pdf")) and list(run.out_dir.glob("*.tex")) and (run.out_dir / "refs.bib").exists()

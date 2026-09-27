@@ -170,3 +170,137 @@ def from_schema(schema: dict[str, Any], *, seed: str, root: dict[str, Any], dept
 
 def dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False)
+
+
+# ------------------------------------------------------------ book responders
+_SPEC_TITLE_RE = re.compile(r"(?im)^\s*(?:title|název|nazev)\s*:\s*(.+?)\s*$")
+_TOTAL_PAGES_RE = re.compile(r"(?im)^Total pages:\s*([\d.]+)")
+_CHAPTER_HINT_RE = re.compile(r"(?im)^Suggested number of chapters:\s*(\d+)")
+_PART_PAGES_RE = re.compile(r"(?im)^-\s*Pages:\s*([\d.]+)")
+_PART_TITLE_RE = re.compile(r"(?im)^-\s*Title:\s*(.+?)\s*$")
+_SUGGESTED_RE = re.compile(r"use about (\d+) of them")
+_BODY_RE = re.compile(r"<<<\n(.*?)\n>>>", re.DOTALL)
+_OVERVIEW_KEY_RE = re.compile(r"(?m)^\[(\d+(?:-\d+)*)\]")
+_PATCHABLE_RE = re.compile(r"Only these sections may be patched:\s*([^.\n]+)\.")
+_MAX_PATCHES_RE = re.compile(r"choose at most (\d+) sections")
+
+
+def _spec_title(prompt: str) -> str:
+    return first_match(_SPEC_TITLE_RE, prompt) or "Fake Book"
+
+
+@register("BookOutline")
+def book_outline(call: Any) -> dict:
+    prompt = call.prompt
+    total = float(first_match(_TOTAL_PAGES_RE, prompt) or 12)
+    chapters = max(3, min(4, int(first_match(_CHAPTER_HINT_RE, prompt) or 3)))
+    per_chapter = round(total / chapters, 1)
+    out = []
+    for c in range(1, chapters + 1):
+        out.append({
+            "title": f"Chapter {c} of {_spec_title(prompt)}",
+            "summary": f"Chapter {c} explains topic {c} step by step.",
+            "n_pages": per_chapter,
+            "sections": [
+                {"title": f"Topic {c}.{s}", "summary": f"Section {s} of chapter {c}: aspect {s} of topic {c}.", "n_pages": round(per_chapter / 2, 1)}
+                for s in (1, 2)
+            ],
+        })
+    return {
+        "title": _spec_title(prompt), "summary": f"A fake book about {_spec_title(prompt)}.",
+        "target_readers": "students", "additional_requirements": "", "equation_frequency_level": 2,
+        "chapters": out, "redundancy_notes": ["Merged two overlapping introductory sections."],
+    }
+
+
+@register("BookMetadata")
+def book_metadata(call: Any) -> dict:
+    return {
+        "title": _spec_title(call.prompt), "summary": "A fake summary of the whole book written by the metadata agent.",
+        "target_readers": "teachers", "additional_requirements": "", "equation_frequency_level": 1,
+    }
+
+
+@register("SubdivisionPlan")
+def subdivision_plan(call: Any) -> dict:
+    prompt = call.prompt
+    pages = float(first_match(_PART_PAGES_RE, prompt) or 2)
+    count = int(first_match(_SUGGESTED_RE, prompt) or 2)
+    title = first_match(_PART_TITLE_RE, prompt) or "Part"
+    return {"sections": [
+        {"title": f"{title}, part {i}", "summary": f"Part {i} of {title}.", "n_pages": round(pages / count, 1)}
+        for i in range(1, count + 1)
+    ]}
+
+
+@register("Glossary")
+def glossary(call: Any) -> dict:
+    return {
+        "terms": [{"term": "fake term", "definition": "a term used consistently in the fake book", "note": ""},
+                  {"term": "approach", "definition": "the method discussed in the book", "note": ""}],
+        "notation": [{"symbol": "x", "meaning": "a variable"}],
+        "audience": "Readers new to the topic.", "tone": "Clear and precise.", "conventions": ["Use SI units."],
+    }
+
+
+def _section_title(prompt: str) -> str:
+    return first_match(re.compile(r"(?im)^-\s*Title:\s*(.+?)\s*$"), prompt) or "the section"
+
+
+@register("SectionDraft")
+def section_draft(call: Any) -> dict:
+    prompt = call.prompt
+    key = node_key_of(prompt) or "0"
+    cites = cite_keys_in(prompt)[:2]
+    words = target_words(prompt)
+    body = filler_paragraphs(f"{_section_title(prompt)} ({key})", words, cite=cites, seed=f"draft:{key}")
+    return {"body_markdown": body, "summary": f"Section {key} explains {_section_title(prompt)}.", "key_terms": ["fake term"], "citations_used": cites}
+
+
+@register("SectionReview")
+def section_review(call: Any) -> dict:
+    prompt = call.prompt
+    key = node_key_of(prompt) or "0"
+    body = first_match(_BODY_RE, prompt) or ""
+    reject = stable_int("review", key) % 3 == 0 and "(revised)" not in body
+    issues = [{"type": "coverage", "severity": "major" if reject else "minor",
+               "description": f"Section {key} should give one more example.", "required_fix": "Add a concrete example."}]
+    return {"ok_to_keep": not reject, "issues": issues, "suggested_edits": [],
+            "retrieval_queries": [f"example for {_section_title(prompt)}"] if reject else []}
+
+
+@register("SectionRevision")
+def section_revision(call: Any) -> dict:
+    prompt = call.prompt
+    bodies = _BODY_RE.findall(prompt)
+    body = bodies[-1] if bodies else ""
+    return {"body_markdown": body.rstrip() + "\n\nFake generated content (revised) with the example the review asked for.",
+            "summary": "Revised section.", "changes_made": ["added an example"]}
+
+
+@register("LengthAdjustment")
+def length_adjustment(call: Any) -> dict:
+    prompt = call.prompt
+    key = node_key_of(prompt) or first_match(re.compile(r"(?m)^Section ([0-9-]+):"), prompt) or "0"
+    words = int(first_match(re.compile(r"to about (\d+) words"), prompt) or 300)
+    bodies = _BODY_RE.findall(prompt)
+    cites = cite_keys_in(prompt) or re.findall(r"\[(kb_[^\]\s;]+)\]", bodies[-1] if bodies else "")[:2]
+    return {"body_markdown": filler_paragraphs(f"section {key} (length adjusted)", words, cite=cites[:2], seed=f"len:{key}")}
+
+
+@register("ConsistencyReport")
+def consistency_report(call: Any) -> dict:
+    prompt = call.prompt
+    keys = _OVERVIEW_KEY_RE.findall(prompt)
+    patchable_text = first_match(_PATCHABLE_RE, prompt) or ""
+    patchable = [k.strip() for k in patchable_text.split(",") if k.strip() and k.strip() != "(none)"]
+    max_patches = int(first_match(_MAX_PATCHES_RE, prompt) or 0)
+    findings = []
+    if len(keys) >= 2:
+        findings.append({"type": "duplicated_coverage", "severity": "minor", "node_keys": keys[:2],
+                         "description": f"Sections {keys[0]} and {keys[1]} both introduce the approach.",
+                         "required_fix": f"Keep the introduction in {keys[0]} and refer back to it in {keys[1]}."})
+        findings.append({"type": "terminology", "severity": "minor", "node_keys": [keys[-1]],
+                         "description": f"Section {keys[-1]} uses a synonym instead of the glossary term.", "required_fix": "Use 'fake term'."})
+    patches = [{"node_key": k, "instructions": "Refer back to the earlier introduction instead of repeating it."} for k in patchable[:max_patches] if k in keys[:2]]
+    return {"findings": findings, "patches": patches}

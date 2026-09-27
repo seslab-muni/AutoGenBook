@@ -1,0 +1,17 @@
+# Switch the web stack to the rewritten engine (epic #158): the API/worker run
+# `run_engine.py` instead of `main.py`. That is the only change the switch
+# needs - the argv, stdout and out/ contract are the same
+# (docs/ENGINE_REWRITE.md section 3). LLM settings come from .env as usual.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.engine.yml up -d --build
+#
+# Add docker-compose.engine-fake.yml on top to run everything against the
+# deterministic fake LLM instead (no key; used for `pnpm e2e`).
+services:
+  api:
+    environment:
+      CLI_ENTRYPOINT: run_engine.py
+
+  worker:
+    environment:
+      CLI_ENTRYPOINT: run_engine.py

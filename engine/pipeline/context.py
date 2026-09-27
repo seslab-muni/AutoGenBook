@@ -39,8 +39,10 @@ class Paths:
 
     @property
     def work(self) -> Path:
-        """Engine-private intermediate state (resumable task outputs)."""
-        return self.out_dir / ".engine"
+        """Engine-private intermediate state (resumable task outputs). Kept
+        under `.kb_cache/`, the one directory the API's artifact upload skips
+        (`api/infrastructure/cli/artifacts.py:_SKIP_DIR_PREFIXES`)."""
+        return self.out_dir / ".kb_cache" / "engine"
 
     @property
     def logs(self) -> Path:

@@ -111,3 +111,85 @@ class ApiSettingsStub:
         self.cli_entrypoint = str(entrypoint)
         self.repo_root = str(REPO_ROOT)
         self.kb_extract_cache_dir = str(cache)
+
+
+# ------------------------------------------------------- API-shaped runs
+BENCH = REPO_ROOT / "input" / "bench"
+RUN_ENGINE = REPO_ROOT / "run_engine.py"
+
+
+def make_work_dir(tmp_path: Path, *, bench: str = "en_book", name: str = "run", with_kb: bool = True) -> Path:
+    """A run work dir laid out like `GenerationService` does: book_input.txt,
+    kb/<source_id>/<file>."""
+    work = tmp_path / name
+    work.mkdir(parents=True)
+    _shutil.copyfile(BENCH / bench / "book_input.txt", work / "book_input.txt")
+    if with_kb:
+        _shutil.copytree(BENCH / bench / "kb", work / "kb")
+    return work
+
+
+def project_structure(*, locked_file: str | None = None, lock_nodes: bool = False) -> dict:
+    """A `book_structure.json` as `api/application/book_spec.py:StructureBuilder`
+    renders it (outline mode "project")."""
+    def leaf(title: str, summary: str, pages: float, **extra) -> dict:
+        node = {"title": title, "summary": f"{summary}\n\nWriting instructions: Math level: intuitive. Equation density: 2/5.",
+                "n_pages": pages, "needsSubdivision": False}
+        if lock_nodes:
+            node["structure_locked"] = True
+        node.update(extra)
+        return node
+
+    chapter1 = {"title": "Mechanical calculation", "summary": "From Pascal to Babbage.\n\nWriting instructions: Math level: intuitive. Equation density: 2/5.",
+                "n_pages": 2.0, "needsSubdivision": True, "childs": [
+                    leaf("Pascal and Leibniz", "Early calculating machines and carrying.", 1.0, kb_scope="selected", kb_sources=["mechanical-computing"]),
+                    leaf("The Difference Engine", "Finite differences and Babbage's first engine.", 1.0),
+                ]}
+    locked_extra = {"content_locked": True, "structure_locked": True, "content_file": locked_file} if locked_file else {}
+    chapter2 = {"title": "Electronic computers", "summary": "ENIAC and the stored program.\n\nWriting instructions: Math level: intuitive. Equation density: 2/5.",
+                "n_pages": 2.0, "needsSubdivision": True, "kb_scope": "all", "childs": [
+                    leaf("ENIAC", "The first general electronic computer and its plugboards.", 1.0, **locked_extra),
+                    leaf("The stored program", "The EDVAC report and the Manchester Baby.", 1.0),
+                ]}
+    if lock_nodes:
+        chapter1["structure_locked"] = chapter2["structure_locked"] = True
+    return {
+        "title": "How Computers Came to Be",
+        "summary": "A short history of computing.",
+        "n_pages": 4.0,
+        "target_readers": "undergraduate students",
+        "equation_frequency_level": 2,
+        "do_consider_outline": True,
+        "do_consider_previous_sections": True,
+        "additional_requirements": "",
+        "max_depth": 3,
+        "max_output_pages": 1.5,
+        "childs": [chapter1, chapter2],
+    }
+
+
+def api_argv(work_dir: Path, **options) -> tuple[list[str], dict[str, str]]:
+    from api.domain.models import RunOptions
+    from api.infrastructure.cli import book_command
+
+    options.setdefault("outline", "generate")
+    settings = ApiSettingsStub(RUN_ENGINE, work_dir.parent / "_extract_cache")
+    argv, env, _cwd = book_command.build_command(work_dir, RunOptions(**options), settings, author="Ada Lovelace")
+    return argv, env
+
+
+def api_run(work_dir: Path, fake, *, extra: list[str] | None = None, **options) -> CliRun:
+    """Run the engine in-process with exactly the argv/env the API builds."""
+    argv, env = api_argv(work_dir, **options)
+    env = {**env, **engine_env(work_dir.parent)}
+    return run_cli(argv[2:] + list(extra or []), fake=fake, env=env)
+
+
+def write_project(work_dir: Path, structure: dict, locked: dict[str, str] | None = None) -> None:
+    out = work_dir / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "book_structure.json").write_text(json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8")
+    for rel, text in (locked or {}).items():
+        target = out / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
