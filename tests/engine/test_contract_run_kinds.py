@@ -6,7 +6,12 @@ the phase that implements it (#153).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+
+from fake_llm import FakeLLM
+from helpers import copy_legacy_work_dir, run_cli
 
 
 def test_full_run() -> None:
@@ -24,9 +29,20 @@ def test_regenerate_one_node() -> None:
     pytest.skip("pending: implemented in phase #153")
 
 
-def test_export_generates_nothing() -> None:
+def test_export_generates_nothing(tmp_path: Path) -> None:
     """--resume --export-tex: zero LLM calls, only assembly."""
-    pytest.skip("pending: implemented in phase #153")
+    work = copy_legacy_work_dir(tmp_path)
+    sections_before = {p.name: p.read_bytes() for p in (work / "out" / "sections").iterdir()}
+    fake = FakeLLM()
+    run = run_cli(
+        ["--mode", "book", "-i", str(work / "book_input.txt"), "-o", str(work / "out"), "--use-txt", "--resume", "--export-tex", "--no-pdf"],
+        fake=fake, tmp_path=tmp_path,
+    )
+    assert run.exit_code == 0, run.text
+    assert fake.calls == [] and run.usage_lines() == []
+    assert {p.name: p.read_bytes() for p in (work / "out" / "sections").iterdir()} == sections_before
+    assert run.run_meta()["run_kind"] == "export"
+    assert not any(line.startswith("[GEN]") and "Starting section" in line for line in run.lines)
 
 
 def test_resume_refused_when_input_hash_differs() -> None:
