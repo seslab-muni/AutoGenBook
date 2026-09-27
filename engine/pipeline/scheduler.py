@@ -148,7 +148,7 @@ class Scheduler:
                     if exc is None:
                         self.state[task_id] = "done"
                         self.result.done.append(task_id)
-                    elif task.optional and not isinstance(exc, asyncio.CancelledError):
+                    elif task.optional and not isinstance(exc, asyncio.CancelledError) and not self._fail_fast(exc):
                         self.state[task_id] = "soft_failed"
                         self.result.soft_failed[task_id] = exc
                         if self._on_failure is not None:

@@ -71,7 +71,9 @@ def _frames(data: bytes) -> Iterable[tuple[int, int, float]]:
             # stream metadata, not audio: skip it (joined clips must not repeat it).
             mono = (b3 >> 6) == 3
             side_info = (17 if mono else 32) if version == 3 else (9 if mono else 17)
-            tag = data[pos + 4 + side_info : pos + 8 + side_info]
+            crc = 0 if (b1 & 0x01) else 2  # protection bit 0: a 16-bit CRC follows the header
+            start = pos + 4 + crc + side_info
+            tag = data[start : start + 4]
             if tag in (b"Xing", b"Info") or data[pos + 36 : pos + 40] == b"VBRI":
                 pos += length
                 continue

@@ -32,6 +32,7 @@ class RerankFailed(RuntimeError):
 
 
 _MISSING_STATUS = {400, 401, 403, 404, 405, 422, 501}
+MAX_CONSECUTIVE_FAILURES = 3  # then the endpoint is given up for the run (next fallback)
 
 
 class Reranker(Protocol):
@@ -50,6 +51,7 @@ class RemoteReranker:
         self.api_key = api_key
         self.endpoint: str | None = None
         self.unavailable = False
+        self.failures = 0  # consecutive failed requests
 
     async def rerank(self, query: str, docs: Sequence[str]) -> list[float]:
         if self.unavailable:
@@ -66,6 +68,9 @@ class RemoteReranker:
                 last_error = exc
                 missing = missing and exc.response.status_code in _MISSING_STATUS
                 continue
+            except httpx.ConnectError as exc:  # DNS failure, refused: nothing listens there
+                last_error = exc
+                continue
             except httpx.TransportError as exc:  # timeouts, resets: transient
                 last_error = exc
                 missing = False
@@ -74,10 +79,12 @@ class RemoteReranker:
                 last_error = exc
                 continue
             self.endpoint = endpoint
+            self.failures = 0
             return scores
-        if missing and self.endpoint is None:
+        self.failures += 1
+        if (missing and self.endpoint is None) or self.failures >= MAX_CONSECUTIVE_FAILURES:
             self.unavailable = True
-            raise RerankUnavailable(f"no rerank endpoint at {self.base_url}: {last_error}")
+            raise RerankUnavailable(f"rerank endpoint at {self.base_url} unusable: {last_error}")
         raise RerankFailed(f"rerank request failed: {last_error}")
 
     async def _rerank(self, query: str, docs: Sequence[str]) -> list[float]:

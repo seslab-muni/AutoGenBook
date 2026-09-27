@@ -240,9 +240,14 @@ class LLMClient:
                     )
                     choice = completion.choices[0] if completion.choices else None
                     message = choice.message if choice else None
-                    # Only the answer: a reasoning model's `reasoning_content` is scratch
-                    # work and never stands in for an empty `content`.
                     text = (message.content if message else None) or ""
+                    finish = choice.finish_reason if choice else None
+                    if not text and message is not None and finish == "stop":
+                        # Some reasoning parsers (vLLM without think tags) file a finished
+                        # answer under reasoning_content. A reply cut off by the output
+                        # limit is scratch work and is never used this way.
+                        extra = message.model_dump() if hasattr(message, "model_dump") else {}
+                        text = str(extra.get("reasoning_content") or extra.get("reasoning") or "")
                     p, c, t, _ = _usage_numbers(getattr(completion, "usage", None))
                     return ChatResult(text, model, p, c, t, choice.finish_reason if choice else None, rf_label)
                 outcome = await self._call(
@@ -311,7 +316,6 @@ class LLMClient:
                 lock.release()
         try:
             level = self.level_for(model)
-            first_error: BaseException | None = None
             while True:
                 msgs = self._json_messages(messages, name, schema, level)
                 try:
@@ -324,20 +328,20 @@ class LLMClient:
                     message = str(exc)
                     downgrade = looks_like_format_rejection(message) or (probing and not looks_unrelated_to_format(message))
                     if level < Level.PROMPT and downgrade:
-                        first_error = first_error or exc
                         new_level = Level(level + 1)
                         self.sink.emit("info", f"Model {model} rejected response_format={level.label}; trying {new_level.label}", level="debug")
                         level = new_level
                         continue
-                    # Every level failed the same way: the request itself is the
-                    # problem (e.g. context length), not the format - keep the level.
-                    if first_error is None or first_error is exc:
-                        raise
-                    raise first_error from exc
-            # The level is recorded only once a call at it succeeded.
-            if level != self.level_for(model):
+                    # Not a format problem (e.g. context length), or no weaker level
+                    # left: this attempt's own error is the one to report; the
+                    # recorded level is unchanged.
+                    raise
+            # A downgrade is recorded only once a call at the weaker level
+            # succeeded, and never undone by a concurrent call that started
+            # at the stronger level.
+            if level > self.level_for(model):
+                self._levels[model] = level
                 self.sink.emit("info", f"Model {model}: structured output via {level.label}", level="warning")
-            self._levels[model] = level
             if probing:
                 self._settled.add(model)
         finally:

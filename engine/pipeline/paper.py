@@ -375,11 +375,17 @@ class PaperRun(BookRun):
                 ref = Reference(key=item["cite_key"], kind="web", title=item.get("title") or "", url=item.get("url") or "",
                                 doi=item.get("doi") or "", verified=True)
                 self.web_refs[ref.key] = ref
-        style = self._style(abstract, front)
+        # Same rule as assemble_document: any section read from a legacy .tex
+        # file makes the LaTeX conversion run with raw TeX on.
+        legacy = any(
+            (path := section_path(self.cfg.out_dir, key, self.graph.nodes[key])) is not None and path.suffix == ".tex"
+            for key in self.graph.leaves()
+        )
+        style = self._style(abstract, front, legacy=legacy)
         return await assemble_outputs(self.ctx, self.graph, language=self.language, author=self.author,
                                       extra_refs=list(self.web_refs.values()), style=style)
 
-    def _style(self, abstract: str, front: list[str]) -> AssemblyStyle:
+    def _style(self, abstract: str, front: list[str], *, legacy: bool = False) -> AssemblyStyle:
         references = self.references
         language = self.language
         citation_style = self.cfg.citation_style
@@ -410,19 +416,25 @@ class PaperRun(BookRun):
         def cite_resolver(text: str, numbering: Numbering, node_key: str) -> str:
             matches = find_citations(text, numbering.index)
             out, pos = [], 0
+            escape = (lambda part: part) if legacy else _escape_at
             for m in matches:
-                out.append(text[pos:m.start])
+                out.append(escape(text[pos:m.start]))
                 groups: list[str] = []
                 for key in m.keys:
                     numbering.number(key, node_key)
                     g = numbering.group(numbering.index.canonical(key))
                     if g not in groups:
                         groups.append(g)
-                # Pandoc citation syntax, rendered as \citep{...} by --natbib: the
-                # section text itself goes through pandoc with raw TeX off.
-                out.append("[" + "; ".join(f"@{_bibkey(g)}" for g in groups) + "]")
+                if legacy:
+                    # Legacy .tex sections are converted with raw TeX on and may cite
+                    # inside a raw environment: keep LaTeX.
+                    out.append("\\citep{" + ",".join(_bibkey(g) for g in groups) + "}")
+                else:
+                    # Pandoc citation syntax, rendered as \citep{...} by --natbib, so
+                    # generated text goes through pandoc with raw TeX off.
+                    out.append("[" + "; ".join(f"@{_bibkey(g)}" for g in groups) + "]")
                 pos = m.end
-            out.append(text[pos:])
+            out.append(escape(text[pos:]))
             return "".join(out)
 
         def footnote_resolver(text: str, numbering: Numbering, node_key: str) -> str:
@@ -474,7 +486,17 @@ class PaperRun(BookRun):
         if citation_style == "numeric":
             return AssemblyStyle(**base, md_bibliography=bibliography, tex_bibliography=bibliography)
         return AssemblyStyle(**base, md_bibliography=bibliography, tex_resolve=cite_resolver, tex_bibliography=None, bibtex=True,
-                             latex_vars={"bibliography-file": "refs"}, pandoc_args=["--natbib"])
+                             latex_vars={"bibliography-file": "refs"}, pandoc_args=[] if legacy else ["--natbib"])
+
+
+_CODE_RE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]+`)", re.DOTALL)
+
+
+def _escape_at(text: str) -> str:
+    """`@` in prose is literal (with --natbib pandoc would read `@Override` as
+    a citation); code spans and blocks are left alone."""
+    parts = _CODE_RE.split(text)
+    return "".join(part if i % 2 else re.sub(r"(?<!\\)@", r"\\@", part) for i, part in enumerate(parts))
 
 
 def _bibkey(group: str) -> str:

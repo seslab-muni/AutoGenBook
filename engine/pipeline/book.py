@@ -41,7 +41,7 @@ from engine.graph.doc_graph import DocGraph
 from engine.graph.keys import ROOT, child_key
 from engine.pipeline.assembly import assemble_outputs
 from engine.pipeline.context import RunContext
-from engine.pipeline.plan import STAGES, GenerationPlan, LeafStatus, TaskSpec, plan_generation, plan_structure
+from engine.pipeline.plan import STAGES, GenerationPlan, LeafStatus, TaskSpec, plan_generation, plan_structure, plan_subdivision_resume
 from engine.pipeline.resume import decide_resume
 from engine.pipeline.scheduler import Scheduler, Task
 from engine.pipeline.state import SectionMeta, WorkStore, fingerprint
@@ -138,6 +138,7 @@ class BookRun:
             on_failure=self._on_failure,
         )
         self.gen_started = 0.0
+        self.resumed = False  # this run continues a saved structure (--resume accepted)
 
     # ================================================================== run
     async def run(self) -> PipelineOutcome:
@@ -158,16 +159,13 @@ class BookRun:
             self.graph.save(self.paths.graph)
             self.sink.emit("resume", "The saved structure was interrupted during subdivision; finishing it before generating")
             run_kind = "resume"
-            kb_deps: tuple[str, ...] = ()
-            if has_kb:
-                self._add(TaskSpec("kb.build", "kb.build", priority=100))
-                kb_deps = ("kb.build",)
-                if need_dense:
-                    self._add(TaskSpec("kb.embed", "kb.embed", ("kb.build",), priority=90))
-            elif cfg.retrieval.enable_web:
+            self.resumed = True
+            for spec in plan_subdivision_resume(has_kb=has_kb, need_dense=need_dense):
+                self._add(spec)
+            if not has_kb and cfg.retrieval.enable_web:
                 self.retrieval.enable_web_only()
-            self._add(TaskSpec("subdivide", "subdivide", kb_deps, priority=94))
         elif decision.accepted and decision.graph is not None:
+            self.resumed = True
             self.graph = decision.graph
             self._resolve_language_and_author()
             self._stamp_graph()
@@ -242,12 +240,12 @@ class BookRun:
         return False
 
     def clear_work(self) -> None:
-        """A full run owns the output: intermediate results and the section/
-        review files of an earlier run (possibly of another structure, under
-        the same positional keys) must not leak into this one."""
+        """A full run owns the output: intermediate results and per-section
+        metadata of an earlier run must not leak into this one. (Its section
+        and review files are removed once the new leaves are known, in
+        `_prepare_leaves`, so content-lock sources are kept.)"""
         _clear_dir(self.paths.work / "work")
-        _clear_dir(self.paths.sections)
-        _clear_dir(self.paths.reviews)
+        self.meta.reset()
 
     def needs_split(self, node: dict[str, Any], max_pages: float) -> bool:
         return bool(node.get("needsSubdivision")) or float(node.get("n_pages", 1.0)) >= max_pages
@@ -361,9 +359,10 @@ class BookRun:
 
     # ============================================================ KB tasks
     async def task_kb_build(self) -> None:
-        # Web references cited by earlier runs live only in kb_sources.json,
-        # which the KB build rewrites: carry them over.
-        previous = CitationIndex.from_kb_sources(read_json(self.paths.kb_sources)).web_references()
+        # Web references cited by the sections this resumed run keeps live only
+        # in kb_sources.json (loaded into self.index at start), which the KB
+        # build rewrites: carry them over. A full run starts from scratch.
+        previous = self.index.web_references() if self.resumed else []
         kb = await self.retrieval.build_kb()
         if kb is not None:
             self.index = CitationIndex.from_kb_sources(kb.kb_sources_json())
@@ -592,9 +591,39 @@ class BookRun:
                 node["content_file_path"] = ""
                 changed = True
             statuses.append(LeafStatus(key, resume_after=self.work.last_stage(key, self._fp(key), STAGES[:-1])))
+        if not resumed:
+            self._remove_stale_outputs()
         if changed:
             graph.save(self.paths.graph)
         return statuses
+
+    def _remove_stale_outputs(self) -> None:
+        """A full run regenerates every unlocked leaf: section and review
+        files left by an earlier run (possibly of another structure, under the
+        same positional keys) must not be assembled or imported. Materialised
+        locks and files that serve as a lock's `content_file` are kept."""
+        assert self.graph is not None
+        keep: set[Path] = set()
+        for key in self.locked:
+            keep.add(self.paths.section(key).resolve())
+        for node in self.graph.nodes.values():
+            raw = str(node.get("content_file") or "").strip() if node.get("content_locked") else ""
+            if raw:
+                source = Path(raw).expanduser()
+                keep.add((source if source.is_absolute() else self.cfg.out_dir / source).resolve())
+        for folder in (self.paths.sections, self.paths.reviews):
+            if not folder.is_dir():
+                continue
+            for path in folder.iterdir():
+                if not path.is_file() or path.resolve() in keep:
+                    continue
+                stem = path.name.split(".", 1)[0].removesuffix("_revised")
+                if stem in self.locked and folder == self.paths.reviews:
+                    continue
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
     def _materialize_lock(self, key: str, node: dict[str, Any]) -> Path | None:
         """Content lock (issue #113): copy `content_file` byte for byte to

@@ -55,15 +55,29 @@ def task_id(kind: str, key: str | None = None) -> str:
     return f"{kind}:{key}" if key else kind
 
 
-def plan_structure(*, has_kb: bool, need_dense: bool, from_txt: bool) -> list[TaskSpec]:
+def plan_kb(*, has_kb: bool, need_dense: bool) -> list[TaskSpec]:
     tasks: list[TaskSpec] = []
     if has_kb:
         tasks.append(TaskSpec("kb.build", "kb.build", priority=PRIORITY["kb.build"]))
         if need_dense:
             tasks.append(TaskSpec("kb.embed", "kb.embed", ("kb.build",), priority=PRIORITY["kb.embed"]))
+    return tasks
+
+
+def plan_structure(*, has_kb: bool, need_dense: bool, from_txt: bool) -> list[TaskSpec]:
+    tasks = plan_kb(has_kb=has_kb, need_dense=need_dense)
     deps = ("kb.build",) if has_kb else ()
     tasks.append(TaskSpec("outline" if from_txt else "structure", "outline" if from_txt else "structure", deps, priority=PRIORITY["outline"]))
     tasks.append(TaskSpec("subdivide", "subdivide", (tasks[-1].id,) + deps, priority=PRIORITY["subdivide"]))
+    return tasks
+
+
+def plan_subdivision_resume(*, has_kb: bool, need_dense: bool) -> list[TaskSpec]:
+    """A resumed structure whose subdivision was interrupted: KB, then
+    subdivide (the outline exists)."""
+    tasks = plan_kb(has_kb=has_kb, need_dense=need_dense)
+    deps = ("kb.build",) if has_kb else ()
+    tasks.append(TaskSpec("subdivide", "subdivide", deps, priority=PRIORITY["subdivide"]))
     return tasks
 
 

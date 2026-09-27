@@ -92,7 +92,10 @@ def extract_json(text: str) -> Any:
     raise ValueError("no JSON object found in the model output")
 
 
-REJECTION_HINTS = ("response_format", "json_schema", "json schema", "structured", "schema", "format", "not supported", "unsupported", "json_object")
+# OpenRouter answers an unsupported response_format with 404 "No endpoints found
+# that can handle the requested parameters".
+REJECTION_HINTS = ("response_format", "json_schema", "json schema", "structured", "schema", "format", "not supported",
+                   "unsupported", "json_object", "requested parameters")
 
 
 def looks_like_format_rejection(message: str) -> bool:
@@ -106,7 +109,7 @@ UNRELATED_HINTS = (
     "context length", "context_length", "maximum context", "context window", "too many tokens", "token limit",
     "max_tokens", "prompt is too long", "input is too long", "content policy", "content_policy", "safety",
     "moderation", "invalid api key", "api key", "unauthorized", "insufficient", "credit", "quota",
-    "model not found", "no such model", "does not exist", "unknown model", "no endpoints found",
+    "model not found", "no such model", "does not exist", "unknown model",
 )
 
 

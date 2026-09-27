@@ -73,3 +73,9 @@ class SectionMeta:
         with self._lock:
             self.data[key] = value
             atomic_write_json(self.path, self.data)
+
+    def reset(self) -> None:
+        with self._lock:
+            self.data = {}
+            if self.path.exists():
+                self.path.unlink()

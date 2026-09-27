@@ -176,3 +176,182 @@ def test_paper_reference_formatter_failure_is_not_fatal(tmp_path: Path) -> None:
     references = json.loads((run.out_dir / "references.json").read_text(encoding="utf-8"))
     assert len(references) == 1 and any("could not be formatted" in line for line in run.lines)
     assert "stored_program.pdf" in (run.out_dir / "The_Stored-Program_Concept_as_the_Turning_Point_of_Early_Computing.md").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------ second review round
+async def test_persistently_failing_reranker_is_given_up(tmp_path: Path) -> None:
+    from engine.config import LLMSettings
+    from engine.events import MemorySink
+    from engine.llm.client import LLMClient
+    from engine.llm.usage import UsageLedger
+    from engine.retrieval.kb import HybridRetriever, KnowledgeBase
+    from engine.retrieval.extract import ExtractOptions
+    from engine.retrieval.rerank import LLMListwiseReranker, RemoteReranker
+    from fake_llm import Fault
+    from helpers import BENCH
+
+    fake = FakeLLM(faults=[Fault(status=503, match=lambda c: c.path.endswith(("/rerank", "/score")), times=None)])
+    llm = LLMClient(LLMSettings(base_url="http://fake.local/v1", api_key="k", model="m", mini_model="m", max_retries=0),
+                    ledger=UsageLedger(None), sink=MemorySink(), concurrency=2, transport=fake.transport())
+    kb = KnowledgeBase.build(BENCH / "en_book" / "kb", cache_dir=tmp_path / "c", extract_options=ExtractOptions(cache_dir=tmp_path / "x"))
+    remote = RemoteReranker(llm, model="r", base_url="http://fake.local/v1", api_key="k")
+    retriever = HybridRetriever(kb, rerankers=[remote, LLMListwiseReranker(llm)])
+    for question in ("EDSAC", "EDVAC report", "Analytical Engine", "Jacquard loom"):
+        assert await retriever.search([question], k=3)
+    assert remote.unavailable and remote.failures == 3
+    remote_calls = [c for c in fake.calls if c.path.endswith(("/rerank", "/score"))]
+    assert len(remote_calls) == 6  # 3 queries x 2 endpoints, then no more
+    assert len(fake.chat_calls()) == 2  # the 3rd query (on giving up) and the 4th used the LLM fallback
+    await llm.aclose()
+
+
+async def test_fail_fast_still_aborts_on_an_optional_task() -> None:
+    from engine.errors import SchemaError
+
+    async def bad() -> None:
+        raise SchemaError("book.glossary", "no JSON")
+
+    async def ok() -> None:
+        return None
+
+    scheduler = Scheduler(workers=1, fail_fast=lambda exc: isinstance(exc, SchemaError))
+    scheduler.add(Task("glossary", "glossary", bad, optional=True))
+    scheduler.add(Task("draft:1", "draft", ok, {"glossary"}))
+    result = await scheduler.run()
+    assert result.aborted and "glossary" in result.failed and "draft:1" in result.skipped
+
+
+async def test_structured_level_edge_cases(tmp_path: Path) -> None:
+    import openai
+    import pytest as _pytest
+
+    from engine.config import LLMSettings
+    from engine.events import MemorySink
+    from engine.llm.client import LLMClient
+    from engine.llm.structured import Level
+    from engine.llm.usage import UsageLedger
+    from fake_llm import ChatReply, Fault
+    from pydantic import BaseModel
+
+    class Answer(BaseModel):
+        title: str
+
+    def client(fake: FakeLLM) -> LLMClient:
+        return LLMClient(LLMSettings(base_url="http://fake.local/v1", api_key="k", model="m", mini_model="m", max_retries=0),
+                         ledger=UsageLedger(None), sink=MemorySink(), concurrency=4, transport=fake.transport())
+
+    msgs = [{"role": "user", "content": "x"}]
+    # OpenRouter's 404 for unsupported parameters is a format rejection.
+    fake = FakeLLM(faults=[Fault(status=404, match=lambda c: c.response_format_type == "json_schema", times=None,
+                                 message="No endpoints found that can handle the requested parameters.")])
+    c = client(fake)
+    assert (await c.structured(msgs, Answer, label="t")).title and c.level_for("m") == Level.JSON_OBJECT
+    await c.aclose()
+    # A later level failing for another reason reports that reason.
+    fake = FakeLLM(faults=[
+        Fault(status=400, match=lambda c: c.response_format_type == "json_schema", times=None, message="response_format json_schema is not supported"),
+        Fault(status=400, match=lambda c: c.response_format_type == "json_object", times=None, message="This model's maximum context length is 8192 tokens"),
+    ])
+    c = client(fake)
+    with _pytest.raises(openai.BadRequestError, match="maximum context length"):
+        await c.structured(msgs, Answer, label="t")
+    assert c.level_for("m") == Level.JSON_SCHEMA
+    await c.aclose()
+    # A call that started at the stronger level never undoes a concurrent downgrade.
+    fake = FakeLLM(latency_s=0.2)
+    c = client(fake)
+    c._settled.add("m")
+    pending = asyncio.ensure_future(c.structured(msgs, Answer, label="t"))
+    await asyncio.sleep(0.05)
+    c._levels["m"] = Level.JSON_OBJECT
+    await pending
+    assert c.level_for("m") == Level.JSON_OBJECT
+    await c.aclose()
+    # A finished answer filed under reasoning_content is used; a truncated one is not.
+    fake = FakeLLM(overrides={"Answer": lambda call: ChatReply("", finish_reason="stop", reasoning='{"title": "ok"}')})
+    c = client(fake)
+    assert (await c.structured(msgs, Answer, label="t")).title == "ok"
+    await c.aclose()
+
+
+def test_full_run_keeps_a_lock_source_inside_sections(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path)
+    text = "Kept text of the ENIAC section, byte for byte.\n"
+    from helpers import write_project
+
+    write_project(work, project_structure(locked_file="sections/2-1.md"), {"sections/2-1.md": text})
+    (work / "out" / ".kb_cache" / "engine").mkdir(parents=True)
+    (work / "out" / ".kb_cache" / "engine" / "sections.json").write_text(json.dumps({"9-9": {"summary": "OLD"}}), encoding="utf-8")
+    run = api_run(work, FakeLLM(), outline="project")
+    assert run.exit_code == 0, run.text
+    assert (work / "out" / "sections" / "2-1.md").read_text(encoding="utf-8") == text
+    assert "9-9" not in json.loads((work / "out" / ".kb_cache" / "engine" / "sections.json").read_text(encoding="utf-8"))
+
+
+def test_full_run_of_another_input_drops_old_web_references(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path)
+    web = {"tavily_results": TAVILY, "resolvable_urls": {f"https://doi.org/{EDVAC_DOI}"}}
+    base = ["--mode", "book", "-i", str(work / "book_input.txt"), "-o", str(work / "out"), "--kb-dir", str(work / "kb"), "--use-txt", "--no-tex", "--no-pdf"]
+    assert run_cli(base + ["--enable-web-rag"], fake=FakeLLM(**web), env=engine_env(tmp_path, TAVILY_API_KEY="t")).exit_code == 0
+    (work / "book_input.txt").write_text((work / "book_input.txt").read_text(encoding="utf-8") + "\nAdditional requirements: other.\n", encoding="utf-8")
+    assert run_cli(base + ["--resume"], fake=FakeLLM(), env=engine_env(tmp_path)).exit_code == 0  # refused: a full run
+    sources = json.loads((work / "out" / "kb_sources.json").read_text(encoding="utf-8"))
+    assert not [k for k in sources["cite_keys"] if k.startswith("web_")]
+
+
+def test_moved_but_unchanged_input_keeps_its_structure(tmp_path: Path) -> None:
+    import shutil
+
+    work = make_work_dir(tmp_path)
+    argv = lambda w: ["--mode", "book", "-i", str(w / "book_input.txt"), "-o", str(w / "out"), "--kb-dir", str(w / "kb"), "--no-tex", "--no-pdf"]  # noqa: E731
+    assert run_cli(argv(work) + ["--use-txt"], fake=FakeLLM(), env=engine_env(tmp_path)).exit_code == 0
+    moved = tmp_path / "moved"
+    shutil.copytree(work, moved)
+    fake = FakeLLM()
+    run = run_cli(argv(moved) + ["--resume"], fake=fake, env=engine_env(tmp_path))
+    assert run.exit_code == 0 and any("different input file" in line for line in run.lines)
+    assert not fake.chat_calls("BookOutline")  # the unchanged structure JSON was reused
+
+
+def test_crc_protected_info_frame_is_skipped() -> None:
+    from engine.media.audio import mp3_duration, silent_mp3
+
+    clip = silent_mp3(0.5)
+    frame = bytearray(clip[:417])
+    frame[1] = 0xFA  # protection bit 0: CRC present
+    frame[4 + 2 + 32 : 4 + 2 + 36] = b"Info"
+    assert mp3_duration(bytes(frame) + clip) == mp3_duration(clip)
+
+
+def test_paper_at_signs_and_legacy_tex_citations(tmp_path: Path) -> None:
+    import shutil as _shutil
+
+    import pytest as _pytest
+
+    if not _shutil.which("pandoc"):
+        _pytest.skip("pandoc not installed")
+    from responders import respond
+
+    def draft(call):
+        out = respond(call)
+        out["body_markdown"] += "\\n\\nJava marks overrides with the @Override annotation."
+        return out
+
+    work = make_work_dir(tmp_path, bench="en_paper")
+    run = paper_run(work, FakeLLM(overrides={"SectionDraft": draft}), "--no-pdf")
+    assert run.exit_code == 0, run.text
+    [tex_path] = list(run.out_dir.glob("*.tex"))
+    tex = tex_path.read_text(encoding="utf-8")
+    assert "@Override" in tex and "\\citet{Override}" not in tex and "\\citep{kb_" in tex
+    # A legacy .tex section citing inside a raw environment keeps \citep there.
+    key = next(k for k in json.loads((run.out_dir / "kb_sources.json").read_text(encoding="utf-8"))["cite_keys"] if k.startswith("kb_"))
+    (run.out_dir / "sections" / "3.md").unlink()
+    (run.out_dir / "sections" / "3.tex").write_text(
+        "\\begin{table}[h]\\centering\\begin{tabular}{l}Result \\cite{" + key + "}\\end{tabular}\\end{table}\n", encoding="utf-8")
+    graph = run.graph()
+    graph["nodes"]["3"]["content_file_path"] = ""
+    (run.out_dir / "structure_graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    export = paper_run(work, FakeLLM(), "--resume", "--no-pdf")
+    assert export.exit_code == 0, export.text
+    tex = tex_path.read_text(encoding="utf-8")
+    assert "\\begin{tabular}{l}Result \\citep{kb_" in tex and "[@" not in tex
