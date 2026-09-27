@@ -4,6 +4,13 @@ Czech inflection ("učitel", "učitele", "učitelům") collapses to one lemma
 with simplemma (dictionary-based, no models) before accents are folded, so a
 Czech query matches every form of the word. The old tokeniser (accent fold +
 `[a-z0-9]+`, no lemmatisation) is kept as `mode="plain"` for the benchmark.
+
+Two guards keep the words a Czech query shares with an English source (the
+project's main case) from being lost in lemmatisation:
+- all-caps acronyms (AI, DPIA, EDSAC) are not lemmatised: the dictionaries
+  turn some of them into other words (English `ai` -> `be`, a stopword);
+- a non-English text keeps each word's folded surface form next to its lemma,
+  so loanwords still match (`data` next to the Czech lemma `datum`).
 """
 
 from __future__ import annotations
@@ -55,13 +62,19 @@ def _lemma(word: str, lang: str) -> str:
 def lemma_tokens(text: str, lang: str = "en") -> list[str]:
     stop = STOPWORDS.get(lang, set()) | STOPWORDS["en"]
     out: list[str] = []
-    for word in _WORD_RE.findall(text.casefold()):
+    for match in _WORD_RE.finditer(text):
+        original = match.group(0)
+        word = original.casefold()
         if word in stop or (len(word) == 1 and not word.isdigit()):
             continue
-        lemma = _lemma(word, lang).casefold()
-        token = fold(lemma)
+        acronym = original.isupper() and len(original) <= 8
+        token = fold(word) if acronym else fold(_lemma(word, lang).casefold())
         if token and token not in stop:
             out.append(token)
+        if lang != "en" and not acronym:
+            surface = fold(word)
+            if surface != token and surface not in stop:
+                out.append(surface)
     return out
 
 

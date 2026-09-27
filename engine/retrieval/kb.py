@@ -39,7 +39,7 @@ from engine.retrieval.scope import make_source_filter
 from engine.retrieval.types import Chunk, RetrievalItem
 from engine.util.fs import atomic_write_bytes, atomic_write_text
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2  # 2: acronym and surface-form guards in lemma_tokens
 
 
 def _excerpt(raw: str, max_words: int = 12, max_chars: int = 120) -> str:

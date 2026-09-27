@@ -126,7 +126,8 @@ def test_markdown_structure() -> None:
 
 
 def test_lemmatised_tokens_collapse_czech_inflection() -> None:
-    assert len(set(lemma_tokens("učitel učitele učitelům učiteli", "cs"))) == 1
+    tokens = lemma_tokens("učitel učitele učitelům učiteli", "cs")
+    assert tokens.count("ucitel") == 4  # every form carries the shared lemma (plus its own surface form)
     assert len(set(plain_tokens("učitel učitele učitelům učiteli"))) == 4
     assert lemma_tokens("Příliš žluťoučký kůň", "cs")[0].isascii()
 
@@ -326,3 +327,40 @@ def test_all_formats_extract(tmp_path: Path) -> None:
     assert ("deck.pptx", "slide 1, chunk 1") in locs and ("notes.txt", "chunk 1") in locs
     docx_chunks = [c for c in built.chunks if c.source_path.endswith("doc.docx")]
     assert any(c.heading_path[-1] == "Docx Heading" for c in docx_chunks) and any(c.kind == "table" for c in docx_chunks)
+
+
+def test_lemma_tokens_keep_cross_lingual_bridge_words() -> None:
+    """Acronyms survive lemmatisation (English `ai` -> `be`, a stopword) and a
+    Czech text keeps surface forms next to lemmas, so a Czech query still
+    shares `ai` and `data` with an English source."""
+    from engine.retrieval.lexical import lemma_tokens
+
+    english = lemma_tokens("Generative AI processes student data under the DPIA rules", "en")
+    czech = lemma_tokens("Generativní AI zpracovává data studentů podle DPIA", "cs")
+    assert {"ai", "dpia", "data", "student"} <= set(english)
+    assert {"ai", "dpia", "data", "student"} <= set(czech) and "datum" in czech  # lemma and surface form
+    assert lemma_tokens("učitel učitele učitelům", "cs").count("ucitel") == 3  # inflection still collapses
+
+
+def test_lexical_retrieval_is_not_worse_than_the_old_kb(tmp_path: Path) -> None:
+    """Recall@6 of the new BM25 (lemma) retriever >= the old engine's KB on
+    every benchmark question set, English and cross-lingual (Czech questions,
+    English sources). No model involved."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("bench_retrieval_q", REPO / "scripts" / "bench_retrieval.py")
+    bench = importlib.util.module_from_spec(spec)
+    sys.modules["bench_retrieval_q"] = bench
+    spec.loader.exec_module(bench)
+    for kb in ("cs_book", "en_book"):
+        scores = {}
+        for retriever in bench.make_retrievers("old,bm25-lemma", None):
+            work = tmp_path / f"{kb}-{retriever.name}"
+            work.mkdir()
+            try:
+                scores[retriever.name] = {r.set_name: r.recall for r in bench.evaluate(retriever, REPO / "input" / "bench" / kb, 6, work)}
+            finally:
+                getattr(retriever, "close", lambda: None)()
+        for set_name, old in scores["old"].items():
+            assert scores["bm25-lemma"][set_name] >= old, (kb, set_name, scores)
