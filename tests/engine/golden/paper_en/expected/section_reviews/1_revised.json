@@ -1,0 +1,20 @@
+{
+ "consistency_patched": true,
+ "issues": [
+  {
+   "description": "Section 1 should give one more example.",
+   "required_fix": "Add a concrete example.",
+   "severity": "minor",
+   "type": "coverage"
+  },
+  {
+   "description": "Sections 1 and 2 both introduce the approach.",
+   "required_fix": "Keep the introduction in 1 and refer back to it in 2.",
+   "severity": "minor",
+   "type": "consistency:duplicated_coverage"
+  }
+ ],
+ "ok_to_keep": true,
+ "retrieval_queries": [],
+ "suggested_edits": []
+}

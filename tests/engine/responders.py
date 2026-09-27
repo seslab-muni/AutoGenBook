@@ -251,7 +251,8 @@ def _section_title(prompt: str) -> str:
 def section_draft(call: Any) -> dict:
     prompt = call.prompt
     key = node_key_of(prompt) or "0"
-    cites = cite_keys_in(prompt)[:2]
+    found = cite_keys_in(call.user)
+    cites = [k for k in found if not k.startswith("web_")][:2] + [k for k in found if k.startswith("web_")][:1]
     words = target_words(prompt)
     body = filler_paragraphs(f"{_section_title(prompt)} ({key})", words, cite=cites, seed=f"draft:{key}")
     return {"body_markdown": body, "summary": f"Section {key} explains {_section_title(prompt)}.", "key_terms": ["fake term"], "citations_used": cites}
@@ -284,7 +285,7 @@ def length_adjustment(call: Any) -> dict:
     key = node_key_of(prompt) or first_match(re.compile(r"(?m)^Section ([0-9-]+):"), prompt) or "0"
     words = int(first_match(re.compile(r"to about (\d+) words"), prompt) or 300)
     bodies = _BODY_RE.findall(prompt)
-    cites = cite_keys_in(prompt) or re.findall(r"\[(kb_[^\]\s;]+)\]", bodies[-1] if bodies else "")[:2]
+    cites = cite_keys_in(call.user) or re.findall(r"\[(kb_[^\]\s;]+)\]", bodies[-1] if bodies else "")[:2]
     return {"body_markdown": filler_paragraphs(f"section {key} (length adjusted)", words, cite=cites[:2], seed=f"len:{key}")}
 
 
@@ -304,3 +305,43 @@ def consistency_report(call: Any) -> dict:
                          "description": f"Section {keys[-1]} uses a synonym instead of the glossary term.", "required_fix": "Use 'fake term'."})
     patches = [{"node_key": k, "instructions": "Refer back to the earlier introduction instead of repeating it."} for k in patchable[:max_patches] if k in keys[:2]]
     return {"findings": findings, "patches": patches}
+
+
+# ----------------------------------------------------------- paper responders
+@register("PaperOutline")
+def paper_outline(call: Any) -> dict:
+    prompt = call.prompt
+    total = float(first_match(_TOTAL_PAGES_RE, prompt) or 6)
+    roles = ["introduction", "method", "results", "discussion", "conclusion"]
+    per = round(total / len(roles), 1)
+    return {
+        "title": _spec_title(prompt),
+        "abstract_draft": "A fake provisional abstract.",
+        "keywords": ["history of computing", "stored program"],
+        "contributions": ["a fake contribution", "another fake contribution"],
+        "sections": [{"title": f"{role.replace('_', ' ').title()}", "role": role,
+                      "summary": f"The {role} section of the fake paper.", "n_pages": per} for role in roles],
+    }
+
+
+@register("RelatedWorkPlan")
+def related_work_plan(call: Any) -> dict:
+    found = cite_keys_in(call.user)
+    keys = [k for k in found if not k.startswith("web_")][:2] + [k for k in found if k.startswith("web_")][:2]
+    return {
+        "entries": [{"cite_key": k, "relation": "background", "summary": f"Source {i + 1} gives background."} for i, k in enumerate(keys)],
+        "positioning_statement": "This fake paper builds on the listed sources.",
+        "gaps": ["a gap the fake paper fills"],
+    }
+
+
+@register("PaperAbstract")
+def paper_abstract(call: Any) -> dict:
+    return {"abstract": "Fake generated content: this paper summarises its sections without new claims.", "keywords": ["fake", "paper"]}
+
+
+@register("BibEntry")
+def bib_entry(call: Any) -> dict:
+    name = first_match(re.compile(r"(?m)^File name:\s*(.+?)\s*$"), call.prompt) or "source"
+    stem = name.rsplit(".", 1)[0].replace("_", " ").title()
+    return {"entry_type": "report", "title": stem, "authors": ["Benchmark, Corpus"], "year": "2026", "venue": "", "publisher": "AutoGenBook", "url": "", "doi": ""}

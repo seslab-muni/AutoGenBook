@@ -1,0 +1,114 @@
+{
+ "edges": [
+  [
+   "book",
+   "1"
+  ],
+  [
+   "book",
+   "2"
+  ],
+  [
+   "book",
+   "3"
+  ],
+  [
+   "book",
+   "4"
+  ],
+  [
+   "book",
+   "5"
+  ],
+  [
+   "book",
+   "6"
+  ]
+ ],
+ "graph": {
+  "abstract": "Fake generated content: this paper summarises its sections without new claims.",
+  "additional_requirements": "Keep dates and attributions exactly as the sources state them; cite every factual claim.",
+  "citation_style": "bibtex",
+  "contributions": [
+   "a comparison of programming methods of early machines",
+   "an argument that conditional branching and stored instructions are the decisive features",
+   "a short chronology grounded in the provided sources"
+  ],
+  "do_consider_outline": true,
+  "do_consider_previous_sections": true,
+  "doc_type": "paper",
+  "engine": "engine",
+  "equation_frequency_level": 3,
+  "input_path": "<work>/paper_input.txt",
+  "input_sha256": "73aab6fa4505339a7f751089205e9983e8ac190eb0354fd08daaa410f0a149f0",
+  "keywords": [
+   "fake",
+   "paper"
+  ],
+  "language": "en",
+  "max_depth": 3,
+  "max_output_pages": 1.5,
+  "n_pages": 6.0,
+  "subdivision_complete": true,
+  "summary": "A short review paper arguing that keeping instructions in memory, rather than faster switching, is what turned early calculating machines into general-purpose computers. It traces the idea from the Analytical Engine's punched cards and conditional branching to the EDVAC report, the Manchester Baby and EDSAC. Keywords: history of computing, stored program, Analytical Engine, EDVAC, von Neumann architecture Research questions: Which design decisions separate programmable calculators from general-purpose computers? How did the stored-program idea emerge? Contributions: (1) a comparison of programming methods of early machines, (2) an argument that conditional branching and stored instructions are the decisive features, (3) a short chronology grounded in the provided sources Method: Qualitative comparison of machine designs described in the knowledge base. Notes: Keep dates and attributions exactly as the sources state them; cite every factual claim.",
+  "target_readers": "readers of arXiv",
+  "target_venue": "arXiv",
+  "title": "The Stored-Program Concept as the Turning Point of Early Computing"
+ },
+ "nodes": {
+  "1": {
+   "content_file_path": "<work>/out/sections/1.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "introduction",
+   "summary": "The introduction section of the fake paper.",
+   "title": "Introduction"
+  },
+  "2": {
+   "content_file_path": "<work>/out/sections/2.md",
+   "n_pages": 0.9,
+   "needsSubdivision": false,
+   "role": "related_work",
+   "summary": "Prior work in the verified sources, organised by theme, and how this paper relates to it.",
+   "title": "Related Work"
+  },
+  "3": {
+   "content_file_path": "<work>/out/sections/3.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "method",
+   "summary": "The method section of the fake paper.",
+   "title": "Method"
+  },
+  "4": {
+   "content_file_path": "<work>/out/sections/4.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "results",
+   "summary": "The results section of the fake paper.",
+   "title": "Results"
+  },
+  "5": {
+   "content_file_path": "<work>/out/sections/5.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "discussion",
+   "summary": "The discussion section of the fake paper.",
+   "title": "Discussion"
+  },
+  "6": {
+   "content_file_path": "<work>/out/sections/6.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "conclusion",
+   "summary": "The conclusion section of the fake paper.",
+   "title": "Conclusion"
+  },
+  "book": {
+   "n_pages": 6.0,
+   "needsSubdivision": true,
+   "summary": "A short review paper arguing that keeping instructions in memory, rather than faster switching, is what turned early calculating machines into general-purpose computers. It traces the idea from the Analytical Engine's punched cards and conditional branching to the EDVAC report, the Manchester Baby and EDSAC. Keywords: history of computing, stored program, Analytical Engine, EDVAC, von Neumann architecture Research questions: Which design decisions separate programmable calculators from general-purpose computers? How did the stored-program idea emerge? Contributions: (1) a comparison of programming methods of early machines, (2) an argument that conditional branching and stored instructions are the decisive features, (3) a short chronology grounded in the provided sources Method: Qualitative comparison of machine designs described in the knowledge base. Notes: Keep dates and attributions exactly as the sources state them; cite every factual claim.",
+   "title": "The Stored-Program Concept as the Turning Point of Early Computing"
+  }
+ }
+}

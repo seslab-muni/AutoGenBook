@@ -20,6 +20,7 @@ GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
 UPDATE = os.environ.get("ENGINE_UPDATE_GOLDEN") == "1"
 SKIP_NAMES = {"run_meta.json", "llm_usage.jsonl", "events.jsonl"}
 SKIP_DIRS = {".kb_cache", "logs"}
+VOLATILE_KEYS = ("created_at", "started_at", "finished_at")  # wall-clock stamps in top-level JSON objects
 SKIP_SUFFIXES = {".bak", ".pdf", ".tex", ".log", ".pptx", ".mp3", ".wav"}
 
 
@@ -45,6 +46,9 @@ def snapshot(out_dir: Path, work_dir: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
         if path.suffix == ".json":
             data = _relativize(json.loads(text), work)
+            if isinstance(data, dict):
+                for volatile in VOLATILE_KEYS:
+                    data.pop(volatile, None)
             if path.name == "kb_sources.json" and isinstance(data.get("page_keys"), dict):
                 # page_keys (old-engine derived index) hash the absolute source path.
                 data["page_keys"] = {re.sub(r"_[0-9a-f]{8}_", "_<hash>_", k): v for k, v in data["page_keys"].items()}

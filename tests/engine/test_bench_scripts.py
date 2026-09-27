@@ -54,3 +54,14 @@ def test_relevance_normalisation() -> None:
     assert bench.is_relevant("the von Neumann archi-\ntecture was", "von neumann architecture")
     assert bench.is_relevant("Příliš ŽLUŤOUČKÝ kůň", "prilis zlutoucky")
     assert not bench.is_relevant("abc", "abd")
+
+
+def test_bench_engines_paper_mode_argv(tmp_path) -> None:
+    bench = _load("bench_engines")
+    spec = bench.prepare_work_dir(REPO_ROOT / "input" / "bench" / "en_paper", tmp_path / "w")
+    assert spec["mode"] == "paper" and (tmp_path / "w" / "paper_input.txt").is_file()
+    book = ["py", "run_engine.py", "--mode", "book", "-i", str(tmp_path / "w" / "book_input.txt"), "-o", "out", "--use-txt", "--export-tex"]
+    argv = bench._mode_argv(book, spec, tmp_path / "w", "latex")
+    assert argv[2:6] == ["--mode", "paper", "-i", str(tmp_path / "w" / "paper_input.txt")]
+    assert "--export-tex" not in argv and argv[-1] == "--no-pdf"
+    assert bench._mode_argv(book, spec, tmp_path / "w", "markdown")[-2:] == ["--no-tex", "--no-pdf"]

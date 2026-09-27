@@ -234,10 +234,15 @@ class BookRun:
             "glossary": self.task_glossary,
             "consistency": self.task_consistency,
         }
+        table.update(self.extra_runners())
         if kind in table:
             return table[kind]
         stage = {"draft": self.task_draft, "review": self.task_review, "revise": self.task_revise, "length": self.task_length}[kind]
         return lambda: stage(key)  # type: ignore[arg-type]
+
+    def extra_runners(self) -> dict[str, Any]:
+        """Task kinds a document type adds to the DAG (kind -> coroutine factory)."""
+        return {}
 
     def _on_failure(self, task: Task, exc: BaseException) -> None:
         if isinstance(exc, asyncio.CancelledError):
@@ -456,6 +461,7 @@ class BookRun:
             context = ctx.text or "(none)"
         values = {
             "language_name": language_name(self.language),
+            "document_kind": self.doc_type,
             "book_title": graph.nodes[ROOT].get("title", ""),
             "book_summary": _short(str(graph.nodes[ROOT].get("summary", "")), 1500),
             "target_readers": graph.attrs.get("target_readers", "") or "(not specified)",
@@ -564,8 +570,12 @@ class BookRun:
         )
         if glossary is not None:
             self.glossary = glossary
-        for spec in self.plan.tasks:
+        for spec in self.extend_plan(self.plan):
             self._add(spec)
+
+    def extend_plan(self, plan: GenerationPlan) -> list[TaskSpec]:
+        """Hook for document types to add tasks/dependencies to the generation plan."""
+        return list(plan.tasks)
 
     def _fp(self, key: str) -> str:
         assert self.graph is not None
@@ -588,9 +598,10 @@ class BookRun:
     async def task_glossary(self) -> None:
         assert self.graph is not None
         graph = self.graph
-        self.sink.emit("generate", "Writing the book glossary (terminology, notation, audience and tone)")
+        self.sink.emit("generate", f"Writing the {self.doc_type} glossary (terminology, notation, audience and tone)")
         values = {
             "language_name": language_name(self.language),
+            "document_kind": self.doc_type,
             "book_title": graph.nodes[ROOT].get("title", ""),
             "book_summary": _short(str(graph.nodes[ROOT].get("summary", "")), 2000),
             "target_readers": graph.attrs.get("target_readers", "") or "(not specified)",
@@ -693,9 +704,24 @@ class BookRun:
         keys = cited_keys(body, self.index)
         return f"{len(keys)} distinct cited key(s), all present in the knowledge base" if keys else "the draft cites nothing"
 
+    def reviewer_values(self, key: str, body: str, context: str) -> dict[str, Any]:
+        return {**self._common(key), "retrieved_context": context, "citation_check": self._citation_check(body), "section_body": body}
+
+    def writer_values(self, key: str, context: str) -> dict[str, Any]:
+        assert self.graph is not None
+        graph = self.graph
+        return {
+            **self._common(key),
+            "book_summary": _short(str(graph.nodes[ROOT].get("summary", "")), 1500),
+            "additional_requirements": graph.attrs.get("additional_requirements", "") or "(none)",
+            "equation_guidance": equation_guidance(graph.attrs.get("equation_frequency_level", 3)),
+            "outline": self._outline_for(key),
+            "heading_rule": heading_rule(graph, key),
+            "retrieved_context": context,
+        }
+
     async def _review_body(self, key: str, body: str, context: str) -> SectionReview:
-        values = {**self._common(key), "retrieved_context": context, "citation_check": self._citation_check(body), "section_body": body}
-        return await self.agents["reviewer"].run(self.ctx.llm, values, node_key=key)
+        return await self.agents["reviewer"].run(self.ctx.llm, self.reviewer_values(key, body, context), node_key=key)
 
     def _work(self, key: str, stage: str) -> dict[str, Any]:
         data = self.work.load(key, stage, self._fp(key))
@@ -714,15 +740,7 @@ class BookRun:
             if stale.exists():
                 stale.unlink()
         retrieved = await self._retrieve(key, self._queries(key))
-        values = {
-            **self._common(key),
-            "book_summary": _short(str(graph.nodes[ROOT].get("summary", "")), 1500),
-            "additional_requirements": graph.attrs.get("additional_requirements", "") or "(none)",
-            "equation_guidance": equation_guidance(graph.attrs.get("equation_frequency_level", 3)),
-            "outline": self._outline_for(key),
-            "heading_rule": heading_rule(graph, key),
-            "retrieved_context": retrieved.text or "(none)",
-        }
+        values = self.writer_values(key, retrieved.text or "(none)")
         draft = await self.agents["writer"].run(self.ctx.llm, values, node_key=key)
         body = clean_body(draft.body_markdown, str(node.get("title", "")), graph, key, self.index)
         if not body.strip():
@@ -751,6 +769,7 @@ class BookRun:
                     context = _merge_context(context, extra.text, self.cfg.retrieval.max_chars_total * 2)
             values = {
                 **self._common(key),
+                "document_kind": self.doc_type,
                 "heading_rule": heading_rule(self.graph, key),
                 "retrieved_context": context,
                 "review_json": dumps(review.model_dump()),
@@ -779,6 +798,7 @@ class BookRun:
                 break
             values = {
                 "language_name": language_name(self.language),
+                "document_kind": self.doc_type,
                 "node_key": key,
                 "section_title": node.get("title", ""),
                 "direction": "Shorten" if actual > high else "Expand",
@@ -855,6 +875,7 @@ class BookRun:
         self.sink.emit("generate", f"Consistency pass over {len(overview)} sections")
         values = {
             "language_name": language_name(self.language),
+            "document_kind": self.doc_type,
             "book_title": graph.nodes[ROOT].get("title", ""),
             "glossary": glossary_text(self.glossary, 2500),
             "sections": "\n".join(overview),
@@ -911,6 +932,7 @@ class BookRun:
         review = SectionReview(ok_to_keep=False, issues=issues)
         values = {
             **self._common(key),
+            "document_kind": self.doc_type,
             "heading_rule": heading_rule(self.graph, key),
             "retrieved_context": "(the section's citations stay valid; do not add new ones)",
             "review_json": dumps(review.model_dump()),
@@ -935,7 +957,8 @@ class BookRun:
         if not isinstance(data, dict):
             data = {"cite_keys": {}, "rids": {}, "page_keys": {}, "chunks": []}
         for ref in self.web_refs.values():
-            entry = {"source_path": ref.url, "loc": ref.url.split("/")[2] if "://" in ref.url else ref.url, "excerpt": ref.excerpt}
+            entry = {"source_path": ref.url, "loc": ref.url.split("/")[2] if "://" in ref.url else ref.url, "excerpt": ref.excerpt,
+                     "kind": "web", "title": ref.title, "url": ref.url, "doi": ref.doi}
             data.setdefault("cite_keys", {})[ref.key] = entry
             if ref.rid:
                 data.setdefault("rids", {})[ref.rid] = entry

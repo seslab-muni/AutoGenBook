@@ -119,11 +119,13 @@ RUN_ENGINE = REPO_ROOT / "run_engine.py"
 
 
 def make_work_dir(tmp_path: Path, *, bench: str = "en_book", name: str = "run", with_kb: bool = True) -> Path:
-    """A run work dir laid out like `GenerationService` does: book_input.txt,
-    kb/<source_id>/<file>."""
+    """A run work dir laid out like `GenerationService` does: book_input.txt
+    (or the bench's `input_file`), kb/<source_id>/<file>."""
     work = tmp_path / name
     work.mkdir(parents=True)
-    _shutil.copyfile(BENCH / bench / "book_input.txt", work / "book_input.txt")
+    spec = json.loads((BENCH / bench / "bench.json").read_text(encoding="utf-8"))
+    input_file = spec.get("input_file", "book_input.txt")
+    _shutil.copyfile(BENCH / bench / input_file, work / input_file)
     if with_kb:
         _shutil.copytree(BENCH / bench / "kb", work / "kb")
     return work

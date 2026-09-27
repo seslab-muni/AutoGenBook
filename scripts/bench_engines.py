@@ -1,6 +1,7 @@
 """Engine benchmark: run the old and/or the new engine on the same inputs and compare.
 
-Each run gets a fresh work dir laid out like the API's (`book_input.txt`,
+Each run gets a fresh work dir laid out like the API's (`book_input.txt`, or
+the bench's `input_file` for a `"mode": "paper"` bench,
 `kb/<source_id>/<file>`, optional `out/book_structure.json`) and is started with
 the exact argv/env/cwd the API uses (`api/infrastructure/cli/book_command.py:
 build_command`) through the API's own process driver
@@ -102,15 +103,29 @@ def prepare_work_dir(template: Path, dest: Path) -> dict[str, Any]:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    shutil.copy2(template / "book_input.txt", dest / "book_input.txt")
+    bench = json.loads((template / "bench.json").read_text(encoding="utf-8")) if (template / "bench.json").exists() else {}
+    input_file = bench.get("input_file", "book_input.txt")
+    shutil.copy2(template / input_file, dest / input_file)
     if (template / "kb").is_dir():
         shutil.copytree(template / "kb", dest / "kb")
-    bench = json.loads((template / "bench.json").read_text(encoding="utf-8")) if (template / "bench.json").exists() else {}
     if (template / "book_structure.json").exists():
         (dest / "out").mkdir(exist_ok=True)
         shutil.copy2(template / "book_structure.json", dest / "out" / "book_structure.json")
         bench.setdefault("outline", "project")
     return bench
+
+
+def _mode_argv(argv: list[str], bench: dict[str, Any], work_dir: Path, output_format: str) -> list[str]:
+    """The API only builds book argv; other modes reuse it with the old CLI's
+    `--mode <mode> -i <input>` (both engines accept that) and that mode's
+    output switches (paper writes .tex/.pdf unless told not to)."""
+    mode = bench["mode"]
+    out = list(argv)
+    out[out.index("--mode") + 1] = mode
+    out[out.index("-i") + 1] = str(work_dir / bench.get("input_file", f"{mode}_input.txt"))
+    out = [a for a in out if a not in {"--export-tex", "--no-tex", "--no-pdf"}]
+    out += {"markdown": ["--no-tex", "--no-pdf"], "latex": ["--no-pdf"]}.get(output_format, [])
+    return out
 
 
 def run_one(
@@ -137,6 +152,8 @@ def run_one(
     argv, env, cwd = book_command.build_command(
         work_dir, options, settings, author=os.environ.get("AUTOGENBOOK_BOOK_AUTHOR", "Benchmark")
     )
+    if bench.get("mode", "book") != "book":
+        argv = _mode_argv(argv, bench, work_dir, options.output_format)
     if engine == "new":
         if concurrency is not None:
             argv += ["--concurrency", str(concurrency)]

@@ -19,6 +19,19 @@ def bib_key(key: str) -> str:
     return cleaned or "ref"
 
 
+_VERBATIM = {"url", "doi"}  # typeset through \url/\doi: escaping would print the backslashes
+
+
+def field_value(name: str, value: str) -> str:
+    if name in _VERBATIM:
+        return value.replace("{", "%7B").replace("}", "%7D").replace(" ", "%20")
+    return escape(value)
+
+
+def format_entry(kind: str, key: str, fields: list[tuple[str, str]]) -> str:
+    body = ",\n".join(f"  {name} = {{{field_value(name, str(value))}}}" for name, value in fields if value)
+    return f"@{kind}{{{bib_key(key)},\n{body}\n}}"
+
 
 def entry(key: str, ref: Reference | None) -> str:
     fields: list[tuple[str, str]] = []
@@ -26,7 +39,7 @@ def entry(key: str, ref: Reference | None) -> str:
         kind = "misc"
         fields = [("title", f"Unresolved citation: {key}"), ("howpublished", "Unresolved citation")]
     elif ref.kind == "web" or ref.url or ref.doi:
-        kind = "article" if (ref.venue or ref.doi) else "misc"
+        kind = "article" if ref.venue else "misc"
         fields = [("title", ref.title or ref.url)]
         if ref.authors:
             fields.append(("author", " and ".join(ref.authors)))
@@ -38,8 +51,7 @@ def entry(key: str, ref: Reference | None) -> str:
             fields.append(("doi", ref.doi))
         if ref.url:
             fields.append(("url", ref.url))
-        if ref.verified is not None:
-            fields.append(("note", "verified" if ref.verified else "unverified"))
+            fields.append(("howpublished", ref.url.split("/")[2] if "://" in ref.url else ref.url))
     else:
         kind = "misc"
         name = ref.file_name or key
@@ -48,8 +60,7 @@ def entry(key: str, ref: Reference | None) -> str:
         note = "; ".join(p for p in (f"RID={ref.rid}" if ref.rid else "", f"loc={ref.loc}" if ref.loc else "") if p)
         if note:
             fields.append(("note", note))
-    body = ",\n".join(f"  {name} = {{{escape(value)}}}" for name, value in fields if value)
-    return f"@{kind}{{{bib_key(key)},\n{body}\n}}"
+    return format_entry(kind, key, fields)
 
 
 def write_bib(path: Path, numbering: Numbering) -> Path:

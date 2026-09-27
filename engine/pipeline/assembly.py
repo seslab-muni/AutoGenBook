@@ -7,15 +7,43 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from engine.assemble.audit import AuditReport, audit_sections
 from engine.assemble.bibtex import write_bib
-from engine.assemble.citations import CitationIndex, Reference
+from engine.assemble.citations import CitationIndex, Numbering, Reference, bibliography_lines, resolve_numeric
 from engine.assemble.latex import LatexError, compile_pdf, markdown_to_latex
 from engine.assemble.markdown import AssembledDocument, assemble_document, markdown_for_humans
 from engine.graph.doc_graph import DocGraph
 from engine.pipeline.context import RunContext
 from engine.util.fs import atomic_write_text, read_json, safe_filename
+
+Resolver = Callable[[str, Numbering, str], str]
+Bibliography = Callable[[Numbering, str], list[str]]
+
+
+@dataclass
+class AssemblyStyle:
+    """How a document type renders citations and LaTeX. The defaults are the
+    book's: numbered references per cited passage, a bibliography section, the
+    `book.latex` template with chapters."""
+
+    template: str = "book.latex"
+    top_level: str = "chapter"
+    documentclass: str | None = None
+    group: Callable[[CitationIndex], Callable[[str], str]] | None = None
+    md_resolve: Resolver = resolve_numeric
+    md_bibliography: Bibliography | None = bibliography_lines
+    tex_resolve: Resolver | None = None  # None: same body as the Markdown
+    tex_bibliography: Bibliography | None = bibliography_lines
+    bib_writer: Callable[[Path, Numbering], object] = write_bib
+    bibtex: bool = False  # run bibtex between LuaLaTeX passes
+    front_matter: list[str] = field(default_factory=list)
+    tex_front_matter: list[str] | None = None  # None: same as front_matter
+    latex_vars: dict[str, str] = field(default_factory=dict)
+    abstract: str | None = None
+    toc: bool = True
+    check_numeric_claims: bool = False
 
 
 @dataclass
@@ -30,7 +58,11 @@ class AssemblyOutcome:
 def load_citation_index(ctx: RunContext, extra: list[Reference] | None = None) -> CitationIndex:
     index = CitationIndex.from_kb_sources(read_json(ctx.paths.kb_sources))
     for ref in extra or []:
-        index.add(ref)
+        # Web references known to this run carry more detail than their
+        # kb_sources.json entry: they replace it.
+        index.by_key[ref.key] = ref
+        if ref.rid:
+            index.rid_to_key[ref.rid] = ref.key
     return index
 
 
@@ -51,21 +83,23 @@ async def assemble_outputs(
     *,
     language: str,
     author: str,
-    template: str = "book.latex",
-    top_level: str = "chapter",
-    documentclass: str | None = None,
-    front_matter: list[str] | None = None,
-    abstract: str | None = None,
-    check_numeric_claims: bool = False,
     extra_refs: list[Reference] | None = None,
-    bibtex_in_pdf: bool = False,
+    style: AssemblyStyle | None = None,
 ) -> AssemblyOutcome:
     cfg = ctx.config
     sink = ctx.sink
+    style = style or AssemblyStyle()
     outcome = AssemblyOutcome()
     index = load_citation_index(ctx, extra_refs)
+
+    def numbering() -> Numbering:
+        return Numbering(index, style.group(index) if style.group else None)
+
     t0 = time.perf_counter()
-    doc = assemble_document(graph, cfg.out_dir, index=index, language=language, author=author, front_matter=front_matter)
+    doc = assemble_document(
+        graph, cfg.out_dir, index=index, language=language, author=author, front_matter=style.front_matter,
+        numbering=numbering(), resolve=style.md_resolve, bibliography=style.md_bibliography,
+    )
     outcome.document = doc
     for key in doc.missing:
         sink.emit("markdown", f"Section '{graph.title(key)}' ({key}) has no content; left empty in the document", level="warning", node_key=key)
@@ -76,13 +110,13 @@ async def assemble_outputs(
         outcome.outputs.append(md_path)
         sink.emit("markdown", f"Markdown document written: {md_path.name} ({len(doc.sections)} sections, {len(doc.numbering.numbers)} references) in {_duration(time.perf_counter() - t0)}")
     if doc.numbering.numbers and (cfg.tex_output or cfg.pdf_output or cfg.mode == "paper"):
-        write_bib(cfg.out_dir / "refs.bib", doc.numbering)
+        style.bib_writer(cfg.out_dir / "refs.bib", doc.numbering)
         outcome.outputs.append(cfg.out_dir / "refs.bib")
 
     if cfg.audit_enabled:
         report = audit_sections(
             doc.sections, index=index, out_dir=cfg.out_dir, mode=cfg.audit_mode, missing=doc.missing,
-            check_numeric_claims=check_numeric_claims,
+            check_numeric_claims=style.check_numeric_claims,
         )
         report.dump(cfg.out_dir / "audit_report.json")
         outcome.audit = report
@@ -93,23 +127,34 @@ async def assemble_outputs(
 
     if not (cfg.tex_output or cfg.pdf_output):
         return outcome
+    tex_doc = doc
+    if style.tex_resolve is not None or style.tex_bibliography is not style.md_bibliography or style.tex_front_matter is not None:
+        tex_doc = assemble_document(
+            graph, cfg.out_dir, index=index, language=language, author=author,
+            front_matter=style.front_matter if style.tex_front_matter is None else style.tex_front_matter,
+            numbering=numbering(), resolve=style.tex_resolve or style.md_resolve, bibliography=style.tex_bibliography,
+        )
     t0 = time.perf_counter()
     tex_dir = cfg.out_dir if cfg.tex_output else Path(tempfile.mkdtemp(prefix="engine_tex_"))
     tex_path = tex_dir / f"{stem}.tex"
+    if not cfg.tex_output and (cfg.out_dir / "refs.bib").exists():
+        (tex_dir / "refs.bib").write_bytes((cfg.out_dir / "refs.bib").read_bytes())
     try:
         await asyncio.to_thread(
             markdown_to_latex,
-            doc.body_markdown,
+            tex_doc.body_markdown,
             tex_path,
             title=doc.title,
             author=author,
             language=language,
-            template=template,
-            top_level=top_level,
-            documentclass=documentclass,
-            raw_tex=doc.legacy_tex,
+            template=style.template,
+            top_level=style.top_level,
+            documentclass=style.documentclass,
+            raw_tex=doc.legacy_tex or style.tex_resolve is not None,
             graphics_path=cfg.out_dir,
-            abstract=abstract,
+            abstract=style.abstract,
+            toc=style.toc,
+            extra_args=[arg for name, value in style.latex_vars.items() for arg in ("-V", f"{name}={value}")],
         )
     except LatexError as exc:
         outcome.pdf_failed = str(exc)
@@ -126,7 +171,7 @@ async def assemble_outputs(
     t0 = time.perf_counter()
     pdf_path = cfg.out_dir / f"{stem}.pdf"
     try:
-        result = await asyncio.to_thread(compile_pdf, tex_path, pdf_path, log_dir=ctx.paths.logs, bibtex=bibtex_in_pdf)
+        result = await asyncio.to_thread(compile_pdf, tex_path, pdf_path, log_dir=ctx.paths.logs, bibtex=style.bibtex)
     except LatexError as exc:
         outcome.pdf_failed = str(exc)
         sink.emit("pdf", f"PDF export failed: {exc}", level="warning")

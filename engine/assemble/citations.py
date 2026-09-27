@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 KEY_CHARS = r"A-Za-z0-9_.:\-"
 _BRACKET_RE = re.compile(
@@ -75,10 +75,25 @@ class CitationIndex:
                 )
             )
         for key, entry in (data.get("cite_keys") or {}).items():
-            if key not in index.by_key:
-                index.add(Reference(key=key, source_path=str(entry.get("source_path") or ""),
-                                    loc=str(entry.get("loc") or ""), excerpt=str(entry.get("excerpt") or "")))
+            if key in index.by_key:
+                continue
+            source = str(entry.get("source_path") or "")
+            if entry.get("kind") == "web" or key.startswith("web_") or source.startswith(("http://", "https://")):
+                # A web reference cited by a section (added after the KB entries).
+                index.add(Reference(key=key, kind="web", title=str(entry.get("title") or ""),
+                                    url=str(entry.get("url") or source), doi=str(entry.get("doi") or ""),
+                                    loc=str(entry.get("loc") or ""), excerpt=str(entry.get("excerpt") or ""), verified=True))
+                continue
+            index.add(Reference(key=key, source_path=source,
+                                loc=str(entry.get("loc") or ""), excerpt=str(entry.get("excerpt") or "")))
+        web_rids = {}
+        for key, ref in index.by_key.items():
+            if ref.kind == "web":
+                web_rids[ref.url] = key
         for rid, entry in (data.get("rids") or {}).items():
+            if rid.startswith("RID:web:") and str(entry.get("source_path") or "") in web_rids:
+                index.rid_to_key.setdefault(rid, web_rids[str(entry.get("source_path"))])
+                continue
             if rid not in index.rid_to_key:
                 index.add(Reference(key=rid, source_path=str(entry.get("source_path") or ""),
                                     loc=str(entry.get("loc") or ""), excerpt=str(entry.get("excerpt") or ""), rid=rid))
@@ -166,25 +181,56 @@ def cited_keys(text: str, index: CitationIndex | None = None) -> list[str]:
 
 
 class Numbering:
-    """Document-wide reference numbers in order of first citation."""
+    """Document-wide reference numbers in order of first citation.
 
-    def __init__(self, index: CitationIndex) -> None:
+    `group` maps a canonical key to the unit that gets a number: the identity
+    for books (one entry per cited passage, as the old engine did), the source
+    document for papers (`document_group`), so several passages of one source
+    share one bibliography entry."""
+
+    def __init__(self, index: CitationIndex, group: "Callable[[str], str] | None" = None) -> None:
         self.index = index
+        self.group = group or (lambda key: key)
         self.numbers: dict[str, int] = {}
+        self.members: dict[str, list[str]] = {}  # group -> canonical keys cited
         self.unknown: dict[str, list[str]] = {}  # key -> node keys citing it
 
     def number(self, token: str, node_key: str | None = None) -> int:
         key = self.index.canonical(token)
-        if key not in self.numbers:
-            self.numbers[key] = len(self.numbers) + 1
+        group = self.group(key)
+        if group not in self.numbers:
+            self.numbers[group] = len(self.numbers) + 1
+        members = self.members.setdefault(group, [])
+        if key not in members:
+            members.append(key)
         if not self.index.known(key):
             self.unknown.setdefault(key, [])
             if node_key and node_key not in self.unknown[key]:
                 self.unknown[key].append(node_key)
-        return self.numbers[key]
+        return self.numbers[group]
 
     def ordered(self) -> list[tuple[int, str, Reference | None]]:
-        return [(n, key, self.index.lookup(key)) for key, n in sorted(self.numbers.items(), key=lambda kv: kv[1])]
+        """(number, group key, a representative reference) in number order."""
+        out = []
+        for group, n in sorted(self.numbers.items(), key=lambda kv: kv[1]):
+            first = (self.members.get(group) or [group])[0]
+            out.append((n, group, self.index.lookup(first)))
+        return out
+
+
+def document_group(index: CitationIndex) -> "Callable[[str], str]":
+    """Group KB passages by their source document (`kb_<source_id>`)."""
+
+    def group(key: str) -> str:
+        ref = index.lookup(key)
+        rid = ref.rid if ref is not None else (key if key.startswith("RID:") else "")
+        if rid.startswith("RID:kb:"):
+            parts = rid.split(":")
+            if len(parts) >= 5:
+                return f"kb_{parts[2]}"
+        return key
+
+    return group
 
 
 def resolve_numeric(text: str, numbering: Numbering, node_key: str | None = None) -> str:

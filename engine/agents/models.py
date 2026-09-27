@@ -142,3 +142,47 @@ class ConsistencyPatch(BaseModel):
 class ConsistencyReport(BaseModel):
     findings: list[ConsistencyFinding] = Field(default_factory=list)
     patches: list[ConsistencyPatch] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------- paper
+class PaperSectionPlan(BaseModel):
+    title: str
+    role: str = Field("other", description="introduction | related_work | method | results | discussion | conclusion | other")
+    summary: str = ""
+    n_pages: float = 1.0
+
+
+class PaperOutline(BaseModel):
+    title: str
+    abstract_draft: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    contributions: list[str] = Field(default_factory=list)
+    sections: list[PaperSectionPlan] = Field(default_factory=list)
+
+
+class RelatedWorkEntry(BaseModel):
+    cite_key: str
+    relation: str = Field("background", description="supports | extends | contrasts | method | data | background")
+    summary: str = ""
+
+
+class RelatedWorkPlan(BaseModel):
+    entries: list[RelatedWorkEntry] = Field(default_factory=list)
+    positioning_statement: str = ""
+    gaps: list[str] = Field(default_factory=list)
+
+
+class PaperAbstract(BaseModel):
+    abstract: str
+    keywords: list[str] = Field(default_factory=list)
+
+
+class BibEntry(BaseModel):
+    entry_type: str = Field("misc", description="article | book | inproceedings | report | thesis | online | misc")
+    title: str = ""
+    authors: list[str] = Field(default_factory=list)
+    year: str = ""
+    venue: str = ""
+    publisher: str = ""
+    url: str = ""
+    doi: str = ""

@@ -1,0 +1,21 @@
+{
+ "consistency_patched": false,
+ "issues": [
+  {
+   "description": "Section 6 should give one more example.",
+   "required_fix": "Add a concrete example.",
+   "severity": "minor",
+   "type": "coverage"
+  },
+  {
+   "description": "Section 6 uses a synonym instead of the glossary term.",
+   "required_fix": "Use 'fake term'.",
+   "severity": "minor",
+   "type": "consistency:terminology"
+  }
+ ],
+ "ok_to_keep": true,
+ "retrieval_queries": [],
+ "revision_rounds": 1,
+ "suggested_edits": []
+}

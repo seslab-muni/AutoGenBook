@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from engine.assemble.citations import (
     CitationIndex,
@@ -126,8 +126,14 @@ def assemble_document(
     language: str,
     author: str = "",
     front_matter: list[str] | None = None,
+    numbering: Numbering | None = None,
+    resolve: "Callable[[str, Numbering, str], str]" = resolve_numeric,
+    bibliography: "Callable[[Numbering, str], list[str]] | None" = bibliography_lines,
 ) -> AssembledDocument:
-    numbering = Numbering(index)
+    """`resolve` renders a section's citation markers (numbered by default),
+    `bibliography` the closing reference list (None: no list, e.g. footnotes
+    or a BibTeX-driven LaTeX build)."""
+    numbering = numbering if numbering is not None else Numbering(index)
     title = str(graph.nodes.get(ROOT, {}).get("title") or graph.attrs.get("title") or "Book")
     doc = AssembledDocument(title=title, author=author, language=language, body_markdown="", numbering=numbering)
     parts: list[str] = list(front_matter or [])
@@ -150,10 +156,10 @@ def assemble_document(
         body = normalize_body(read_section(path), node_title, level)
         doc.sections.append((key, body))
         if body:
-            parts.append(resolve_numeric(body, numbering, key))
-    if numbering.numbers:
+            parts.append(resolve(body, numbering, key))
+    if numbering.numbers and bibliography is not None:
         parts.append(f"## {references_title(language)} {{.unnumbered}}")
-        parts.extend(bibliography_lines(numbering, language))
+        parts.extend(bibliography(numbering, language))
     doc.body_markdown = "\n\n".join(p for p in parts if p is not None) + "\n"
     return doc
 
