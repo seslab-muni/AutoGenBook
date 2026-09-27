@@ -4,14 +4,19 @@
   "node": null,
   "schema": "SlideNarration"
  },
- "2eabe19d30da2a27fea2": {
-  "content": "{\"body_markdown\": \"- Fake point 1 about Programs on cards, part 2 (3-2) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7]\\n- Fake point 2 about Programs on cards, part 2 (3-2) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1]\\n- Fake point 3 about Programs on cards, part 2 (3-2)\\n- **Key idea:** fake summary line for 3-2\", \"summary\": \"Slide 3-2 presents Programs on cards, part 2.\", \"citations_used\": [\"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7\", \"kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1\"]}",
-  "node": "3-2",
+ "1d512738ec1014c11d54": {
+  "content": "{\"body_markdown\": \"- Fake point 1 about Take-aways (5) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_4]\\n- Fake point 2 about Take-aways (5) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1]\\n- Fake point 3 about Take-aways (5)\\n- **Key idea:** fake summary line for 5\", \"summary\": \"Slide 5 presents Take-aways.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_4\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1\"]}",
+  "node": "5",
   "schema": "SlideDraft"
  },
- "3701180aedf66e83922a": {
+ "474a4718b9f4c03997a8": {
   "content": "{\"body_markdown\": \"- Fake point 1 about Programs on cards, part 1 (3-1) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3]\\n- Fake point 2 about Programs on cards, part 1 (3-1) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7]\\n- Fake point 3 about Programs on cards, part 1 (3-1)\\n- **Key idea:** fake summary line for 3-1\", \"summary\": \"Slide 3-1 presents Programs on cards, part 1.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7\"]}",
   "node": "3-1",
+  "schema": "SlideDraft"
+ },
+ "484f84c8f90962beca61": {
+  "content": "{\"body_markdown\": \"- Fake point 1 about Motivation (1) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1]\\n- Fake point 2 about Motivation (1) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1]\\n- Fake point 3 about Motivation (1)\\n- **Key idea:** fake summary line for 1\", \"summary\": \"Slide 1 presents Motivation.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1\"]}",
+  "node": "1",
   "schema": "SlideDraft"
  },
  "736843ba01ade3676d75": {
@@ -24,9 +29,9 @@
   "node": null,
   "schema": "SlideNarration"
  },
- "7bd4a303cb7e24b5e36c": {
-  "content": "{\"body_markdown\": \"- Fake point 1 about Mechanical engines (2) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1]\\n- Fake point 2 about Mechanical engines (2) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1]\\n- Fake point 3 about Mechanical engines (2)\\n- **Key idea:** fake summary line for 2\", \"summary\": \"Slide 2 presents Mechanical engines.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1\"]}",
-  "node": "2",
+ "862a0183433c32e4458c": {
+  "content": "{\"body_markdown\": \"- Fake point 1 about Stored programs (4) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3]\\n- Fake point 2 about Stored programs (4) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_3]\\n- Fake point 3 about Stored programs (4)\\n- **Key idea:** fake summary line for 4\", \"summary\": \"Slide 4 presents Stored programs.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_3\"]}",
+  "node": "4",
   "schema": "SlideDraft"
  },
  "8e764d7f96b92af590a7": {
@@ -34,24 +39,14 @@
   "node": null,
   "schema": "SlideNarration"
  },
- "9952290f9708ed9dda03": {
-  "content": "{\"body_markdown\": \"- Fake point 1 about Motivation (1) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1]\\n- Fake point 2 about Motivation (1) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1]\\n- Fake point 3 about Motivation (1)\\n- **Key idea:** fake summary line for 1\", \"summary\": \"Slide 1 presents Motivation.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1\"]}",
-  "node": "1",
-  "schema": "SlideDraft"
- },
- "a360154e40b6463ee4b8": {
-  "content": "{\"body_markdown\": \"- Fake point 1 about Take-aways (5) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_4]\\n- Fake point 2 about Take-aways (5) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1]\\n- Fake point 3 about Take-aways (5)\\n- **Key idea:** fake summary line for 5\", \"summary\": \"Slide 5 presents Take-aways.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_4\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1\"]}",
-  "node": "5",
-  "schema": "SlideDraft"
- },
  "a4696e7409dd4f8585d5": {
   "content": "{\"title\": \"From Calculating Machines to Stored Programs\", \"summary\": \"A fake talk in a few slides.\", \"audience\": \"students\", \"duration_minutes\": 10, \"style_guidance\": \"Plain and visual.\", \"slides\": [{\"title\": \"Motivation\", \"summary\": \"The fake slide about motivation.\", \"n_slides\": 1}, {\"title\": \"Mechanical engines\", \"summary\": \"The fake slide about mechanical engines.\", \"n_slides\": 1}, {\"title\": \"Programs on cards\", \"summary\": \"The fake slide about programs on cards.\", \"n_slides\": 2}, {\"title\": \"Stored programs\", \"summary\": \"The fake slide about stored programs.\", \"n_slides\": 1}, {\"title\": \"Take-aways\", \"summary\": \"The fake slide about take-aways.\", \"n_slides\": 1}]}",
   "node": null,
   "schema": "PresentationOutline"
  },
- "aeba2331e1703479c998": {
-  "content": "{\"body_markdown\": \"- Fake point 1 about Stored programs (4) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3]\\n- Fake point 2 about Stored programs (4) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_3]\\n- Fake point 3 about Stored programs (4)\\n- **Key idea:** fake summary line for 4\", \"summary\": \"Slide 4 presents Stored programs.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_3\"]}",
-  "node": "4",
+ "b12a82f46b582a10b77c": {
+  "content": "{\"body_markdown\": \"- Fake point 1 about Mechanical engines (2) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1]\\n- Fake point 2 about Mechanical engines (2) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1]\\n- Fake point 3 about Mechanical engines (2)\\n- **Key idea:** fake summary line for 2\", \"summary\": \"Slide 2 presents Mechanical engines.\", \"citations_used\": [\"kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1\", \"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1\"]}",
+  "node": "2",
   "schema": "SlideDraft"
  },
  "c278d30d39830854ecc0": {
@@ -68,6 +63,11 @@
   "content": "{\"narration\": \"Fake narration for slide 4, Programs on cards, part 1. It explains the points in plain spoken words for the audience.\"}",
   "node": null,
   "schema": "SlideNarration"
+ },
+ "e61a2090125b84ed8619": {
+  "content": "{\"body_markdown\": \"- Fake point 1 about Programs on cards, part 2 (3-2) [kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7]\\n- Fake point 2 about Programs on cards, part 2 (3-2) [kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1]\\n- Fake point 3 about Programs on cards, part 2 (3-2)\\n- **Key idea:** fake summary line for 3-2\", \"summary\": \"Slide 3-2 presents Programs on cards, part 2.\", \"citations_used\": [\"kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7\", \"kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1\"]}",
+  "node": "3-2",
+  "schema": "SlideDraft"
  },
  "fa1de4505c70a9056975": {
   "content": "{\"narration\": \"Fake narration for slide 5, Programs on cards, part 2. It explains the points in plain spoken words for the audience.\"}",

@@ -20,6 +20,7 @@ checks) goes through `self.http`, whose transport can be injected
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, TypeVar
@@ -34,10 +35,11 @@ from engine.events import EventSink
 from engine.llm.limiter import AdaptiveLimiter
 from engine.llm.pricing import Pricing
 from engine.llm.retry import THROTTLE_STATUS, backoff_seconds, is_transient, retry_after_seconds, status_of
-from engine.llm.structured import Level, extract_json, json_schema_for, looks_like_format_rejection, looks_unrelated_to_format, schema_instructions
+from engine.llm.structured import Level, extract_json, json_schema_for, looks_unrelated_to_format, names_response_format, schema_instructions
 from engine.llm.usage import UsageEntry, UsageLedger
 
 T = TypeVar("T")
+_BARE_JSON_RE = re.compile(r"(?:```(?:json)?\s*)?\{.*\}(?:\s*```)?", re.DOTALL)
 M = TypeVar("M", bound=BaseModel)
 
 
@@ -244,10 +246,13 @@ class LLMClient:
                     finish = choice.finish_reason if choice else None
                     if not text and message is not None and finish == "stop":
                         # Some reasoning parsers (vLLM without think tags) file a finished
-                        # answer under reasoning_content. A reply cut off by the output
-                        # limit is scratch work and is never used this way.
+                        # answer under reasoning_content. Only a bare JSON answer is taken
+                        # from there - never scratch work that merely contains a draft,
+                        # and never a reply cut off by the output limit.
                         extra = message.model_dump() if hasattr(message, "model_dump") else {}
-                        text = str(extra.get("reasoning_content") or extra.get("reasoning") or "")
+                        reasoning = str(extra.get("reasoning_content") or extra.get("reasoning") or "").strip()
+                        if _BARE_JSON_RE.fullmatch(reasoning):
+                            text = reasoning
                     p, c, t, _ = _usage_numbers(getattr(completion, "usage", None))
                     return ChatResult(text, model, p, c, t, choice.finish_reason if choice else None, rf_label)
                 outcome = await self._call(
@@ -326,7 +331,11 @@ class LLMClient:
                     break
                 except (openai.BadRequestError, openai.UnprocessableEntityError, openai.NotFoundError) as exc:
                     message = str(exc)
-                    downgrade = looks_like_format_rejection(message) or (probing and not looks_unrelated_to_format(message))
+                    # Settled models downgrade only on an explicit response_format
+                    # rejection; while probing, anything not clearly unrelated counts
+                    # (and is recorded only if the weaker level then succeeds).
+                    explicit = getattr(exc, "param", None) == "response_format" or names_response_format(message)
+                    downgrade = explicit or (probing and not looks_unrelated_to_format(message))
                     if level < Level.PROMPT and downgrade:
                         new_level = Level(level + 1)
                         self.sink.emit("info", f"Model {model} rejected response_format={level.label}; trying {new_level.label}", level="debug")

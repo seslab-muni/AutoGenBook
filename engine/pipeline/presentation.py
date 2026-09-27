@@ -225,12 +225,12 @@ class PresentationRun(BookRun):
         parts: list[str] = []
         parent = graph.parent.get(key)
         if parent and parent != ROOT:
-            parts.append(f"Part of: {graph.title(parent)} - {_short(str(graph.nodes[parent].get('summary', '')), 300)}")
+            parts.append(f"Part of: {graph.title(parent)} - {_short(strip_writing_instructions(str(graph.nodes[parent].get('summary', ''))), 300)}")
         for label, offset in (("Previous slide", -1), ("Next slide", 1)):
             index = position + offset
             if 0 <= index < len(self.leaf_order):
                 other = self.leaf_order[index]
-                parts.append(f"{label} ({graph.title(other)}): {_short(str(graph.nodes[other].get('summary', '')), 240)}")
+                parts.append(f"{label} ({graph.title(other)}): {_short(strip_writing_instructions(str(graph.nodes[other].get('summary', ''))), 240)}")
                 path = self.snapshot.get(other)
                 if path is None and self.cfg.context_mode == "chained" and offset == -1:
                     path = section_path(self.cfg.out_dir, other, graph.nodes[other])

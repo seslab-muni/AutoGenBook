@@ -144,13 +144,17 @@ class RetrievalService:
         allow_web: bool = False,
         node_title: str | None = None,
         node_key: str | None = None,
+        lexical_only: bool = False,
     ) -> RetrievedContext:
+        """`lexical_only` (outline and subdivision overviews): BM25 without
+        waiting for the KB's embeddings, so the structure phase runs while
+        `kb.embed` is still working."""
         k = k or self.settings.top_k
         items: list[RetrievalItem] = []
         if self.retriever is not None:
-            if not self._dense_ready:
+            if not self._dense_ready and not lexical_only:
                 await self.prepare_dense()
-            items = await self.retriever.search(queries, k=k, kb_sources=kb_sources)
+            items = await self.retriever.search(queries, k=k, kb_sources=kb_sources, use_dense=not lexical_only)
             if kb_sources is not None and not items and node_title is not None:
                 count = len(kb_sources)
                 self.sink.emit(

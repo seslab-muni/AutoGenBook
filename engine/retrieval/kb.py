@@ -215,12 +215,12 @@ class HybridRetriever:
             self._masks[key] = mask if mask is not None else np.ones(len(self.kb.chunks), dtype=bool)
         return self._masks[key]
 
-    async def _ranked(self, query: str, mask: np.ndarray | None) -> list[int]:
+    async def _ranked(self, query: str, mask: np.ndarray | None, *, use_dense: bool = True) -> list[int]:
         rankings: list[list[int]] = []
         if self.use_lexical and self.kb.lexical is not None:
             lang = detect_lang(query)
             rankings.append([i for i, _s in self.kb.lexical.search(query, lang=lang, top=self.candidates, mask=mask)])
-        if self.dense is not None:
+        if self.dense is not None and use_dense:
             try:
                 rankings.append([i for i, _s in await self.dense.search(query, top=self.candidates, mask=mask)])
             except Exception as exc:  # noqa: BLE001 - dense is an enhancement; lexical still answers
@@ -231,7 +231,8 @@ class HybridRetriever:
         return [i for i, _score in rrf(rankings)]
 
     async def search(
-        self, queries: Sequence[str], *, k: int = 6, kb_sources: Sequence[str] | None = None, diversify_sources: bool = True
+        self, queries: Sequence[str], *, k: int = 6, kb_sources: Sequence[str] | None = None, diversify_sources: bool = True,
+        use_dense: bool = True,
     ) -> list[RetrievalItem]:
         queries = [q for q in (q.strip() for q in queries) if q]
         if not self.kb.chunks or not queries or k <= 0:
@@ -239,7 +240,7 @@ class HybridRetriever:
         mask = self._mask(kb_sources)
         if mask is not None and not mask.any():
             return []
-        per_query = [await self._ranked(q, mask) for q in queries]
+        per_query = [await self._ranked(q, mask, use_dense=use_dense) for q in queries]
         fused = per_query[0] if len(per_query) == 1 else [i for i, _s in rrf(per_query)]
         fused = fused[: self.candidates]
         if not fused:

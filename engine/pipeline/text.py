@@ -111,8 +111,6 @@ def heading_rule(graph: DocGraph, key: str) -> str:
 
 
 _FENCE_WRAP_RE = re.compile(r"^\s*```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL | re.IGNORECASE)
-_LATEX_CITE_RE = re.compile(r"\\cite[pt]?\*?(?:\[[^\]]*\])?\{([^{}]*)\}")
-_FOOTNOTE_SOURCE_RE = re.compile(r"\\footnote\{\s*(?:Source|Zdroj)\s*:\s*([^{}]*)\}", re.IGNORECASE)
 
 
 def clean_body(body: str, title: str, graph: DocGraph, key: str, index: CitationIndex) -> str:
@@ -124,14 +122,30 @@ def clean_body(body: str, title: str, graph: DocGraph, key: str, index: Citation
     if match:
         text = match.group(1).strip()
 
-    def cite_repl(m: re.Match[str]) -> str:
-        keys = [index.canonical(k.strip()) for k in m.group(1).split(",") if k.strip()]
-        return "[" + "; ".join(keys) + "]" if keys else ""
-
-    text = _LATEX_CITE_RE.sub(cite_repl, text)
-    text = _FOOTNOTE_SOURCE_RE.sub(cite_repl, text)
+    text = single_key_citations(text, index)
     level = min(6, graph.depth(key) + 1)
     return normalize_body(text, title, level)
+
+
+def single_key_citations(text: str, index: CitationIndex) -> str:
+    """Every citation marker outside code becomes one `[cite_key]` bracket per
+    key, separated by spaces: `\\cite{a,b}`, `\\footnote{Source: RID:...}` and
+    `[a; b]` alike. The API's importer (`graph_import._CITATION_TOKEN_RE`)
+    reads single-key brackets only; code spans and blocks are left alone."""
+    out: list[str] = []
+    pos = 0
+    for match in find_citations(text, index):
+        keys = list(dict.fromkeys(index.canonical(k) for k in match.keys))
+        if match.form == "bracket" and keys == match.keys and len(keys) == 1:
+            continue
+        before = text[pos : match.start]
+        rendered = " ".join(f"[{k}]" for k in keys)
+        if match.form == "footnote" and before and not before.endswith((" ", "\n")):
+            rendered = " " + rendered
+        out += [before, rendered]
+        pos = match.end
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def invalid_citations(body: str, index: CitationIndex) -> list[str]:
@@ -157,7 +171,7 @@ def strip_citations(body: str, tokens: Iterable[str], index: CitationIndex | Non
         out.append(body[pos : match.start])
         kept = [k.strip() for k in match.keys if k.strip() not in drop]
         if kept:
-            out.append("[" + "; ".join(kept) + "]")
+            out.append(" ".join(f"[{k}]" for k in kept))
         elif out and out[-1].endswith(" "):
             out[-1] = out[-1].rstrip(" ")
         pos = match.end

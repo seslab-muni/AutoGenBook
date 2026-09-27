@@ -7,6 +7,6 @@
  "book.subdivide": 6,
  "book.writer": 12,
  "embed.documents": 2,
- "embed.query": 36,
+ "embed.query": 28,
  "rerank": 24
 }

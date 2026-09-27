@@ -222,9 +222,9 @@ class BookRun:
         elif assembly.audit_blocked:
             outcome.exit_code = EXIT_AUDIT
             outcome.error = "Book audit failed in strict mode. See audit_report.json for details."
-        elif assembly.pdf_failed and cfg.pdf_output:
+        elif assembly.pdf_failed and (cfg.pdf_output or cfg.tex_output):
             outcome.exit_code = EXIT_FAILURE
-            outcome.error = f"PDF export failed: {assembly.pdf_failed}"
+            outcome.error = f"{'PDF' if cfg.pdf_output else 'LaTeX'} export failed: {assembly.pdf_failed}"
         elif assembly.export_failed:
             outcome.exit_code = EXIT_FAILURE
             outcome.error = assembly.export_failed
@@ -246,6 +246,18 @@ class BookRun:
         `_prepare_leaves`, so content-lock sources are kept.)"""
         _clear_dir(self.paths.work / "work")
         self.meta.reset()
+        for stale in self.full_run_artifacts():
+            if stale.exists():
+                stale.unlink()
+
+    def full_run_artifacts(self) -> list[Path]:
+        """Cached per-run artifacts a full run must regenerate, not reuse."""
+        return [self.paths.glossary, self.cfg.out_dir / "consistency_report.json"]
+
+    def raise_if_fail_fast(self, exc: BaseException) -> None:
+        """`--fail-fast-schema` inside passes that collect per-item failures."""
+        if self.cfg.fail_fast_schema and isinstance(exc, SchemaError):
+            raise exc
 
     def needs_split(self, node: dict[str, Any], max_pages: float) -> bool:
         return bool(node.get("needsSubdivision")) or float(node.get("n_pages", 1.0)) >= max_pages
@@ -378,7 +390,7 @@ class BookRun:
     async def kb_overview(self, query: str, limit: int = 3500) -> str:
         if self.retrieval.retriever is None:
             return "(no knowledge base)"
-        context = await self.retrieval.context([query], k=6)
+        context = await self.retrieval.context([query], k=6, lexical_only=True)
         text = context.text or "(nothing relevant found)"
         return text if len(text) <= limit else text[:limit] + "..."
 
@@ -500,6 +512,7 @@ class BookRun:
                 if isinstance(result, BaseException):
                     if isinstance(result, asyncio.CancelledError):
                         raise result
+                    self.raise_if_fail_fast(result)
                     self.sink.emit("subdivide", f"Could not subdivide '{graph.title(key)}' ({str(result)[:200]}); kept as one section", level="warning", node_key=key)
                     graph.nodes[key]["needsSubdivision"] = False
                 else:
@@ -521,7 +534,7 @@ class BookRun:
         context = "(none)"
         if self.retrieval.retriever is not None:
             ctx = await self.retrieval.context([f"{node.get('title', '')}\n{strip_writing_instructions(str(node.get('summary', '')))}"],
-                                               kb_sources=resolve_kb_sources(graph, key), k=6)
+                                               kb_sources=resolve_kb_sources(graph, key), k=6, lexical_only=True)
             context = ctx.text or "(none)"
         values = {
             "language_name": language_name(self.language),
@@ -564,9 +577,12 @@ class BookRun:
         total = len(self.leaf_order)
         statuses: list[LeafStatus] = []
         changed = False
+        # Read every lock source before writing any: a source may be another
+        # leaf's section file (e.g. keys shifted after an inserted chapter).
+        lock_data = {key: self._read_lock(key, graph.nodes[key]) for key in self.leaf_order if graph.nodes[key].get("content_locked")}
         for position, key in enumerate(self.leaf_order, start=1):
             node = graph.nodes[key]
-            locked = self._materialize_lock(key, node)
+            locked = self._materialize_lock(key, node, lock_data.get(key))
             if locked is not None:
                 self.locked.add(key)
                 self.snapshot[key] = locked
@@ -625,9 +641,20 @@ class BookRun:
                 except OSError:
                     pass
 
-    def _materialize_lock(self, key: str, node: dict[str, Any]) -> Path | None:
-        """Content lock (issue #113): copy `content_file` byte for byte to
-        `sections/<key>.md`; fail open with a [WARN] when it cannot be read."""
+    def _materialize_lock(self, key: str, node: dict[str, Any], data: bytes | None) -> Path | None:
+        """Content lock (issue #113): write the lock's text (read beforehand by
+        `_read_lock`) byte for byte to `sections/<key>.md`."""
+        if data is None:
+            return None
+        target = self.paths.section(key)
+        if not (target.exists() and target.read_bytes() == data):
+            atomic_write_bytes(target, data)
+        node["content_file_path"] = str(target.resolve())
+        return target
+
+    def _read_lock(self, key: str, node: dict[str, Any]) -> bytes | None:
+        """The `content_file` bytes of a content-locked leaf; fail open with a
+        [WARN] (the leaf is generated) when it cannot be read."""
         if not node.get("content_locked"):
             return None
         title = node.get("title", "") or "(untitled)"
@@ -646,11 +673,7 @@ class BookRun:
         if not data.strip():
             self.sink.emit("generate", f"Section '{title}' is content-locked but '{source.name}' is empty; generating it instead.", level="warning", node_key=key)
             return None
-        target = self.paths.section(key)
-        if not (target.exists() and target.read_bytes() == data):
-            atomic_write_bytes(target, data)
-        node["content_file_path"] = str(target.resolve())
-        return target
+        return data
 
     def _add_generation(self, statuses: list[LeafStatus], kb_tasks: list[str]) -> None:
         glossary = self._load_glossary()
@@ -677,8 +700,14 @@ class BookRun:
         return fingerprint(node.get("title"), node.get("summary"), node.get("n_pages"), self.language, self.cfg.context_mode)
 
     def _glossary_fp(self) -> str:
+        """The glossary depends on the whole brief: titles and summaries of the
+        outline, readers, requirements and language."""
         assert self.graph is not None
-        return fingerprint([self.graph.nodes[k].get("title") for k in self.graph.dfs()], self.language)
+        attrs = self.graph.attrs
+        return fingerprint(
+            [(self.graph.nodes[k].get("title"), self.graph.nodes[k].get("summary")) for k in self.graph.dfs()],
+            attrs.get("target_readers"), attrs.get("additional_requirements"), self.language,
+        )
 
     def _load_glossary(self) -> Glossary | None:
         data = read_json(self.paths.glossary)
@@ -995,6 +1024,7 @@ class BookRun:
             if isinstance(result, BaseException):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
+                self.raise_if_fail_fast(result)
                 self.sink.emit("generate", f"Consistency patch for {patch.node_key} failed: {str(result)[:200]}", level="warning", node_key=patch.node_key)
             else:
                 self.patched.append(patch.node_key)

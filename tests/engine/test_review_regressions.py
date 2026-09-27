@@ -355,3 +355,189 @@ def test_paper_at_signs_and_legacy_tex_citations(tmp_path: Path) -> None:
     assert export.exit_code == 0, export.text
     tex = tex_path.read_text(encoding="utf-8")
     assert "\\begin{tabular}{l}Result \\citep{kb_" in tex and "[@" not in tex
+
+
+# ------------------------------------------------------- third review round
+def test_moved_and_changed_input_regenerates_the_outline(tmp_path: Path) -> None:
+    import shutil
+
+    work = make_work_dir(tmp_path)
+    argv = lambda w: ["--mode", "book", "-i", str(w / "book_input.txt"), "-o", str(w / "out"), "--kb-dir", str(w / "kb"), "--no-tex", "--no-pdf"]  # noqa: E731
+    assert run_cli(argv(work) + ["--use-txt"], fake=FakeLLM(), env=engine_env(tmp_path)).exit_code == 0
+    moved = tmp_path / "moved"
+    shutil.copytree(work, moved)
+    (moved / "book_input.txt").write_text((moved / "book_input.txt").read_text(encoding="utf-8") + "\nAdditional requirements: x.\n", encoding="utf-8")
+    fake = FakeLLM()
+    assert run_cli(argv(moved) + ["--resume"], fake=fake, env=engine_env(tmp_path)).exit_code == 0
+    assert len(fake.chat_calls("BookOutline")) == 1
+
+
+def test_sections_use_single_key_brackets_the_api_imports(tmp_path: Path) -> None:
+    from api.application.graph_import import _extract_citations
+
+    from engine.pipeline.text import single_key_citations
+
+    index = CitationIndex.from_kb_sources({"chunks": [{"cite_key": k, "rid": f"RID:kb:{k}", "source_path": f"/k/{k}.md"} for k in ("kb_a_1", "kb_b_2")]})
+    body = "Claim [kb_a_1; kb_b_2]. Also \\cite{kb_a_1,kb_b_2}.\n\n```latex\nAs shown \\cite{knuth84} and [kb_a_1; kb_b_2].\n```\nInline `\\cite{x}`."
+    out = single_key_citations(body, index)
+    assert out.startswith("Claim [kb_a_1] [kb_b_2]. Also [kb_a_1] [kb_b_2].")
+    assert "As shown \\cite{knuth84} and [kb_a_1; kb_b_2]." in out and "`\\cite{x}`" in out  # code untouched
+    kb = {"cite_keys": {"kb_a_1": {"source_path": "/k/a.md"}, "kb_b_2": {"source_path": "/k/b.md"}}}
+    assert sorted(c["id"] for c in _extract_citations(out.split("```")[0], kb)) == ["kb_a_1", "kb_b_2"]
+    from engine.assemble.citations import Numbering, resolve_numeric
+
+    assert resolve_numeric("Claim [kb_a_1] [kb_b_2].", Numbering(index)) == "Claim [1, 2]."
+
+
+def test_latex_only_export_failure_fails_the_run(tmp_path: Path, monkeypatch) -> None:
+    work = make_work_dir(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))  # no pandoc
+    run = api_run(work, FakeLLM(), outline="generate", output_format="latex")
+    assert run.exit_code == 1 and "LaTeX export failed" in run.run_meta()["error"]
+
+
+def test_lock_sources_are_read_before_any_lock_is_written(tmp_path: Path) -> None:
+    from helpers import write_project
+
+    work = make_work_dir(tmp_path)
+    structure = project_structure()
+    eniac, stored = structure["childs"][1]["childs"]
+    eniac.update(content_locked=True, structure_locked=True, content_file="sections/1-2.md")  # -> 2-1
+    stored.update(content_locked=True, structure_locked=True, content_file="sections/2-1.md")  # -> 2-2
+    write_project(work, structure, {"sections/1-2.md": "Text A for ENIAC.\n", "sections/2-1.md": "Text B for the stored program.\n"})
+    run = api_run(work, FakeLLM(), outline="project")
+    assert run.exit_code == 0, run.text
+    assert (work / "out" / "sections" / "2-1.md").read_text(encoding="utf-8") == "Text A for ENIAC.\n"
+    assert (work / "out" / "sections" / "2-2.md").read_text(encoding="utf-8") == "Text B for the stored program.\n"
+
+
+def test_full_run_rebuilds_the_glossary(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path)
+    assert api_run(work, FakeLLM(), outline="generate").exit_code == 0
+    (work / "book_input.txt").write_text((work / "book_input.txt").read_text(encoding="utf-8").replace("Target readers:", "Target readers: engineers,"), encoding="utf-8")
+    fake = FakeLLM()
+    assert api_run(work, fake, outline="generate", resume=True).exit_code == 0  # refused: a full run
+    assert len(fake.chat_calls("Glossary")) == 1
+
+
+def test_replaced_source_gets_a_new_reference_record(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path, bench="en_paper")
+    first = paper_run(work, FakeLLM(), "--no-tex", "--no-pdf")
+    assert first.exit_code == 0
+    md = work / "kb" / "mechanical-computing" / "analytical_engine.md"
+    md.write_text(md.read_text(encoding="utf-8") + "\n\nA new closing paragraph about the Analytical Engine.\n", encoding="utf-8")
+    (first.out_dir / "sections" / "3.md").unlink()
+    graph = first.graph()
+    graph["nodes"]["3"]["content_file_path"] = ""
+    (first.out_dir / "structure_graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    fake = FakeLLM()
+    assert paper_run(work, fake, "--resume", "--no-tex", "--no-pdf").exit_code == 0
+    formatted = [c.user for c in fake.chat_calls("BibEntry")]
+    assert len(formatted) == 1 and "analytical_engine.md" in formatted[0]  # only the changed file
+
+
+def test_language_codes_outside_the_table_are_kept() -> None:
+    from engine.spec.language import language_name, normalize_language
+
+    assert normalize_language("ja") == "ja" and normalize_language("pt-BR") == "pt" and normalize_language("Czech") == "cs"
+    assert normalize_language("not a language") is None and language_name("ja") == "ja"
+
+
+async def test_scratch_reasoning_and_generic_errors(tmp_path: Path) -> None:
+    import openai
+    import pytest as _pytest
+
+    from engine.config import LLMSettings
+    from engine.errors import SchemaError
+    from engine.events import MemorySink
+    from engine.llm.client import LLMClient
+    from engine.llm.structured import Level
+    from engine.llm.usage import UsageLedger
+    from fake_llm import ChatReply, Fault
+    from pydantic import BaseModel
+
+    class Answer(BaseModel):
+        title: str
+
+    msgs = [{"role": "user", "content": "x"}]
+    scratch = 'We need a title. Maybe {"title": "draft"} works, let me think more'
+    fake = FakeLLM(overrides={"Answer": lambda call: ChatReply("", finish_reason="stop", reasoning=scratch)})
+    c = LLMClient(LLMSettings(base_url="http://fake.local/v1", api_key="k", model="m", mini_model="m"),
+                  ledger=UsageLedger(None), sink=MemorySink(), concurrency=2, transport=fake.transport())
+    with _pytest.raises(SchemaError):
+        await c.structured(msgs, Answer, label="t")
+    await c.aclose()
+    # A settled model never downgrades on a generic 'unsupported' error.
+    fake = FakeLLM(faults=[Fault(status=400, match=lambda call: len([x for x in fake.chat_calls()]) >= 2, times=1,
+                                 message="This feature is unsupported for your account tier")])
+    c = LLMClient(LLMSettings(base_url="http://fake.local/v1", api_key="k", model="m", mini_model="m", max_retries=0),
+                  ledger=UsageLedger(None), sink=MemorySink(), concurrency=2, transport=fake.transport())
+    await c.structured(msgs, Answer, label="t")  # settles json_schema
+    with _pytest.raises(openai.BadRequestError):
+        await c.structured(msgs, Answer, label="t")
+    assert c.level_for("m") == Level.JSON_SCHEMA
+    await c.aclose()
+
+
+def test_fail_fast_schema_covers_subdivision(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path)
+    run = api_run(work, FakeLLM(overrides={"SubdivisionPlan": lambda call: "not json"}), outline="generate", fail_fast_schema=True)
+    assert run.exit_code == 1 and "schema" in run.run_meta()["error"]
+
+
+async def test_overview_context_does_not_wait_for_embeddings(tmp_path: Path) -> None:
+    from engine.config import LLMSettings, RetrievalSettings
+    from engine.events import MemorySink
+    from engine.llm.client import LLMClient
+    from engine.llm.usage import UsageLedger
+    from engine.retrieval.service import RetrievalService
+    from helpers import BENCH
+
+    fake = FakeLLM()
+    llm = LLMClient(LLMSettings(base_url="http://fake.local/v1", api_key="k", model="m", mini_model="m"),
+                    ledger=UsageLedger(None), sink=MemorySink(), concurrency=2, transport=fake.transport())
+    settings = RetrievalSettings(kb_dir=BENCH / "en_book" / "kb", extract_cache_dir=tmp_path / "x", embed_base_url="http://fake.local/v1",
+                                 rerank_base_url="http://fake.local/v1", rerank="none")
+    service = RetrievalService(settings, MemorySink(), lambda: llm, out_dir=tmp_path, http_factory=lambda: llm.http)
+    await service.build_kb()
+    ctx = await service.context(["EDSAC first program"], k=3, lexical_only=True)
+    assert ctx.items and not [c for c in fake.calls if c.path.endswith("/embeddings")]
+    await llm.aclose()
+
+
+def test_czech_paper_json_gets_a_czech_related_work_title(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path, bench="en_paper")
+    (work / "out").mkdir()
+    structure = {"title": "Počítače s uloženým programem", "language": "cs", "sections": [
+        {"title": "Úvod", "role": "introduction", "summary": "Proč je to důležité.", "n_pages": 1},
+        {"title": "Závěr", "role": "conclusion", "summary": "Co z toho plyne.", "n_pages": 1}]}
+    (work / "out" / "paper_structure.json").write_text(json.dumps(structure), encoding="utf-8")
+    run = run_cli(["--mode", "paper", "-i", str(work / "paper_input.txt"), "-o", str(work / "out"), "-j", "paper_structure.json",
+                   "--use-json", "--no-tex", "--no-pdf"], fake=FakeLLM(), env=engine_env(tmp_path))
+    assert run.exit_code == 0, run.text
+    graph = run.graph()
+    assert [graph["nodes"][c]["title"] for p, c in graph["edges"] if p == "book"] == ["Úvod", "Související práce", "Závěr"]
+
+
+def test_audit_flags_citation_needed(tmp_path: Path) -> None:
+    from engine.assemble.audit import audit_sections
+
+    report = audit_sections([("1", "A claim [citation needed] here.")], index=CitationIndex(), out_dir=tmp_path, mode="warn")
+    assert any("citation needed" in f.message.lower() for f in report.findings)
+
+
+def test_slide_neighbours_do_not_carry_writing_instructions(tmp_path: Path) -> None:
+    from test_contract_presentation import pres_run
+
+    work = make_work_dir(tmp_path, bench="en_presentation")
+    first = pres_run(work, FakeLLM())
+    assert first.exit_code == 0
+    graph = first.graph()
+    graph["nodes"]["2"]["summary"] += "\n\nWriting instructions: use a table and a very formal tone."
+    (first.out_dir / "sections" / "1.md").unlink()
+    graph["nodes"]["1"]["content_file_path"] = ""
+    (first.out_dir / "structure_graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    fake = FakeLLM()
+    assert pres_run(work, fake, "--resume").exit_code == 0
+    [call] = fake.chat_calls("SlideDraft")
+    assert "very formal tone" not in call.user

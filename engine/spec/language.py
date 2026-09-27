@@ -36,7 +36,12 @@ def normalize_language(value: str | None) -> str | None:
         lowered = re.split(r"[\s_\-(]", lowered)[0]
     if lowered in LANGUAGE_NAMES:
         return lowered
-    return _ALIASES.get(lowered)
+    if lowered in _ALIASES:
+        return _ALIASES[lowered]
+    # Any other ISO 639 code (optionally with a region, "pt-BR") is taken as
+    # given; language_name() keeps the code.
+    code = re.fullmatch(r"([a-z]{2,3})(?:[-_][a-z0-9]{2,8})*", value.strip().casefold())
+    return code.group(1) if code else None
 
 
 def language_name(code: str) -> str:

@@ -20,7 +20,7 @@ from engine.util.fs import atomic_write_json
 
 _IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 _PLACEHOLDER_RE = re.compile(
-    r"\b(TODO|TBD|FIXME|lorem ipsum|\[citation needed\]|general background knowledge|XXX)\b", re.IGNORECASE
+    r"\b(?:TODO|TBD|FIXME|lorem ipsum|general background knowledge|XXX)\b|\[citation needed\]", re.IGNORECASE
 )
 _NUMBER_RE = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)?\s*(?:%|percent|procent)|\b\d{2,}(?:[.,]\d+)?\b")
 

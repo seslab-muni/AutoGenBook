@@ -23,7 +23,7 @@ from engine.agents.base import Agent
 from engine.agents.models import BibEntry, PaperAbstract, PaperOutline, RelatedWorkPlan, SectionDraft, SectionReview
 from engine.assemble.bibtex import entry as bib_entry
 from engine.assemble.bibtex import format_entry
-from engine.assemble.citations import CitationIndex, Numbering, Reference, cited_keys, document_group, find_citations, format_reference, references_title
+from engine.assemble.citations import CitationIndex, Numbering, Reference, cited_keys, document_group, find_citations, format_reference, merge_adjacent, references_title
 from engine.assemble.markdown import read_section, section_path, strip_writing_instructions
 from engine.errors import EngineError
 from engine.graph.keys import ROOT
@@ -40,7 +40,7 @@ from engine.spec.book_txt import BookSpec
 from engine.spec.language import language_name
 from engine.spec.models import graph_from_structure, normalize_structure
 from engine.spec.paper import RELATED_WORK_TITLE, PaperSpec, normalize_paper_structure, paper_to_book_structure, parse_paper_txt
-from engine.util.fs import atomic_write_json, atomic_write_text, read_json
+from engine.util.fs import atomic_write_json, atomic_write_text, read_json, sha256_file
 
 PAPER_OUTLINE = Agent("paper/outline", PaperOutline, "paper.outline")
 PAPER_WRITER = Agent("paper/writer", SectionDraft, "paper.writer")
@@ -61,9 +61,25 @@ class PaperRun(BookRun):
         self.related_items: list[RetrievalItem] = []
         self.related_statement = ""
         self.references: dict[str, dict[str, Any]] = {}
+        self._sha_cache: dict[str, str] = {}
 
     def parse_spec(self, text: str) -> BookSpec:
         return parse_paper_txt(text)
+
+    def _source_sha(self, ref: Reference | None) -> str:
+        """Content hash of a reference's KB file (memoised per run)."""
+        if ref is None or not ref.source_path:
+            return ""
+        if ref.source_path not in self._sha_cache:
+            try:
+                self._sha_cache[ref.source_path] = sha256_file(Path(ref.source_path))
+            except OSError:
+                self._sha_cache[ref.source_path] = ""
+        return self._sha_cache[ref.source_path]
+
+    def full_run_artifacts(self) -> list[Path]:
+        out = self.cfg.out_dir
+        return super().full_run_artifacts() + [out / "references.json", out / "related_work.json", out / "abstract.md"]
 
     # ------------------------------------------------------------ structure
     def _paper_attrs(self) -> dict[str, Any]:
@@ -129,6 +145,14 @@ class PaperRun(BookRun):
         if not isinstance(raw, dict):
             raise EngineError(f"cannot read the structure JSON {self.cfg.json_path}")
         paper = normalize_paper_structure(raw)
+        from engine.spec.language import detect_language, normalize_language
+
+        # The inserted section's title follows the output language.
+        sample = " ".join(f"{s.title}. {s.summary}" for s in paper.sections).strip() or self.input_text
+        self.language = (
+            normalize_language(self.cfg.language) or normalize_language(paper.language)
+            or normalize_language(self.spec.language) or detect_language(sample)
+        )
         self._set_paper(self._ensure_related_work(paper))
 
     def _set_paper(self, paper) -> None:  # noqa: ANN001
@@ -331,7 +355,10 @@ class PaperRun(BookRun):
                 continue
             for cite in cited_keys(read_section(path), self.index):
                 doc = group(cite)
-                if doc.startswith("kb_") and doc not in self.references:
+                cached = self.references.get(doc)
+                # A record is reused only for the same file content (a replaced
+                # source under the same name gets a new record).
+                if doc.startswith("kb_") and (cached is None or cached.get("source_sha256") != self._source_sha(self.index.lookup(cite))):
                     needed.setdefault(doc, cite)
         kb = self.retrieval.kb
 
@@ -344,13 +371,14 @@ class PaperRun(BookRun):
             if not opening:
                 return
             entry = await REFERENCE.run(self.ctx.llm, {"file_name": ref.file_name if ref else doc, "opening_text": opening})
-            self.references[doc] = entry.model_dump()
+            self.references[doc] = {**entry.model_dump(), "source_sha256": self._source_sha(ref)}
 
         results = await asyncio.gather(*(one(doc, cite) for doc, cite in needed.items()), return_exceptions=True)
         for doc, result in zip(needed, results):
             if isinstance(result, asyncio.CancelledError):
                 raise result
             if isinstance(result, BaseException):
+                self.raise_if_fail_fast(result)
                 # That document keeps its file-name entry; a later run retries it.
                 self.sink.emit("generate", f"Reference for '{doc}' could not be formatted ({str(result)[:200]}); using the file name", level="warning")
         atomic_write_json(self.cfg.out_dir / "references.json", self.references)
@@ -414,7 +442,7 @@ class PaperRun(BookRun):
             return [f"[{n}] {entry_text(group, ref, numbering)}" for n, group, ref in numbering.ordered()]
 
         def cite_resolver(text: str, numbering: Numbering, node_key: str) -> str:
-            matches = find_citations(text, numbering.index)
+            matches = merge_adjacent(text, find_citations(text, numbering.index))
             out, pos = [], 0
             escape = (lambda part: part) if legacy else _escape_at
             for m in matches:
@@ -438,7 +466,7 @@ class PaperRun(BookRun):
             return "".join(out)
 
         def footnote_resolver(text: str, numbering: Numbering, node_key: str) -> str:
-            matches = find_citations(text, numbering.index)
+            matches = merge_adjacent(text, find_citations(text, numbering.index))
             out, pos = [], 0
             for m in matches:
                 out.append(text[pos:m.start].rstrip())

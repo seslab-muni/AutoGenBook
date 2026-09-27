@@ -170,6 +170,19 @@ def find_citations(text: str, index: CitationIndex | None = None) -> list[Citati
     return kept
 
 
+def merge_adjacent(text: str, matches: list[CitationMatch]) -> list[CitationMatch]:
+    """Markers separated only by spaces (`[a] [b]`, one bracket per key as the
+    section files store them) as one citation of several keys."""
+    out: list[CitationMatch] = []
+    for match in matches:
+        if out and "\n" not in text[out[-1].end : match.start] and not text[out[-1].end : match.start].strip(" "):
+            prev = out[-1]
+            out[-1] = CitationMatch(prev.start, match.end, prev.keys + [k for k in match.keys if k not in prev.keys], prev.form)
+        else:
+            out.append(match)
+    return out
+
+
 def _prose_segments(text: str) -> Iterable[tuple[int, str]]:
     pos = 0
     for match in _FENCE_RE.finditer(text):
@@ -252,17 +265,26 @@ def resolve_numeric(text: str, numbering: Numbering, node_key: str | None = None
         return text
     parts: list[str] = []
     pos = 0
+    last: list[int] | None = None  # numbers of the marker just rendered (for merging)
     for match in matches:
-        parts.append(text[pos : match.start])
+        gap = text[pos : match.start]
         numbers: list[int] = []
         for key in match.keys:
             n = numbering.number(key, node_key)
             if n not in numbers:
                 numbers.append(n)
+        if last is not None and gap.strip(" ") == "" and "\n" not in gap:
+            # `[a] [b]` (one bracket per key in section files) reads as `[1, 2]`.
+            last += [n for n in numbers if n not in last]
+            parts[-1] = "[" + ", ".join(str(n) for n in last) + "]"
+            pos = match.end
+            continue
+        parts.append(gap)
         rendered = "[" + ", ".join(str(n) for n in numbers) + "]"
         if match.form == "footnote" and parts and parts[-1] and not parts[-1].endswith((" ", "\n")):
             rendered = " " + rendered
         parts.append(rendered)
+        last = numbers
         pos = match.end
     parts.append(text[pos:])
     return "".join(parts)

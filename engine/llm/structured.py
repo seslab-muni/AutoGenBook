@@ -103,6 +103,16 @@ def looks_like_format_rejection(message: str) -> bool:
     return any(hint in lowered for hint in REJECTION_HINTS)
 
 
+_EXPLICIT_HINTS = ("response_format", "json_schema", "json schema", "json_object", "structured output", "requested parameters")
+
+
+def names_response_format(message: str) -> bool:
+    """The error explicitly concerns the structured-output request (narrower
+    than `looks_like_format_rejection`, which also accepts 'format'/'schema')."""
+    lowered = (message or "").lower()
+    return any(hint in lowered for hint in _EXPLICIT_HINTS)
+
+
 # 400/404/422 texts that have nothing to do with `response_format`: switching
 # to a weaker structured-output level would not help and must not stick.
 UNRELATED_HINTS = (
