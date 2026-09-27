@@ -70,7 +70,7 @@ def decide_resume(config: RunConfig, input_sha256: str, sink: EventSink) -> Resu
             reason = f"the saved structure belongs to a different input file ({Path(stored_path).name})"
             sink.emit("resume", f"Skipping --resume: {reason}. Starting a new run from the current input.")
             stored = str(graph.attrs.get("input_sha256") or "").strip()
-            return ResumeDecision(None, False, reason, refused=True, content_changed=stored != input_sha256)
+            return ResumeDecision(None, False, reason, refused=True, content_changed=bool(stored) and stored != input_sha256)
     stored_sha = str(graph.attrs.get("input_sha256") or "").strip()
     if stored_sha and stored_sha != input_sha256:
         reason = f"the input changed since the last run (saved {stored_sha[:12]}..., now {input_sha256[:12]}...)"

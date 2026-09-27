@@ -42,7 +42,7 @@ from engine.pipeline.state import WorkStore, fingerprint
 from engine.pipeline.text import clean_body, outline_text
 from engine.runner import PipelineOutcome
 from engine.spec.book_txt import BookSpec
-from engine.spec.language import detect_language, language_name, normalize_language
+from engine.spec.language import language_name
 from engine.spec.models import graph_from_structure, normalize_structure
 from engine.spec.presentation import (
     DECK_ATTRS,
@@ -94,7 +94,7 @@ class PresentationRun(BookRun):
     async def task_outline(self) -> None:
         spec = self.spec
         self.sink.emit("json", "Generating the presentation structure from the TXT spec")
-        language = normalize_language(self.cfg.language) or normalize_language(spec.language) or detect_language(self.input_text)
+        language = self.resolve_language(None, self.input_text)
         self.language = language
         target = spec.target_slides()
         duration = spec.duration_minutes or round(target * 1.5)

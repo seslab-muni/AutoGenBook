@@ -140,8 +140,8 @@ def single_key_citations(text: str, index: CitationIndex) -> str:
             continue
         before = text[pos : match.start]
         rendered = " ".join(f"[{k}]" for k in keys)
-        if match.form == "footnote" and before and not before.endswith((" ", "\n")):
-            rendered = " " + rendered
+        if before and not before[-1].isspace() and before[-1] not in "([":
+            rendered = " " + rendered  # `word\cite{k}` -> `word [k]`: a bracket glued to a word is no citation
         out += [before, rendered]
         pos = match.end
     out.append(text[pos:])

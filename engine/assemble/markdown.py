@@ -26,7 +26,9 @@ from engine.graph.keys import ROOT
 from engine.util.fs import decode_text_bytes
 
 _HEADING_LINE_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-_WRITING_INSTRUCTIONS_RE = re.compile(r"(?:\A|\n\n)Writing instructions:.*\Z", re.DOTALL)
+# From the API's trailing block ("\n\nWriting instructions: ...") or a TXT
+# outline bullet ("- Writing instructions: ...") to the end of the summary.
+_WRITING_INSTRUCTIONS_RE = re.compile(r"(?:\A|\n)[ \t]*(?:[-*][ \t]+)?Writing instructions:.*\Z", re.DOTALL)
 
 
 def strip_writing_instructions(summary: str) -> str:

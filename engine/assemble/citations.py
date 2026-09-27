@@ -23,7 +23,8 @@ _BRACKET_RE = re.compile(
 )
 _LATEX_CITE_RE = re.compile(r"\\cite[pt]?\*?(?:\[[^\]]*\])?\{(?P<body>[^{}]*)\}")
 _FOOTNOTE_RE = re.compile(r"\\footnote\{\s*(?:Source|Zdroj)\s*:\s*(?P<body>[^{}]*)\}", re.IGNORECASE)
-_FENCE_RE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]+`)", re.DOTALL)
+CODE_RE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]+`)", re.DOTALL)  # fenced blocks and inline code spans
+_FENCE_RE = CODE_RE
 KEY_PREFIXES = ("kb_", "web_", "RID:", "ref_", "doi:", "rw_")
 
 
@@ -260,31 +261,23 @@ def document_group(index: CitationIndex) -> "Callable[[str], str]":
 def resolve_numeric(text: str, numbering: Numbering, node_key: str | None = None) -> str:
     """Replace every citation marker with `[n]` / `[n, m]` (a footnote-form
     source becomes a plain bracket reference as well)."""
-    matches = find_citations(text, numbering.index)
+    # `[a] [b]` (one bracket per key in section files) reads as `[1, 2]`.
+    matches = merge_adjacent(text, find_citations(text, numbering.index))
     if not matches:
         return text
     parts: list[str] = []
     pos = 0
-    last: list[int] | None = None  # numbers of the marker just rendered (for merging)
     for match in matches:
-        gap = text[pos : match.start]
+        parts.append(text[pos : match.start])
         numbers: list[int] = []
         for key in match.keys:
             n = numbering.number(key, node_key)
             if n not in numbers:
                 numbers.append(n)
-        if last is not None and gap.strip(" ") == "" and "\n" not in gap:
-            # `[a] [b]` (one bracket per key in section files) reads as `[1, 2]`.
-            last += [n for n in numbers if n not in last]
-            parts[-1] = "[" + ", ".join(str(n) for n in last) + "]"
-            pos = match.end
-            continue
-        parts.append(gap)
         rendered = "[" + ", ".join(str(n) for n in numbers) + "]"
         if match.form == "footnote" and parts and parts[-1] and not parts[-1].endswith((" ", "\n")):
             rendered = " " + rendered
         parts.append(rendered)
-        last = numbers
         pos = match.end
     parts.append(text[pos:])
     return "".join(parts)

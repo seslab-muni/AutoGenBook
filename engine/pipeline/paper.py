@@ -23,7 +23,7 @@ from engine.agents.base import Agent
 from engine.agents.models import BibEntry, PaperAbstract, PaperOutline, RelatedWorkPlan, SectionDraft, SectionReview
 from engine.assemble.bibtex import entry as bib_entry
 from engine.assemble.bibtex import format_entry
-from engine.assemble.citations import CitationIndex, Numbering, Reference, cited_keys, document_group, find_citations, format_reference, merge_adjacent, references_title
+from engine.assemble.citations import CODE_RE, CitationIndex, Numbering, Reference, cited_keys, document_group, find_citations, format_reference, merge_adjacent, references_title
 from engine.assemble.markdown import read_section, section_path, strip_writing_instructions
 from engine.errors import EngineError
 from engine.graph.keys import ROOT
@@ -66,13 +66,14 @@ class PaperRun(BookRun):
     def parse_spec(self, text: str) -> BookSpec:
         return parse_paper_txt(text)
 
-    def _source_sha(self, ref: Reference | None) -> str:
-        """Content hash of a reference's KB file (memoised per run)."""
+    async def _source_sha(self, ref: Reference | None) -> str:
+        """Content hash of a reference's KB file (memoised per run, hashed in a
+        worker thread so large PDFs do not block the event loop)."""
         if ref is None or not ref.source_path:
             return ""
         if ref.source_path not in self._sha_cache:
             try:
-                self._sha_cache[ref.source_path] = sha256_file(Path(ref.source_path))
+                self._sha_cache[ref.source_path] = await asyncio.to_thread(sha256_file, Path(ref.source_path))
             except OSError:
                 self._sha_cache[ref.source_path] = ""
         return self._sha_cache[ref.source_path]
@@ -89,9 +90,8 @@ class PaperRun(BookRun):
     async def task_outline(self) -> None:
         spec = self.spec
         self.sink.emit("json", "Generating the paper structure from the TXT spec")
-        from engine.spec.language import detect_language, normalize_language
 
-        language = normalize_language(self.cfg.language) or normalize_language(spec.language) or detect_language(self.input_text)
+        language = self.resolve_language(None, self.input_text)
         self.language = language
         total = float(spec.total_pages or 8.0)
         venue = spec.venue or self.cfg.paper_venue
@@ -145,14 +145,10 @@ class PaperRun(BookRun):
         if not isinstance(raw, dict):
             raise EngineError(f"cannot read the structure JSON {self.cfg.json_path}")
         paper = normalize_paper_structure(raw)
-        from engine.spec.language import detect_language, normalize_language
-
-        # The inserted section's title follows the output language.
+        # The inserted section's title follows the output language (same
+        # precedence as the graph's language, resolved again by _set_graph).
         sample = " ".join(f"{s.title}. {s.summary}" for s in paper.sections).strip() or self.input_text
-        self.language = (
-            normalize_language(self.cfg.language) or normalize_language(paper.language)
-            or normalize_language(self.spec.language) or detect_language(sample)
-        )
+        self.language = self.resolve_language(paper.language, sample)
         self._set_paper(self._ensure_related_work(paper))
 
     def _set_paper(self, paper) -> None:  # noqa: ANN001
@@ -358,7 +354,7 @@ class PaperRun(BookRun):
                 cached = self.references.get(doc)
                 # A record is reused only for the same file content (a replaced
                 # source under the same name gets a new record).
-                if doc.startswith("kb_") and (cached is None or cached.get("source_sha256") != self._source_sha(self.index.lookup(cite))):
+                if doc.startswith("kb_") and (cached is None or cached.get("source_sha256") != await self._source_sha(self.index.lookup(cite))):
                     needed.setdefault(doc, cite)
         kb = self.retrieval.kb
 
@@ -371,7 +367,7 @@ class PaperRun(BookRun):
             if not opening:
                 return
             entry = await REFERENCE.run(self.ctx.llm, {"file_name": ref.file_name if ref else doc, "opening_text": opening})
-            self.references[doc] = {**entry.model_dump(), "source_sha256": self._source_sha(ref)}
+            self.references[doc] = {**entry.model_dump(), "source_sha256": await self._source_sha(ref)}
 
         results = await asyncio.gather(*(one(doc, cite) for doc, cite in needed.items()), return_exceptions=True)
         for doc, result in zip(needed, results):
@@ -469,7 +465,7 @@ class PaperRun(BookRun):
             matches = merge_adjacent(text, find_citations(text, numbering.index))
             out, pos = [], 0
             for m in matches:
-                out.append(text[pos:m.start].rstrip())
+                out.append(text[pos:m.start].rstrip(" \t"))
                 notes = []
                 for key in m.keys:
                     numbering.number(key, node_key)
@@ -517,13 +513,10 @@ class PaperRun(BookRun):
                              latex_vars={"bibliography-file": "refs"}, pandoc_args=[] if legacy else ["--natbib"])
 
 
-_CODE_RE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]+`)", re.DOTALL)
-
-
 def _escape_at(text: str) -> str:
     """`@` in prose is literal (with --natbib pandoc would read `@Override` as
     a citation); code spans and blocks are left alone."""
-    parts = _CODE_RE.split(text)
+    parts = CODE_RE.split(text)
     return "".join(part if i % 2 else re.sub(r"(?<!\\)@", r"\\@", part) for i, part in enumerate(parts))
 
 

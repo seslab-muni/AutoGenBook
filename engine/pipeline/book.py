@@ -222,7 +222,7 @@ class BookRun:
         elif assembly.audit_blocked:
             outcome.exit_code = EXIT_AUDIT
             outcome.error = "Book audit failed in strict mode. See audit_report.json for details."
-        elif assembly.pdf_failed and (cfg.pdf_output or cfg.tex_output):
+        elif assembly.pdf_failed and (cfg.pdf_output or cfg.tex_requested):
             outcome.exit_code = EXIT_FAILURE
             outcome.error = f"{'PDF' if cfg.pdf_output else 'LaTeX'} export failed: {assembly.pdf_failed}"
         elif assembly.export_failed:
@@ -322,15 +322,21 @@ class BookRun:
         return f"{head}: {first}" if first is not None else head
 
     # ------------------------------------------------------- run settings
-    def _resolve_language_and_author(self, structure_language: str | None = None) -> None:
-        assert self.graph is not None
-        self.language = (
+    def resolve_language(self, structure_language: str | None = None, sample: str | None = None) -> str:
+        """The output language: --language, the saved graph's, the spec's, the
+        structure JSON's, else detected (from `sample` or the graph/input)."""
+        graph_language = str(self.graph.attrs.get("language") or "") if self.graph is not None else ""
+        return (
             normalize_language(self.cfg.language)
-            or normalize_language(str(self.graph.attrs.get("language") or ""))
+            or normalize_language(graph_language)
             or normalize_language(self.spec.language)
             or normalize_language(structure_language)
-            or detect_language(self._language_sample())
+            or detect_language(sample or self._language_sample())
         )
+
+    def _resolve_language_and_author(self, structure_language: str | None = None) -> None:
+        assert self.graph is not None
+        self.language = self.resolve_language(structure_language)
         self.author = self.cfg.author or str(self.graph.attrs.get("author") or "") or (self.spec.author or "")
 
     def _language_sample(self) -> str:
@@ -387,10 +393,13 @@ class BookRun:
     async def task_kb_embed(self) -> None:
         await self.retrieval.prepare_dense()
 
-    async def kb_overview(self, query: str, limit: int = 3500) -> str:
+    async def kb_overview(self, query: str, limit: int = 3500, *, lexical_only: bool = True) -> str:
+        """KB passages for a whole-document prompt. BM25 only by default (the
+        outline runs before the embeddings exist, and must not wait for them);
+        the glossary, which runs after `kb.embed`, uses hybrid retrieval."""
         if self.retrieval.retriever is None:
             return "(no knowledge base)"
-        context = await self.retrieval.context([query], k=6, lexical_only=True)
+        context = await self.retrieval.context([query], k=6, lexical_only=lexical_only)
         text = context.text or "(nothing relevant found)"
         return text if len(text) <= limit else text[:limit] + "..."
 
@@ -399,7 +408,7 @@ class BookRun:
         t0 = time.perf_counter()
         spec = self.spec
         self.sink.emit("json", "Generating the book structure from the TXT spec")
-        provisional = normalize_language(self.cfg.language) or normalize_language(spec.language) or detect_language(self.input_text)
+        provisional = self.resolve_language(None, self.input_text)
         self.language = provisional
         total = float(spec.total_pages or 20.0)
         base_values = {"language_name": language_name(provisional), "spec_text": self.input_text.strip()[:30000]}
@@ -705,7 +714,8 @@ class BookRun:
         assert self.graph is not None
         attrs = self.graph.attrs
         return fingerprint(
-            [(self.graph.nodes[k].get("title"), self.graph.nodes[k].get("summary")) for k in self.graph.dfs()],
+            # Without the per-node "Writing instructions:" a regeneration adds.
+            [(self.graph.nodes[k].get("title"), strip_writing_instructions(str(self.graph.nodes[k].get("summary") or ""))) for k in self.graph.dfs()],
             attrs.get("target_readers"), attrs.get("additional_requirements"), self.language,
         )
 
@@ -730,7 +740,7 @@ class BookRun:
             "target_readers": graph.attrs.get("target_readers", "") or "(not specified)",
             "additional_requirements": graph.attrs.get("additional_requirements", "") or "(none)",
             "outline": outline_text(graph, with_summaries="all", max_summary=160),
-            "kb_overview": await self.kb_overview(f"{graph.nodes[ROOT].get('title', '')}\n{graph.nodes[ROOT].get('summary', '')}"),
+            "kb_overview": await self.kb_overview(f"{graph.nodes[ROOT].get('title', '')}\n{graph.nodes[ROOT].get('summary', '')}", lexical_only=False),
         }
         self.glossary = await self.agents["glossary"].run(self.ctx.llm, values)
         atomic_write_json(self.paths.glossary, {"fingerprint": self._glossary_fp(), "glossary": self.glossary.model_dump()})

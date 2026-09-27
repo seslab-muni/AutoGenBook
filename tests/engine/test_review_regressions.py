@@ -541,3 +541,93 @@ def test_slide_neighbours_do_not_carry_writing_instructions(tmp_path: Path) -> N
     assert pres_run(work, fake, "--resume").exit_code == 0
     [call] = fake.chat_calls("SlideDraft")
     assert "very formal tone" not in call.user
+
+
+# ------------------------------------------------------ fourth review round
+def test_regeneration_instructions_keep_the_glossary(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path)
+    first = api_run(work, FakeLLM(), outline="generate")
+    assert first.exit_code == 0
+    out = first.out_dir
+    (out / "sections" / "1-2-1.md").unlink()
+    graph = first.graph()
+    graph["nodes"]["1-2-1"]["content_file_path"] = ""
+    graph["nodes"]["1-2-1"]["summary"] += "\n\nWriting instructions: More examples."
+    (out / "structure_graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    fake = FakeLLM()
+    assert api_run(work, fake, outline="generate", resume=True).exit_code == 0
+    assert not fake.chat_calls("Glossary")  # the cached glossary still applies
+
+
+def test_cite_glued_to_a_word_stays_a_citation() -> None:
+    from engine.pipeline.text import invalid_citations, single_key_citations
+
+    index = CitationIndex()
+    out = single_key_citations("as shown\\cite{kb_fake_1}.", index)
+    assert out == "as shown [kb_fake_1]." and invalid_citations(out, index) == ["kb_fake_1"]
+
+
+def test_implicit_paper_latex_failure_is_a_warning(tmp_path: Path, monkeypatch) -> None:
+    work = make_work_dir(tmp_path, bench="en_paper")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))  # no pandoc
+    run = paper_run(work, FakeLLM(), "--no-pdf")
+    assert run.exit_code == 0, run.text
+    assert any(line.startswith("[WARN] LaTeX export failed") for line in run.lines)
+    explicit = paper_run(make_work_dir(tmp_path, bench="en_paper", name="explicit"), FakeLLM(), "--no-pdf", "--export-tex")
+    assert explicit.exit_code == 1
+
+
+def test_writing_instructions_in_txt_bullets_are_stripped() -> None:
+    from engine.assemble.markdown import strip_writing_instructions
+
+    assert strip_writing_instructions("What it covers.\n- Writing instructions: Math level: basic.") == "What it covers."
+    assert strip_writing_instructions("What it covers.\n\nWriting instructions: x") == "What it covers."
+    assert strip_writing_instructions("Mentions writing instructions: inline, kept.") == "Mentions writing instructions: inline, kept."
+
+
+def test_footnote_space_survives_merging_and_paragraphs_stay_apart() -> None:
+    from engine.assemble.citations import Numbering, resolve_numeric
+
+    index = CitationIndex()
+    assert resolve_numeric("A claim\\footnote{Source: kb_a_1} [kb_b_2] here.", Numbering(index)) == "A claim [1, 2] here."
+
+
+def test_moved_input_without_a_stored_hash_keeps_its_structure(tmp_path: Path) -> None:
+    import shutil
+
+    work = make_work_dir(tmp_path)
+    argv = lambda w: ["--mode", "book", "-i", str(w / "book_input.txt"), "-o", str(w / "out"), "--kb-dir", str(w / "kb"), "--no-tex", "--no-pdf"]  # noqa: E731
+    assert run_cli(argv(work) + ["--use-txt"], fake=FakeLLM(), env=engine_env(tmp_path)).exit_code == 0
+    graph = json.loads((work / "out" / "structure_graph.json").read_text(encoding="utf-8"))
+    del graph["graph"]["input_sha256"]
+    (work / "out" / "structure_graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    moved = tmp_path / "moved"
+    shutil.copytree(work, moved)
+    fake = FakeLLM()
+    assert run_cli(argv(moved) + ["--resume"], fake=fake, env=engine_env(tmp_path)).exit_code == 0
+    assert not fake.chat_calls("BookOutline")
+
+
+def test_audit_placeholders_are_case_aware(tmp_path: Path) -> None:
+    from engine.assemble.audit import audit_sections
+
+    report = audit_sections([("1", "todo el sistema funciona. TODO: fill in. Lorem Ipsum dolor.")], index=CitationIndex(), out_dir=tmp_path, mode="warn")
+    messages = " ".join(f.message for f in report.findings)
+    assert "TODO" in messages and "todo el" not in messages and "lorem ipsum" in messages.lower()
+
+
+def test_footnote_style_keeps_paragraph_breaks(tmp_path: Path) -> None:
+    from responders import respond
+
+    def draft(call):
+        out = respond(call)
+        key = next((k for k in __import__("responders").cite_keys_in(call.user) if k.startswith("kb_")), None)
+        if key:
+            out["body_markdown"] += f"\n\n[{key}] opens this paragraph."
+        return out
+
+    work = make_work_dir(tmp_path, bench="en_paper")
+    run = paper_run(work, FakeLLM(overrides={"SectionDraft": draft}), "--citation-style", "footnote", "--no-tex", "--no-pdf")
+    assert run.exit_code == 0, run.text
+    doc = (run.out_dir / "The_Stored-Program_Concept_as_the_Turning_Point_of_Early_Computing.md").read_text(encoding="utf-8")
+    assert "\n\n^[" in doc and "opens this paragraph" in doc

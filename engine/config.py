@@ -163,6 +163,7 @@ class RunConfig:
     resume: bool = False
     md_output: bool = True
     tex_output: bool = False
+    tex_requested: bool = False  # LaTeX asked for explicitly: its failure fails the run
     pdf_output: bool = False
     audit_enabled: bool = False
     audit_mode: str = "warn"
@@ -289,6 +290,9 @@ class RunConfig:
         else:
             tex_output = bool(args.presentation_tex)
             pdf_output = bool(args.presentation_tex) and not args.no_pdf
+        # Book --export-tex and presentation --presentation-tex are explicit; a
+        # paper's .tex is a default by-product unless --export-tex asks for it.
+        tex_requested = tex_output and (mode != "paper" or bool(args.export_tex))
 
         if mode == "book":
             audit_enabled = bool(args.audit_book) and args.audit_book_mode != "off"
@@ -332,6 +336,7 @@ class RunConfig:
             resume=bool(args.resume),
             md_output=md_output,
             tex_output=tex_output,
+            tex_requested=tex_requested,
             pdf_output=pdf_output,
             audit_enabled=audit_enabled,
             audit_mode=audit_mode,
