@@ -364,3 +364,25 @@ def test_lexical_retrieval_is_not_worse_than_the_old_kb(tmp_path: Path) -> None:
                 getattr(retriever, "close", lambda: None)()
         for set_name, old in scores["old"].items():
             assert scores["bm25-lemma"][set_name] >= old, (kb, set_name, scores)
+
+
+async def test_qwen_reranker_gets_its_instruction_template() -> None:
+    """The gateway serves Qwen3 rerankers as bare classifiers, so the client
+    applies the model's `<Instruct>/<Query>/<Document>` format itself; other
+    rerankers get the raw texts."""
+    from engine.retrieval.rerank import QWEN_RERANK_INSTRUCTION, RemoteReranker
+
+    fake = FakeLLM(rerank_endpoint="rerank")
+    llm = LLMClient(LLMSettings(base_url="http://fake.local/v1", api_key="k", model="m", mini_model="mini"),
+                    ledger=UsageLedger(None), sink=MemorySink(), concurrency=1, transport=fake.transport())
+    qwen = RemoteReranker(llm, model="qwen3-reranker-4b", base_url="http://fake.local/v1", api_key="k")
+    scores = await qwen.rerank("EDSAC first program", ["EDSAC ran its first program in 1949", "Bananas"])
+    assert scores[0] > scores[1]
+    body = fake.calls[-1].body
+    assert body["query"] == f"<Instruct>: {QWEN_RERANK_INSTRUCTION}\n<Query>: EDSAC first program"
+    assert body["documents"] == ["<Document>: EDSAC ran its first program in 1949", "<Document>: Bananas"]
+    other = RemoteReranker(llm, model="bge-reranker-v2-m3", base_url="http://fake.local/v1", api_key="k")
+    await other.rerank("EDSAC first program", ["EDSAC ran its first program in 1949"])
+    assert fake.calls[-1].body["query"] == "EDSAC first program"
+    assert fake.calls[-1].body["documents"] == ["EDSAC ran its first program in 1949"]
+    await llm.aclose()

@@ -290,8 +290,10 @@ Decided design, all behind a `Retriever` protocol:
   and model; brute-force cosine in NumPy, no vector database.
 - **Fusion and reranking**: reciprocal rank fusion of both top-30 lists, then e-INFRA's
   `qwen3-reranker-4b` through vLLM's rerank or score endpoint (whichever the gateway proxies),
-  down to `k` (default 6); listwise LLM reranking with the mini model is the fallback. Source
-  diversification and the 6000-char context cap stay.
+  down to `k` (default 6); listwise LLM reranking with the mini model is the fallback. The gateway
+  serves the Qwen3 reranker as a bare classifier, so the client applies the model's own
+  `<Instruct>/<Query>/<Document>` template (without it the reranker scored below fused order on
+  every benchmark set; with it, above). Source diversification and the 6000-char context cap stay.
 - **Queries**: the per-section query drops the book summary; the pipeline supplies one to three
   focused queries (section summary, glossary terms, writer/reviewer-generated queries) whose results
   are fused.

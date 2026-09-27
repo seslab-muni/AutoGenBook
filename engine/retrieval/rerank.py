@@ -6,6 +6,11 @@
   and `POST /v1/score` (`{model, text_1, text_2}` -> `data[{index, score}]`).
   Which one a gateway proxies is not documented, so the client tries rerank
   first, falls back to score, and remembers what worked for the run.
+  Qwen3 rerankers are served as plain classifiers: the gateway does not
+  apply the model's instruction template, so the client does (`<Instruct>`/
+  `<Query>` on the query, `<Document>` on every passage). Without it the
+  reranker scores unrelated passages ~0.9 and ranks worse than fused order
+  on the retrieval benchmark; with it, it ranks best on every set.
 - `LLMListwiseReranker`: the mini model orders numbered passages; the
   fallback when no rerank endpoint is reachable. Results are cached per
   (query, candidates) for the run.
@@ -32,6 +37,15 @@ class RerankFailed(RuntimeError):
 
 
 _MISSING_STATUS = {400, 401, 403, 404, 405, 422, 501}
+QWEN_RERANK_INSTRUCTION = "Given a web search query, retrieve relevant passages that answer the query"
+
+
+def rerank_formats_for(model: str) -> tuple[str, str]:
+    """(query format, document format) for a reranker model id; `{}` is the text."""
+    if "qwen" in model.lower():
+        return f"<Instruct>: {QWEN_RERANK_INSTRUCTION}\n<Query>: {{}}", "<Document>: {}"
+    return "{}", "{}"
+
 MAX_CONSECUTIVE_FAILURES = 3  # then the endpoint is given up for the run (next fallback)
 
 
@@ -52,12 +66,15 @@ class RemoteReranker:
         self.endpoint: str | None = None
         self.unavailable = False
         self.failures = 0  # consecutive failed requests
+        self.query_format, self.doc_format = rerank_formats_for(model)
 
     async def rerank(self, query: str, docs: Sequence[str]) -> list[float]:
         if self.unavailable:
             raise RerankUnavailable("rerank endpoint unavailable")
         if not docs:
             return []
+        query = self.query_format.format(query)
+        docs = [self.doc_format.format(d) for d in docs]
         order = [self.endpoint] if self.endpoint else ["rerank", "score"]
         last_error: Exception | None = None
         missing = True  # every endpoint answered "not here / not allowed / not this API"

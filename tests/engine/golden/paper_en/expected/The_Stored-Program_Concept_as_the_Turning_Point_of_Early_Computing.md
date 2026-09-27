@@ -122,7 +122,7 @@ Fake generated content (revised) with the example the review asked for.
 
 ## References
 
-[1] Benchmark, Corpus. *Stored Program*. AutoGenBook. 2026 (pp. 1, 2, 3).
+[1] Benchmark, Corpus. *Stored Program*. AutoGenBook. 2026 (pp. 1, 3).
 
 [2] Benchmark, Corpus. *Analytical Engine*. AutoGenBook. 2026.
 
