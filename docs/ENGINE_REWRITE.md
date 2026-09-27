@@ -556,3 +556,21 @@ pnpm e2e                                            # Playwright smoke + a11y ag
 ```
 
 To run the stack against a real endpoint instead, drop `docker-compose.engine-fake.yml` and set `AUTOGENBOOK_LLM_BASE_URL`, `AUTOGENBOOK_LLM_API_KEY` and `AUTOGENBOOK_LLM_MODEL` in `.env`. Rolling back means removing `docker-compose.engine.yml`, so the services run `main.py` again.
+
+## Appendix B. Contract notes from the implementation
+
+These are places where section 3 and the current API code disagree or are silent. Where they disagree, the engine follows the API code.
+
+- **API key precedence.** `OPENROUTER_API_KEY` wins over `AUTOGENBOOK_LLM_API_KEY` when both are set (`api/core/settings.py`, and the old client). Unset the OpenRouter key when targeting another endpoint.
+- **Citation tokens.** Section files store one `[cite_key]` bracket per key (`[a] [b]`). The API's importer (`graph_import._CITATION_TOKEN_RE`) only reads single-key brackets. `\cite{}`, `\footnote{Source: ...}` and `[a; b]` written by a model are rewritten outside code; the final document renders adjacent markers as `[1, 2]`.
+- **Writing instructions.** The API strips only a trailing `\n\nWriting instructions: ...` paragraph. TXT outline bullets (`- Writing instructions: ...`) are therefore moved into that shape when the spec is parsed.
+- **Resume.** Refused when `input_sha256`, `input_path` or `doc_type` differ. A refused resume regenerates the outline from the TXT, unless `--use-json`, when the content changed or cannot be proven unchanged. A graph without a stored hash is accepted and stamped, as `tests/api/fake_cli.py` does. A graph this engine saved before subdivision finished (`subdivision_complete: false`) is subdivided on resume.
+- **`run_meta.json` `run_kind`.** The values are `full`, `resume` and `export` (informational; the API keeps its own kind).
+- **Engine state.** Engine state lives under `out/.kb_cache/engine/`, which the API does not upload. A full run clears it along with stale section and review files, keeping content-lock sources.
+- **Web references.** Cited web references are added to `kb_sources.json` `cite_keys`/`rids` (never `chunks`), with extra `kind`/`title`/`url`/`doi` fields that the API ignores.
+- **Graph root.** The root is `book` for every document type. The old presentation mode used `presentation`, and its slides lived in `slides/<key>.md`; here slides are `sections/<key>.md`.
+- **Strict audit.** It exits 4 whenever it finds errors, including Markdown-only runs.
+- **PDF output.** A PDF produced by a nonstop LuaLaTeX run with errors is kept, and the errors are reported as `[WARN]`. Failing explicitly requested LaTeX (`--export-tex`, `--presentation-tex`) fails the run; a paper's default `.tex` failing under `--no-pdf` is only a warning.
+- **`kb_sources.json` `page_keys`.** These stay path-dependent, as in the old engine.
+- **Engine-only settings.** `AUTOGENBOOK_CONCURRENCY`, `AUTOGENBOOK_EMBED_*`, `AUTOGENBOOK_RERANK_*`, `AUTOGENBOOK_DENSE` and `AUTOGENBOOK_TTS_*` are not on the API's environment allow-list. Under the web stack the engine uses its defaults: concurrency 4, and embeddings and reranking on the LLM base URL with the e-INFRA model names.
+- **Flags not ported.** `--presentation-video`, `--presentation-image-model`, `--no-image` and `--presentation-citations` (slide images and video) are rejected with exit 2. `--paper-input` is new, and `-i` still works for every mode.
