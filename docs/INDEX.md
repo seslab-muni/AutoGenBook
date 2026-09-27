@@ -17,6 +17,7 @@
 
 Existing design notes:
 - Engine rewrite (new engine package, frozen API contract, phases): `ENGINE_REWRITE.md`
+- Old vs new engine: differences and measured results (retrieval and engine benchmarks on e-INFRA, September 2026): `ENGINE_COMPARISON.md`
 - Proposal mode repo analysis: `proposal_mode_repo_analysis.md`
 - Proposal mode design: `proposal_mode_design.md`
 - Proposal mode changes: `proposal_mode_changes.md`
