@@ -579,9 +579,12 @@ def test_implicit_paper_latex_failure_is_a_warning(tmp_path: Path, monkeypatch) 
 
 def test_writing_instructions_in_txt_bullets_are_stripped() -> None:
     from engine.assemble.markdown import strip_writing_instructions
+    from engine.spec.book_txt import summarize_body
 
-    assert strip_writing_instructions("What it covers.\n- Writing instructions: Math level: basic.") == "What it covers."
-    assert strip_writing_instructions("What it covers.\n\nWriting instructions: x") == "What it covers."
+    summary = summarize_body(["- What it covers.", "- Writing instructions: Math level: basic.", "- Cover A and B."])
+    assert summary == "What it covers.\nCover A and B.\n\nWriting instructions: Math level: basic."  # the API's shape
+    assert strip_writing_instructions(summary) == "What it covers.\nCover A and B."
+    assert strip_writing_instructions("Intro.\nWriting instructions: be brief.\nCover A.") == "Intro.\nWriting instructions: be brief.\nCover A."
     assert strip_writing_instructions("Mentions writing instructions: inline, kept.") == "Mentions writing instructions: inline, kept."
 
 
@@ -592,7 +595,9 @@ def test_footnote_space_survives_merging_and_paragraphs_stay_apart() -> None:
     assert resolve_numeric("A claim\\footnote{Source: kb_a_1} [kb_b_2] here.", Numbering(index)) == "A claim [1, 2] here."
 
 
-def test_moved_input_without_a_stored_hash_keeps_its_structure(tmp_path: Path) -> None:
+def test_moved_input_without_a_stored_hash_regenerates(tmp_path: Path) -> None:
+    """Unchanged content is only provable with a stored hash; without one a
+    moved input may also have been edited, so the outline is regenerated."""
     import shutil
 
     work = make_work_dir(tmp_path)
@@ -605,15 +610,17 @@ def test_moved_input_without_a_stored_hash_keeps_its_structure(tmp_path: Path) -
     shutil.copytree(work, moved)
     fake = FakeLLM()
     assert run_cli(argv(moved) + ["--resume"], fake=fake, env=engine_env(tmp_path)).exit_code == 0
-    assert not fake.chat_calls("BookOutline")
+    assert len(fake.chat_calls("BookOutline")) == 1
 
 
 def test_audit_placeholders_are_case_aware(tmp_path: Path) -> None:
     from engine.assemble.audit import audit_sections
 
-    report = audit_sections([("1", "todo el sistema funciona. TODO: fill in. Lorem Ipsum dolor.")], index=CitationIndex(), out_dir=tmp_path, mode="warn")
+    report = audit_sections([("1", "todo el sistema funciona. TODO: fill in. Lorem Ipsum dolor. tbd. Todo: add figure.")],
+                            index=CitationIndex(), out_dir=tmp_path, mode="warn")
     messages = " ".join(f.message for f in report.findings)
     assert "TODO" in messages and "todo el" not in messages and "lorem ipsum" in messages.lower()
+    assert "tbd" in messages.lower() and "Todo:" in messages
 
 
 def test_footnote_style_keeps_paragraph_breaks(tmp_path: Path) -> None:
@@ -631,3 +638,45 @@ def test_footnote_style_keeps_paragraph_breaks(tmp_path: Path) -> None:
     assert run.exit_code == 0, run.text
     doc = (run.out_dir / "The_Stored-Program_Concept_as_the_Turning_Point_of_Early_Computing.md").read_text(encoding="utf-8")
     assert "\n\n^[" in doc and "opens this paragraph" in doc
+
+
+
+# ------------------------------------------------------- fifth review round
+def test_adjacent_and_parenthesised_cites_stay_citations() -> None:
+    from engine.pipeline.text import invalid_citations, single_key_citations
+
+    index = CitationIndex()
+    out = single_key_citations("A\\cite{kb_a}\\cite{kb_b}. See \\cite{kb_c}(p. 5).", index)
+    assert out == "A [kb_a] [kb_b]. See [kb_c] (p. 5)."
+    assert invalid_citations(out, index) == ["kb_a", "kb_b", "kb_c"]
+
+
+def test_paper_json_language_beats_the_spec_for_the_inserted_title(tmp_path: Path) -> None:
+    work = make_work_dir(tmp_path, bench="en_paper")
+    (work / "paper_input.txt").write_text((work / "paper_input.txt").read_text(encoding="utf-8") + "Language: English\n", encoding="utf-8")
+    (work / "out").mkdir()
+    structure = {"title": "Počítače", "language": "cs", "sections": [
+        {"title": "Úvod", "role": "introduction", "n_pages": 1}, {"title": "Závěr", "role": "conclusion", "n_pages": 1}]}
+    (work / "out" / "paper_structure.json").write_text(json.dumps(structure), encoding="utf-8")
+    run = run_cli(["--mode", "paper", "-i", str(work / "paper_input.txt"), "-o", str(work / "out"), "-j", "paper_structure.json",
+                   "--use-json", "--no-tex", "--no-pdf"], fake=FakeLLM(), env=engine_env(tmp_path))
+    assert run.exit_code == 0, run.text
+    graph = run.graph()
+    assert graph["graph"]["language"] == "cs"
+    assert "Související práce" in [graph["nodes"][c]["title"] for p, c in graph["edges"] if p == "book"]
+
+
+def test_iso_639_3_codes_and_unknown_language_warning(tmp_path: Path) -> None:
+    from engine.spec.language import normalize_language
+
+    assert [normalize_language(c) for c in ("fil", "yue", "fas", "isl", "any", "und")] == ["fil", "yue", "fa", "is", None, None]
+    work = make_work_dir(tmp_path)
+    run = api_run(work, FakeLLM(), outline="generate", extra=["--language", "not-a-code!"])
+    assert run.exit_code == 0 and any("Unknown language code 'not-a-code!'" in line for line in run.lines)
+
+
+def test_footnote_after_a_list_marker_keeps_the_list() -> None:
+    from engine.pipeline.paper import _before_footnote
+
+    assert _before_footnote("- ") == "- " and _before_footnote("text ") == "text"
+    assert _before_footnote("para.\n\n") == "para.\n\n" and _before_footnote("1. ") == "1. "

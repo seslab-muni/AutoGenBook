@@ -24,7 +24,6 @@ _BRACKET_RE = re.compile(
 _LATEX_CITE_RE = re.compile(r"\\cite[pt]?\*?(?:\[[^\]]*\])?\{(?P<body>[^{}]*)\}")
 _FOOTNOTE_RE = re.compile(r"\\footnote\{\s*(?:Source|Zdroj)\s*:\s*(?P<body>[^{}]*)\}", re.IGNORECASE)
 CODE_RE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]+`)", re.DOTALL)  # fenced blocks and inline code spans
-_FENCE_RE = CODE_RE
 KEY_PREFIXES = ("kb_", "web_", "RID:", "ref_", "doi:", "rw_")
 
 
@@ -186,7 +185,7 @@ def merge_adjacent(text: str, matches: list[CitationMatch]) -> list[CitationMatc
 
 def _prose_segments(text: str) -> Iterable[tuple[int, str]]:
     pos = 0
-    for match in _FENCE_RE.finditer(text):
+    for match in CODE_RE.finditer(text):
         if match.start() > pos:
             yield pos, text[pos : match.start()]
         pos = match.end()

@@ -134,7 +134,9 @@ def single_key_citations(text: str, index: CitationIndex) -> str:
     reads single-key brackets only; code spans and blocks are left alone."""
     out: list[str] = []
     pos = 0
-    for match in find_citations(text, index):
+    matches = find_citations(text, index)
+    starts = {m.start for m in matches}
+    for match in matches:
         keys = list(dict.fromkeys(index.canonical(k) for k in match.keys))
         if match.form == "bracket" and keys == match.keys and len(keys) == 1:
             continue
@@ -142,6 +144,8 @@ def single_key_citations(text: str, index: CitationIndex) -> str:
         rendered = " ".join(f"[{k}]" for k in keys)
         if before and not before[-1].isspace() and before[-1] not in "([":
             rendered = " " + rendered  # `word\cite{k}` -> `word [k]`: a bracket glued to a word is no citation
+        if text[match.end : match.end + 1] in ("[", "(") or match.end in starts:
+            rendered += " "  # `\cite{a}\cite{b}` / `\cite{a}(p. 5)`: not a link, still two citations
         out += [before, rendered]
         pos = match.end
     out.append(text[pos:])

@@ -148,7 +148,7 @@ class PaperRun(BookRun):
         # The inserted section's title follows the output language (same
         # precedence as the graph's language, resolved again by _set_graph).
         sample = " ".join(f"{s.title}. {s.summary}" for s in paper.sections).strip() or self.input_text
-        self.language = self.resolve_language(paper.language, sample)
+        self.language = self.resolve_language(paper.language, sample, saved=paper.language or "")
         self._set_paper(self._ensure_related_work(paper))
 
     def _set_paper(self, paper) -> None:  # noqa: ANN001
@@ -345,17 +345,20 @@ class PaperRun(BookRun):
         self.references = read_json(self.cfg.out_dir / "references.json") or {}
         group = document_group(self.index)
         needed: dict[str, str] = {}
+        cited: list[str] = []
         for key in self.leaf_order:
             path = section_path(self.cfg.out_dir, key, self.graph.nodes[key])
-            if path is None:
-                continue
-            for cite in cited_keys(read_section(path), self.index):
-                doc = group(cite)
-                cached = self.references.get(doc)
-                # A record is reused only for the same file content (a replaced
-                # source under the same name gets a new record).
-                if doc.startswith("kb_") and (cached is None or cached.get("source_sha256") != await self._source_sha(self.index.lookup(cite))):
-                    needed.setdefault(doc, cite)
+            if path is not None:
+                cited += cited_keys(read_section(path), self.index)
+        refs = {r.source_path: r for r in (self.index.lookup(c) for c in dict.fromkeys(cited)) if r is not None and r.source_path}
+        await asyncio.gather(*(self._source_sha(r) for r in refs.values()))  # hash distinct files concurrently
+        for cite in cited:
+            doc = group(cite)
+            cached = self.references.get(doc)
+            # A record is reused only for the same file content (a replaced
+            # source under the same name gets a new record).
+            if doc.startswith("kb_") and (cached is None or cached.get("source_sha256") != await self._source_sha(self.index.lookup(cite))):
+                needed.setdefault(doc, cite)
         kb = self.retrieval.kb
 
         async def one(doc: str, cite: str) -> None:
@@ -465,7 +468,7 @@ class PaperRun(BookRun):
             matches = merge_adjacent(text, find_citations(text, numbering.index))
             out, pos = [], 0
             for m in matches:
-                out.append(text[pos:m.start].rstrip(" \t"))
+                out.append(_before_footnote(text[pos:m.start]))
                 notes = []
                 for key in m.keys:
                     numbering.number(key, node_key)
@@ -511,6 +514,16 @@ class PaperRun(BookRun):
             return AssemblyStyle(**base, md_bibliography=bibliography, tex_bibliography=bibliography)
         return AssemblyStyle(**base, md_bibliography=bibliography, tex_resolve=cite_resolver, tex_bibliography=None, bibtex=True,
                              latex_vars={"bibliography-file": "refs"}, pandoc_args=[] if legacy else ["--natbib"])
+
+
+def _before_footnote(text: str) -> str:
+    """Text before a `^[...]` footnote: trailing spaces removed (the footnote
+    attaches to the word), except after a list marker or at a line start."""
+    stripped = text.rstrip(" \t")
+    line = stripped.rsplit("\n", 1)[-1]
+    if not stripped or stripped.endswith("\n") or re.fullmatch(r"\s*(?:[-*+]|\d+[.)])", line):
+        return text
+    return stripped
 
 
 def _escape_at(text: str) -> str:

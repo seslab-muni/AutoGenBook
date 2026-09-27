@@ -322,10 +322,17 @@ class BookRun:
         return f"{head}: {first}" if first is not None else head
 
     # ------------------------------------------------------- run settings
-    def resolve_language(self, structure_language: str | None = None, sample: str | None = None) -> str:
-        """The output language: --language, the saved graph's, the spec's, the
+    def resolve_language(self, structure_language: str | None = None, sample: str | None = None, *, saved: str | None = None) -> str:
+        """The output language: --language, the saved graph's (`saved` stands in
+        for a graph about to be built from a structure), the spec's, the
         structure JSON's, else detected (from `sample` or the graph/input)."""
-        graph_language = str(self.graph.attrs.get("language") or "") if self.graph is not None else ""
+        if saved is not None:
+            graph_language = saved
+        else:
+            graph_language = str(self.graph.attrs.get("language") or "") if self.graph is not None else ""
+        if self.cfg.language and not normalize_language(self.cfg.language) and not getattr(self, "_warned_language", False):
+            self._warned_language = True
+            self.sink.emit("info", f"Unknown language code '{self.cfg.language}'; detecting the language instead", level="warning")
         return (
             normalize_language(self.cfg.language)
             or normalize_language(graph_language)

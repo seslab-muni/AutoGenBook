@@ -46,7 +46,9 @@ def normalize_language(value: str | None) -> str | None:
     tag = code.group(1)
     if tag in ISO_639_2:
         return ISO_639_2[tag]
-    return tag if tag in ISO_639_1 else None
+    if len(tag) == 2:
+        return tag if tag in ISO_639_1 else None
+    return None if tag in _NOT_LANGUAGES else tag  # ISO 639-3 (fil, yue, haw, ...)
 
 
 ISO_639_1 = frozenset("""
@@ -63,7 +65,12 @@ ISO_639_2 = {
     "swe": "sv", "nor": "no", "dan": "da", "fin": "fi", "ell": "el", "gre": "el", "ron": "ro", "rum": "ro",
     "bul": "bg", "hrv": "hr", "srp": "sr", "slv": "sl", "lit": "lt", "lav": "lv", "est": "et", "heb": "he",
     "hin": "hi", "vie": "vi", "tha": "th", "ind": "id", "cat": "ca", "eus": "eu", "baq": "eu", "glg": "gl",
+    "fas": "fa", "per": "fa", "isl": "is", "ice": "is", "gle": "ga", "msa": "ms", "may": "ms", "sqi": "sq",
+    "alb": "sq", "mkd": "mk", "mac": "mk", "bel": "be", "kat": "ka", "geo": "ka", "hye": "hy", "arm": "hy",
+    "urd": "ur", "ben": "bn", "tam": "ta", "swa": "sw", "afr": "af", "cym": "cy", "wel": "cy", "lat": "la",
 }
+# Three-letter tokens seen in "Language:" lines that are not languages.
+_NOT_LANGUAGES = frozenset({"any", "all", "tbd", "und", "mul", "zxx", "mis", "n/a", "the", "not", "yes", "own", "auto"})
 
 
 def language_name(code: str) -> str:

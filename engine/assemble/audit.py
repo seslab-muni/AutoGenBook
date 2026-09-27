@@ -19,10 +19,10 @@ from engine.assemble.citations import CitationIndex, find_citations
 from engine.util.fs import atomic_write_json
 
 _IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
-# Upper-case markers are matched case-sensitively ("todo" is a Spanish and
-# Portuguese word); phrases in any case.
+# TODO only in upper case or as "Todo:" ("todo" is a Spanish and Portuguese
+# word); the other markers in any case.
 _PLACEHOLDER_RE = re.compile(
-    r"\b(?:TODO|TBD|FIXME|XXX)\b|(?i:\blorem ipsum\b|\bgeneral background knowledge\b|\[citation needed\])"
+    r"\bTODO\b|\bTodo:|(?i:\b(?:TBD|FIXME|XXX)\b|\blorem ipsum\b|\bgeneral background knowledge\b|\[citation needed\])"
 )
 _NUMBER_RE = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)?\s*(?:%|percent|procent)|\b\d{2,}(?:[.,]\d+)?\b")
 

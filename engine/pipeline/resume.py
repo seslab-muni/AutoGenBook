@@ -61,6 +61,7 @@ def decide_resume(config: RunConfig, input_sha256: str, sink: EventSink) -> Resu
         sink.emit("resume", "Saved structure is unreadable; starting a full run.", level="warning")
         return ResumeDecision(None, False, "unreadable graph")
     stored_path = str(graph.attrs.get("input_path") or "").strip()
+    stored_sha = str(graph.attrs.get("input_sha256") or "").strip()
     if stored_path:
         try:
             same = Path(stored_path).expanduser().resolve() == config.input_path
@@ -69,9 +70,9 @@ def decide_resume(config: RunConfig, input_sha256: str, sink: EventSink) -> Resu
         if not same:
             reason = f"the saved structure belongs to a different input file ({Path(stored_path).name})"
             sink.emit("resume", f"Skipping --resume: {reason}. Starting a new run from the current input.")
-            stored = str(graph.attrs.get("input_sha256") or "").strip()
-            return ResumeDecision(None, False, reason, refused=True, content_changed=bool(stored) and stored != input_sha256)
-    stored_sha = str(graph.attrs.get("input_sha256") or "").strip()
+            # Unchanged content is only known with a stored hash; without one the
+            # structure JSON may come from an edited spec: regenerate.
+            return ResumeDecision(None, False, reason, refused=True, content_changed=stored_sha != input_sha256)
     if stored_sha and stored_sha != input_sha256:
         reason = f"the input changed since the last run (saved {stored_sha[:12]}..., now {input_sha256[:12]}...)"
         sink.emit("resume", f"Skipping --resume: {reason}. Starting a new run from the current input.")

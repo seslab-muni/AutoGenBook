@@ -122,6 +122,7 @@ def summarize_body(lines: list[str], max_chars: int = 1500) -> str:
     """Bullets and prose under a heading, flattened into one summary; source
     lists and bare URLs are dropped (they are not writing instructions)."""
     cleaned: list[str] = []
+    instructions: list[str] = []
     skip_sources = False
     for raw in lines:
         stripped = raw.strip()
@@ -144,11 +145,18 @@ def summarize_body(lines: list[str], max_chars: int = 1500) -> str:
         line = re.sub(r"\s+", " ", line).strip()
         if line.lower() in _SCAFFOLD_LINES:
             continue
-        if line:
+        if line.lower().startswith("writing instructions:"):
+            instructions.append(line)
+        elif line:
             cleaned.append(line)
     summary = "\n".join(cleaned).strip()
     if len(summary) > max_chars:
         summary = summary[: max_chars - 3].rstrip() + "..."
+    if instructions:
+        # The API's shape: a trailing "\n\nWriting instructions:" paragraph, which
+        # the engine and the API's importer both strip from content summaries.
+        merged = " ".join(i.split(":", 1)[1].strip() for i in instructions)
+        summary = f"{summary}\n\nWriting instructions: {merged}".strip()
     return summary
 
 
