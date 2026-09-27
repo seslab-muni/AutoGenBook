@@ -40,8 +40,9 @@ def _frames(data: bytes) -> Iterable[tuple[int, int, float]]:
     end = len(data)
     if end >= 128 and data[-128:-125] == b"TAG":
         end -= 128
+    first = True
     while pos + 4 <= end:
-        b1, b2 = data[pos + 1], data[pos + 2]
+        b1, b2, b3 = data[pos + 1], data[pos + 2], data[pos + 3]
         if data[pos] != 0xFF or (b1 & 0xE0) != 0xE0:
             pos += 1
             continue
@@ -64,6 +65,16 @@ def _frames(data: bytes) -> Iterable[tuple[int, int, float]]:
         if length < 4:
             pos += 1
             continue
+        if first:
+            first = False
+            # A LAME/Xing "Info"/"Xing" or Fraunhofer "VBRI" header frame carries
+            # stream metadata, not audio: skip it (joined clips must not repeat it).
+            mono = (b3 >> 6) == 3
+            side_info = (17 if mono else 32) if version == 3 else (9 if mono else 17)
+            tag = data[pos + 4 + side_info : pos + 8 + side_info]
+            if tag in (b"Xing", b"Info") or data[pos + 36 : pos + 40] == b"VBRI":
+                pos += length
+                continue
         yield pos, length, samples / sample_rate
         pos += length
 
@@ -73,7 +84,8 @@ def mp3_duration(data: bytes) -> float:
 
 
 def mp3_frames_only(data: bytes) -> bytes:
-    """The audio frames without ID3/Xing wrappers (safe to concatenate)."""
+    """The audio frames without ID3 tags or a Xing/Info/VBRI header frame
+    (safe to concatenate)."""
     return b"".join(data[pos : pos + length] for pos, length, _s in _frames(data))
 
 

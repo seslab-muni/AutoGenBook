@@ -155,7 +155,7 @@ def test_citation_styles(tmp_path: Path, style: str) -> None:
     doc = _document(run.out_dir)
     assert "\\begin{abstract}" in tex and "\\documentclass" in tex and "\\chapter" not in tex
     if style == "bibtex":
-        assert re.search(r"\\cite\{kb_[A-Za-z0-9_.:\-]+\}", tex) and "\\bibliography{refs}" in tex
+        assert re.search(r"\\citep\{kb_[A-Za-z0-9_.:\-]+\}", tex) and "\\bibliography{refs}" in tex
         assert "## References" in doc and "[1]" in doc
     elif style == "numeric":
         assert "\\cite{" not in tex and "\\bibliography{" not in tex and "{[}1{]}" in tex

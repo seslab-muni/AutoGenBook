@@ -102,7 +102,9 @@ def glossary_text(glossary: Glossary | None, max_chars: int = 4000) -> str:
 
 
 def heading_rule(graph: DocGraph, key: str) -> str:
-    level = min(6, graph.depth(key) + 2)
+    # The node's own heading is level depth+1 in the assembled document, so
+    # body sub-headings start one level below it; past `######` there is none.
+    level = graph.depth(key) + 2
     if level > 6:
         return "Do not use headings inside the body."
     return f"Use sub-headings only if the section is long, starting at level {'#' * level} (never higher)."
@@ -141,17 +143,26 @@ def invalid_citations(body: str, index: CitationIndex) -> list[str]:
     return bad
 
 
-def strip_citations(body: str, tokens: Iterable[str]) -> str:
-    """Remove the given citation tokens (hallucinated keys) from markers."""
+def strip_citations(body: str, tokens: Iterable[str], index: CitationIndex | None = None) -> str:
+    """Remove the given citation tokens (hallucinated keys) from the markers
+    `invalid_citations` found - the same spans, so code blocks and link
+    labels are never touched. A marker left without keys disappears together
+    with the space before it."""
     drop = set(tokens)
-
-    def repl(m: re.Match[str]) -> str:
-        keys = [k.strip() for k in re.split(r"[,;]", m.group(1)) if k.strip()]
-        kept = [k for k in keys if k not in drop]
-        return "[" + "; ".join(kept) + "]" if kept else ""
-
-    out = re.sub(r"\[([A-Za-z0-9_.:\-]+(?:\s*[,;]\s*[A-Za-z0-9_.:\-]+)*)\](?!\()", lambda m: repl(m) if any(k.strip() in drop for k in re.split(r"[,;]", m.group(1))) else m.group(0), body)
-    return re.sub(r" +([.,;:])", r"\1", out)
+    out: list[str] = []
+    pos = 0
+    for match in find_citations(body, index or CitationIndex()):
+        if not any(k.strip() in drop for k in match.keys):
+            continue
+        out.append(body[pos : match.start])
+        kept = [k.strip() for k in match.keys if k.strip() not in drop]
+        if kept:
+            out.append("[" + "; ".join(kept) + "]")
+        elif out and out[-1].endswith(" "):
+            out[-1] = out[-1].rstrip(" ")
+        pos = match.end
+    out.append(body[pos:])
+    return "".join(out)
 
 
 def dumps(obj: Any) -> str:

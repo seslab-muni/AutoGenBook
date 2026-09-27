@@ -34,7 +34,7 @@ from engine.events import EventSink
 from engine.llm.limiter import AdaptiveLimiter
 from engine.llm.pricing import Pricing
 from engine.llm.retry import THROTTLE_STATUS, backoff_seconds, is_transient, retry_after_seconds, status_of
-from engine.llm.structured import Level, extract_json, json_schema_for, looks_like_format_rejection, schema_instructions
+from engine.llm.structured import Level, extract_json, json_schema_for, looks_like_format_rejection, looks_unrelated_to_format, schema_instructions
 from engine.llm.usage import UsageEntry, UsageLedger
 
 T = TypeVar("T")
@@ -240,10 +240,9 @@ class LLMClient:
                     )
                     choice = completion.choices[0] if completion.choices else None
                     message = choice.message if choice else None
+                    # Only the answer: a reasoning model's `reasoning_content` is scratch
+                    # work and never stands in for an empty `content`.
                     text = (message.content if message else None) or ""
-                    if not text and message is not None:
-                        extra = message.model_dump() if hasattr(message, "model_dump") else {}
-                        text = str(extra.get("reasoning_content") or extra.get("reasoning") or "")
                     p, c, t, _ = _usage_numbers(getattr(completion, "usage", None))
                     return ChatResult(text, model, p, c, t, choice.finish_reason if choice else None, rf_label)
                 outcome = await self._call(
@@ -312,6 +311,7 @@ class LLMClient:
                 lock.release()
         try:
             level = self.level_for(model)
+            first_error: BaseException | None = None
             while True:
                 msgs = self._json_messages(messages, name, schema, level)
                 try:
@@ -321,22 +321,31 @@ class LLMClient:
                     )
                     break
                 except (openai.BadRequestError, openai.UnprocessableEntityError, openai.NotFoundError) as exc:
-                    if level < Level.PROMPT and (probing or looks_like_format_rejection(str(exc))):
+                    message = str(exc)
+                    downgrade = looks_like_format_rejection(message) or (probing and not looks_unrelated_to_format(message))
+                    if level < Level.PROMPT and downgrade:
+                        first_error = first_error or exc
                         new_level = Level(level + 1)
-                        self._levels[model] = new_level
-                        self.sink.emit(
-                            "info",
-                            f"Model {model} rejected response_format={level.label}; using {new_level.label}",
-                            level="warning",
-                        )
+                        self.sink.emit("info", f"Model {model} rejected response_format={level.label}; trying {new_level.label}", level="debug")
                         level = new_level
                         continue
-                    raise
+                    # Every level failed the same way: the request itself is the
+                    # problem (e.g. context length), not the format - keep the level.
+                    if first_error is None or first_error is exc:
+                        raise
+                    raise first_error from exc
+            # The level is recorded only once a call at it succeeded.
+            if level != self.level_for(model):
+                self.sink.emit("info", f"Model {model}: structured output via {level.label}", level="warning")
+            self._levels[model] = level
             if probing:
                 self._settled.add(model)
         finally:
             if probing and lock.locked():
                 lock.release()
+
+        if not (result.text or "").strip() and result.finish_reason == "length":
+            raise SchemaError(label, "the model returned no content before reaching its output limit (finish_reason=length)")
 
         try:
             return output.model_validate(extract_json(result.text))

@@ -44,6 +44,7 @@ class AssemblyStyle:
     abstract: str | None = None
     toc: bool = True
     check_numeric_claims: bool = False
+    pandoc_args: list[str] = field(default_factory=list)  # e.g. --natbib for pandoc-syntax citations
 
 
 @dataclass
@@ -151,11 +152,11 @@ async def assemble_outputs(
             template=style.template,
             top_level=style.top_level,
             documentclass=style.documentclass,
-            raw_tex=doc.legacy_tex or style.tex_resolve is not None,
+            raw_tex=doc.legacy_tex,  # generated Markdown never passes raw TeX through
             graphics_path=cfg.out_dir,
             abstract=style.abstract,
             toc=style.toc,
-            extra_args=[arg for name, value in style.latex_vars.items() for arg in ("-V", f"{name}={value}")],
+            extra_args=[arg for name, value in style.latex_vars.items() for arg in ("-V", f"{name}={value}")] + list(style.pandoc_args),
         )
     except LatexError as exc:
         outcome.pdf_failed = str(exc)

@@ -13,19 +13,8 @@ from engine.llm.usage import UsageLedger
 from engine.retrieval.dense import LocalEmbeddings, RemoteEmbeddings, VectorCache
 from engine.retrieval.extract import ExtractOptions
 from engine.retrieval.kb import HybridRetriever, KnowledgeBase, build_dense_index
-from engine.retrieval.rerank import LLMListwiseReranker, RemoteReranker, RerankUnavailable
+from engine.retrieval.rerank import LLMListwiseReranker, RemoteReranker
 from engine.retrieval.types import RetrievalItem
-
-
-class _StrictRemote(RemoteReranker):
-    """Benchmark variant: a missing endpoint is an error, not a silent fallback,
-    so a row labelled `hybrid-rerank` really measured the remote reranker."""
-
-    async def rerank(self, query: str, docs: Sequence[str]) -> list[float]:
-        try:
-            return await super().rerank(query, docs)
-        except RerankUnavailable as exc:
-            raise RuntimeError(f"remote reranker unavailable: {exc}") from exc
 
 
 class BenchRetriever:
@@ -69,7 +58,7 @@ async def build_bench_retriever(
     rerankers: list[Any] = []
     if mode == "hybrid-rerank":
         rerankers = [
-            _StrictRemote(
+            RemoteReranker(
                 llm, model=env.get("AUTOGENBOOK_RERANK_MODEL") or DEFAULT_RERANK_MODEL,
                 base_url=env.get("AUTOGENBOOK_RERANK_BASE_URL") or base_url,
                 api_key=env.get("AUTOGENBOOK_RERANK_API_KEY") or api_key,
@@ -77,7 +66,10 @@ async def build_bench_retriever(
         ]
     elif mode == "hybrid-llmrerank":
         rerankers = [LLMListwiseReranker(llm)]
+    # strict: a row labelled hybrid-rerank/-llmrerank really measured the reranker
+    # (an unavailable or failing reranker is an error, not a silent fused order).
     retriever = HybridRetriever(
-        kb, dense=dense, rerankers=rerankers, use_lexical=mode != "dense", candidates=RetrievalSettings().candidates
+        kb, dense=dense, rerankers=rerankers, use_lexical=mode != "dense", candidates=RetrievalSettings().candidates,
+        strict_rerank=bool(rerankers),
     )
     return BenchRetriever(retriever, llm)

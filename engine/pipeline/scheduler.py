@@ -6,7 +6,10 @@
   finishes before new drafts start and sections complete progressively.
 - A failed task marks its dependents skipped; the others keep running
   (failures are collected). A `critical` task failure, or any failure when
-  `fail_fast` is set, cancels everything still running.
+  `fail_fast` is set, cancels everything still running. An `optional` task
+  (a quality pass such as the glossary or the consistency pass) that fails
+  is reported but releases its dependents as if it had succeeded, and does
+  not fail the run.
 - Tasks can add tasks while the run is going (`add`), which is how the
   generation plan is attached once subdivision has fixed the leaves.
 - Cancellation (SIGTERM) cancels the running tasks and propagates.
@@ -31,6 +34,7 @@ class Task:
     priority: int = 0
     order: int = 0
     critical: bool = False
+    optional: bool = False
 
 
 @dataclass
@@ -38,6 +42,7 @@ class SchedulerResult:
     done: list[str] = field(default_factory=list)
     failed: dict[str, BaseException] = field(default_factory=dict)
     skipped: list[str] = field(default_factory=list)
+    soft_failed: dict[str, BaseException] = field(default_factory=dict)  # optional tasks
     aborted: bool = False
 
     @property
@@ -60,6 +65,7 @@ class Scheduler:
         self._fail_fast = fail_fast
         self._on_failure = on_failure
         self._ready: list[tuple[int, int, int, str]] = []
+        self._dependents: dict[str, set[str]] = {}  # dep id -> ids of tasks waiting on it
         self._counter = itertools.count()
         self._wakeup: asyncio.Event | None = None
         self._abort = False
@@ -70,7 +76,9 @@ class Scheduler:
             raise ValueError(f"duplicate task id {task.id}")
         self.tasks[task.id] = task
         self.state[task.id] = "pending"
-        self._consider(task.id)
+        for dep in task.deps:
+            self._dependents.setdefault(dep, set()).add(task.id)
+        self._settle([task.id])
         if self._wakeup is not None:
             self._wakeup.set()
 
@@ -80,35 +88,37 @@ class Scheduler:
 
     def _dep_state(self, task: Task) -> str:
         """ready | blocked | doomed"""
+        blocked = False
         for dep in task.deps:
             state = self.state.get(dep)
             if state in {"failed", "skipped"}:
                 return "doomed"
-            if state == "done":
+            if state in {"done", "soft_failed"}:
                 continue
-            return "blocked"  # pending, running, or not added yet (added later)
-        return "ready"
+            blocked = True  # pending, running, or not added yet (added later)
+        return "blocked" if blocked else "ready"
 
-    def _consider(self, task_id: str) -> None:
-        if self.state.get(task_id) != "pending":
-            return
-        task = self.tasks[task_id]
-        status = self._dep_state(task)
-        if status == "ready":
-            self.state[task_id] = "queued"
-            heapq.heappush(self._ready, (-task.priority, task.order, next(self._counter), task_id))
-        elif status == "doomed":
-            self._skip(task_id)
-
-    def _skip(self, task_id: str) -> None:
-        self.state[task_id] = "skipped"
-        self.result.skipped.append(task_id)
-        self._dependents_changed(task_id)
+    def _settle(self, task_ids: list[str]) -> None:
+        """Queue the given pending tasks that became ready and skip the doomed
+        ones, following skips through their dependents iteratively (a failed
+        first draft in chained mode dooms a chain of thousands of tasks)."""
+        work = list(task_ids)
+        while work:
+            task_id = work.pop()
+            if self.state.get(task_id) != "pending":
+                continue
+            task = self.tasks[task_id]
+            status = self._dep_state(task)
+            if status == "ready":
+                self.state[task_id] = "queued"
+                heapq.heappush(self._ready, (-task.priority, task.order, next(self._counter), task_id))
+            elif status == "doomed":
+                self.state[task_id] = "skipped"
+                self.result.skipped.append(task_id)
+                work.extend(self._dependents.get(task_id, ()))
 
     def _dependents_changed(self, task_id: str) -> None:
-        for other_id, other in self.tasks.items():
-            if task_id in other.deps and self.state.get(other_id) == "pending":
-                self._consider(other_id)
+        self._settle(sorted(self._dependents.get(task_id, ())))
 
     # ---------------------------------------------------------------- running
     async def run(self) -> SchedulerResult:
@@ -138,6 +148,11 @@ class Scheduler:
                     if exc is None:
                         self.state[task_id] = "done"
                         self.result.done.append(task_id)
+                    elif task.optional and not isinstance(exc, asyncio.CancelledError):
+                        self.state[task_id] = "soft_failed"
+                        self.result.soft_failed[task_id] = exc
+                        if self._on_failure is not None:
+                            self._on_failure(task, exc)
                     else:
                         self.state[task_id] = "failed"
                         self.result.failed[task_id] = exc
@@ -155,7 +170,9 @@ class Scheduler:
                         self.state[task_id] = "failed"
                         self.result.failed.setdefault(task_id, asyncio.CancelledError())
                     running.clear()
-        except asyncio.CancelledError:
+        except BaseException:
+            # Cancellation (SIGTERM) or a bug in the loop itself: never leave
+            # LLM requests running behind the caller's back.
             for future in running:
                 future.cancel()
             await asyncio.gather(*running, return_exceptions=True)

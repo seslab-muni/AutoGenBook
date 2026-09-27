@@ -98,3 +98,18 @@ REJECTION_HINTS = ("response_format", "json_schema", "json schema", "structured"
 def looks_like_format_rejection(message: str) -> bool:
     lowered = (message or "").lower()
     return any(hint in lowered for hint in REJECTION_HINTS)
+
+
+# 400/404/422 texts that have nothing to do with `response_format`: switching
+# to a weaker structured-output level would not help and must not stick.
+UNRELATED_HINTS = (
+    "context length", "context_length", "maximum context", "context window", "too many tokens", "token limit",
+    "max_tokens", "prompt is too long", "input is too long", "content policy", "content_policy", "safety",
+    "moderation", "invalid api key", "api key", "unauthorized", "insufficient", "credit", "quota",
+    "model not found", "no such model", "does not exist", "unknown model", "no endpoints found",
+)
+
+
+def looks_unrelated_to_format(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(hint in lowered for hint in UNRELATED_HINTS) and not looks_like_format_rejection(message)

@@ -22,7 +22,16 @@ from engine.retrieval.types import RetrievalItem
 
 
 class RerankUnavailable(RuntimeError):
-    pass
+    """The reranker cannot work in this run (no endpoint, no access): move on
+    to the next fallback for every later query."""
+
+
+class RerankFailed(RuntimeError):
+    """One reranking request failed (after the client's retries): that query
+    keeps its fused order; the reranker stays enabled."""
+
+
+_MISSING_STATUS = {400, 401, 403, 404, 405, 422, 501}
 
 
 class Reranker(Protocol):
@@ -49,16 +58,27 @@ class RemoteReranker:
             return []
         order = [self.endpoint] if self.endpoint else ["rerank", "score"]
         last_error: Exception | None = None
+        missing = True  # every endpoint answered "not here / not allowed / not this API"
         for endpoint in order:
             try:
                 scores = await (self._rerank(query, docs) if endpoint == "rerank" else self._score(query, docs))
-            except (httpx.HTTPStatusError, httpx.TransportError, ValueError, KeyError, TypeError) as exc:
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                missing = missing and exc.response.status_code in _MISSING_STATUS
+                continue
+            except httpx.TransportError as exc:  # timeouts, resets: transient
+                last_error = exc
+                missing = False
+                continue
+            except (ValueError, KeyError, TypeError) as exc:  # the response is not a rerank result
                 last_error = exc
                 continue
             self.endpoint = endpoint
             return scores
-        self.unavailable = True
-        raise RerankUnavailable(f"no rerank endpoint at {self.base_url}: {last_error}")
+        if missing and self.endpoint is None:
+            self.unavailable = True
+            raise RerankUnavailable(f"no rerank endpoint at {self.base_url}: {last_error}")
+        raise RerankFailed(f"rerank request failed: {last_error}")
 
     async def _rerank(self, query: str, docs: Sequence[str]) -> list[float]:
         data = await self.llm.post_json(

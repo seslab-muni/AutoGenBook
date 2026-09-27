@@ -44,8 +44,9 @@ def test_bench_retrieval_old_baseline_on_one_kb(tmp_path) -> None:
     bench = _load("bench_retrieval")
     code = bench.main(["--retriever", "old", "--kb", "input/bench/en_book", "--out", str(tmp_path)])
     assert code == 0
-    rows = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
-    assert {r["set_name"] for r in rows} == {"en", "cs"}
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    rows = report["results"]
+    assert report["errors"] == [] and {r["set_name"] for r in rows} == {"en", "cs"}
     assert all(0.0 <= r["recall"] <= 1.0 and r["n"] >= 30 for r in rows)
 
 

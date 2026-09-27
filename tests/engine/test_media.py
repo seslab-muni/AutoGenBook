@@ -74,6 +74,12 @@ def test_mp3_frames_duration_and_join() -> None:
     joined = join_mp3([id3 + clip, clip])
     assert not joined.startswith(b"ID3") and abs(mp3_duration(joined) - 2 * mp3_duration(clip)) < 0.001
     assert mp3_duration(b"not audio at all") == 0
+    # A LAME "Info" header frame (stereo MPEG-1: tag after 4 + 32 bytes) is metadata, not audio.
+    info = bytearray(clip[:417])
+    info[3] = 0x00  # stereo
+    info[36:40] = b"Info"
+    assert mp3_duration(bytes(info) + clip) == mp3_duration(clip)
+    assert join_mp3([bytes(info) + clip, bytes(info) + clip]).count(b"Info") == 0
 
 
 def _wav(path: Path, seconds: float, rate: int = 8000) -> Path:

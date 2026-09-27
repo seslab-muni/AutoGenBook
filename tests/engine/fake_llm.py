@@ -92,6 +92,17 @@ class Fault:
 
 
 @dataclass
+class ChatReply:
+    """An override's reply with non-default message fields (e.g. a reasoning
+    model that spent its output budget thinking: empty content, reasoning
+    text, finish_reason "length")."""
+
+    content: str
+    finish_reason: str = "stop"
+    reasoning: str | None = None
+
+
+@dataclass
 class FakeCall:
     method: str
     path: str
@@ -107,6 +118,8 @@ class FakeCall:
     status: int = 200
     started: float = 0.0
     finished: float = 0.0
+    finish_reason: str = "stop"
+    reasoning: str | None = None
 
     @property
     def system(self) -> str:
@@ -432,8 +445,9 @@ class FakeLLM:
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": content},
-                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": content,
+                                    **({"reasoning_content": call.reasoning} if call.reasoning else {})},
+                        "finish_reason": call.finish_reason,
                     }
                 ],
                 "usage": usage,
@@ -444,10 +458,17 @@ class FakeLLM:
         if call.schema_name is None:
             override = self.overrides.get("(text)")
             if override is not None:
-                return str(override(call))
+                reply = override(call)
+                if isinstance(reply, ChatReply):
+                    call.finish_reason, call.reasoning = reply.finish_reason, reply.reasoning
+                    return reply.content
+                return str(reply)
             return _responders.plain_text(call)
         override = self.overrides.get(call.schema_name)
         obj = override(call) if override is not None else _responders.respond(call)
+        if isinstance(obj, ChatReply):
+            call.finish_reason, call.reasoning = obj.finish_reason, obj.reasoning
+            return obj.content
         if isinstance(obj, str):
             return obj
         text = json.dumps(obj, ensure_ascii=False)

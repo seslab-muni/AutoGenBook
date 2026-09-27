@@ -98,6 +98,10 @@ def _short(text: str, limit: int) -> str:
 
 class BookRun:
     doc_type = "book"
+    # Quality passes whose failure is reported but neither blocks dependents
+    # nor fails the run (drafts proceed without a glossary, a book whose
+    # consistency pass failed is still complete).
+    optional_kinds: frozenset[str] = frozenset({"glossary", "consistency"})
     agents = {
         "outline": OUTLINE, "metadata": METADATA, "subdivide": SUBDIVIDE, "glossary": GLOSSARY, "writer": WRITER,
         "reviewer": REVIEWER, "reviser": REVISER, "length": LENGTH, "consistency": CONSISTENCY,
@@ -145,7 +149,25 @@ class BookRun:
         has_kb = cfg.kb_dir is not None
         need_dense = has_kb and cfg.retrieval.dense != "none"
         run_kind = "full"
-        if decision.accepted and decision.graph is not None:
+        if decision.accepted and decision.graph is not None and self._subdivision_interrupted(decision.graph):
+            # This engine saved the structure but was stopped before subdivision
+            # finished: finish it (no outline call), then plan as usual.
+            self.graph = decision.graph
+            self._resolve_language_and_author()
+            self._stamp_graph()
+            self.graph.save(self.paths.graph)
+            self.sink.emit("resume", "The saved structure was interrupted during subdivision; finishing it before generating")
+            run_kind = "resume"
+            kb_deps: tuple[str, ...] = ()
+            if has_kb:
+                self._add(TaskSpec("kb.build", "kb.build", priority=100))
+                kb_deps = ("kb.build",)
+                if need_dense:
+                    self._add(TaskSpec("kb.embed", "kb.embed", ("kb.build",), priority=90))
+            elif cfg.retrieval.enable_web:
+                self.retrieval.enable_web_only()
+            self._add(TaskSpec("subdivide", "subdivide", kb_deps, priority=94))
+        elif decision.accepted and decision.graph is not None:
             self.graph = decision.graph
             self._resolve_language_and_author()
             self._stamp_graph()
@@ -171,7 +193,7 @@ class BookRun:
             # A full run owns the work dir: intermediate results of an earlier
             # (refused or different) run must not leak into this one.
             self.clear_work()
-            from_txt = self._structure_from_txt()
+            from_txt = self._structure_from_txt(force_txt=decision.force_txt)
             for spec in plan_structure(has_kb=has_kb, need_dense=need_dense, from_txt=from_txt):
                 self._add(spec)
             if not has_kb and cfg.retrieval.enable_web:
@@ -187,6 +209,7 @@ class BookRun:
             "patched": self.patched,
             "failed_tasks": sorted(result.failed),
             "skipped_tasks": sorted(result.skipped),
+            "optional_failed": sorted(result.soft_failed),
         }
         if self.finished:
             self.sink.emit("generate", f"Duration: {_duration(time.perf_counter() - self.gen_started)} ({len(self.finished)} sections)")
@@ -219,7 +242,12 @@ class BookRun:
         return False
 
     def clear_work(self) -> None:
+        """A full run owns the output: intermediate results and the section/
+        review files of an earlier run (possibly of another structure, under
+        the same positional keys) must not leak into this one."""
         _clear_dir(self.paths.work / "work")
+        _clear_dir(self.paths.sections)
+        _clear_dir(self.paths.reviews)
 
     def needs_split(self, node: dict[str, Any], max_pages: float) -> bool:
         return bool(node.get("needsSubdivision")) or float(node.get("n_pages", 1.0)) >= max_pages
@@ -235,7 +263,7 @@ class BookRun:
         runner = self._runner(spec)
         self.scheduler.add(
             Task(spec.id, spec.kind, runner, set(spec.deps), spec.node_key, spec.priority, spec.order,
-                 critical=spec.kind in {"outline", "structure"})
+                 critical=spec.kind in {"outline", "structure"}, optional=spec.kind in self.optional_kinds)
         )
 
     def _runner(self, spec: TaskSpec):  # noqa: ANN202
@@ -266,7 +294,8 @@ class BookRun:
         if isinstance(exc, asyncio.CancelledError):
             return
         where = f"section '{self.graph.title(task.node_key)}' ({task.node_key})" if (task.node_key and self.graph) else task.kind
-        self.sink.emit("generate", f"{task.kind} failed for {where}: {str(exc)[:300]}", level="warning", node_key=task.node_key)
+        tail = " (optional pass; continuing without it)" if task.optional else ""
+        self.sink.emit("generate", f"{task.kind} failed for {where}: {str(exc)[:300]}{tail}", level="warning", node_key=task.node_key)
 
     def _first_error(self, result) -> BaseException | None:  # noqa: ANN001
         for exc in result.failed.values():
@@ -313,19 +342,36 @@ class BookRun:
             attrs["author"] = self.author
         attrs["engine"] = "engine"
 
-    def _structure_from_txt(self) -> bool:
+    def _structure_from_txt(self, *, force_txt: bool = False) -> bool:
         cfg = self.cfg
         if cfg.use_txt:
             return True
-        if cfg.json_path.exists():
-            return False
-        return True
+        if cfg.use_json:
+            return not cfg.json_path.exists()
+        if force_txt and cfg.json_path.exists():
+            self.sink.emit("json", f"Ignoring the existing {cfg.json_path.name} (it belongs to the previous input); generating a new structure from the TXT")
+            return True
+        return not cfg.json_path.exists()
+
+    @staticmethod
+    def _subdivision_interrupted(graph: DocGraph) -> bool:
+        """A structure this engine saved before subdivision completed (graphs
+        from the old engine or the API carry no such marker and are final)."""
+        return graph.attrs.get("engine") == "engine" and graph.attrs.get("subdivision_complete") is False
 
     # ============================================================ KB tasks
     async def task_kb_build(self) -> None:
+        # Web references cited by earlier runs live only in kb_sources.json,
+        # which the KB build rewrites: carry them over.
+        previous = CitationIndex.from_kb_sources(read_json(self.paths.kb_sources)).web_references()
         kb = await self.retrieval.build_kb()
         if kb is not None:
             self.index = CitationIndex.from_kb_sources(kb.kb_sources_json())
+            for ref in previous:
+                self.web_refs.setdefault(ref.key, ref)
+                self.index.add(ref)
+            if previous:
+                self._persist_web_refs()
 
     async def task_kb_embed(self) -> None:
         await self.retrieval.prepare_dense()
@@ -424,6 +470,7 @@ class BookRun:
         self.sink.emit("json", f"Structure: {len(structure.childs)} chapters; duration {_duration(time.perf_counter() - t0)}")
 
     def _set_graph(self, graph: DocGraph, structure_language: str | None) -> None:
+        graph.attrs["subdivision_complete"] = False  # set True once task_subdivide finishes
         self.graph = graph
         self._resolve_language_and_author(structure_language)
         self._stamp_graph()
@@ -857,7 +904,7 @@ class BookRun:
             "required_fix": "Support the affected statements with retrieved sources or rephrase them cautiously.",
         }])
         self.sink.emit("generate", f"Section {key}: removed {len(bad)} citation(s) of unknown keys", level="warning", node_key=key)
-        return strip_citations(body, bad)
+        return strip_citations(body, bad, self.index)
 
     def _merge_review_issues(self, key: str, issues: list[dict[str, Any]], **extra: Any) -> None:
         base = read_json(self.paths.review(key, revised=True)) or read_json(self.paths.review(key)) or {"ok_to_keep": True, "issues": []}

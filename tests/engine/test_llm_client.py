@@ -245,3 +245,32 @@ def test_json_extraction_and_strict_schema() -> None:
     schema = json_schema_for(Answer)
     assert schema["additionalProperties"] is False and set(schema["required"]) == {"title", "points", "ok"}
     assert "default" not in json.dumps(schema)
+
+
+async def test_unrelated_400_does_not_downgrade_the_level(tmp_path: Path) -> None:
+    """A context-length 400 during the first (probing) call is raised as is;
+    the structured-output level is only recorded after a successful call."""
+    fake = FakeLLM(faults=[Fault(status=400, match=lambda c: "/chat/" in c.path, times=1,
+                                 message="This model's maximum context length is 8192 tokens.")])
+    client = _client(fake, tmp_path)
+    with pytest.raises(openai.BadRequestError):
+        await client.structured(MESSAGES, Answer, label="t")
+    assert len(fake.chat_calls()) == 1 and client.level_for("m-main") == Level.JSON_SCHEMA
+    out = await client.structured(MESSAGES, Answer, label="t")
+    assert isinstance(out, Answer) and fake.chat_calls()[-1].response_format_type == "json_schema"
+    await client.aclose()
+
+
+async def test_reasoning_is_never_the_answer(tmp_path: Path) -> None:
+    from fake_llm import ChatReply
+
+    leaked = '{"title": "from the reasoning", "points": []}'
+    thinking = lambda call: ChatReply("", finish_reason="length", reasoning=f"Let me think... {leaked}")  # noqa: E731
+    fake = FakeLLM(overrides={"Answer": thinking, "(text)": thinking})
+    client = _client(fake, tmp_path)
+    with pytest.raises(SchemaError, match="finish_reason=length"):
+        await client.structured(MESSAGES, Answer, label="t")
+    assert len(fake.chat_calls()) == 1  # no repair round for an exhausted output budget
+    text = await client.complete_text(MESSAGES, label="t")
+    assert text.text == "" and text.finish_reason == "length"
+    await client.aclose()

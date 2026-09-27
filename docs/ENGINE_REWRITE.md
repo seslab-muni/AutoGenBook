@@ -497,11 +497,13 @@ unset OPENROUTER_API_KEY                      # it takes precedence over AUTOGEN
 # (curl -s -H "Authorization: Bearer $AUTOGENBOOK_LLM_API_KEY" "$AUTOGENBOOK_LLM_BASE_URL"models).
 # hybrid-llmrerank additionally needs a chat model: export AUTOGENBOOK_LLM_MINI_MODEL=<model id>
 
-python scripts/bench_retrieval.py --retriever old,bm25-plain,bm25-lemma,dense,hybrid,hybrid-rerank --k 6
-python scripts/bench_retrieval.py --retriever all --k 6    # everything, including hybrid-llmrerank and local e5
+python scripts/bench_retrieval.py --retriever old,bm25-plain,bm25-lemma,dense,hybrid,hybrid-rerank --k 6   # = --retriever all
+python scripts/bench_retrieval.py --retriever hybrid-llmrerank,dense:local --k 6   # LLM listwise rerank; local e5 (needs the extra)
 ```
 
 Both benchmark KBs (`input/bench/cs_book`, `input/bench/en_book`) and both question languages run by default. The script writes a Markdown table of recall@1/3/k, MRR and cold/warm build time, plus JSON, under `output/bench/retrieval-<timestamp>/`.
+
+Reranked rows are strict: if the reranker is unavailable or fails, the row is reported under "Failed runs" and the script exits 1, instead of silently reporting fused-order numbers.
 
 `--fake-llm` proves the script works without a key, but its dense and rerank numbers are meaningless.
 

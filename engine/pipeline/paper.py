@@ -52,6 +52,7 @@ REFERENCE = Agent("paper/reference", BibEntry, "paper.reference", role="mini", t
 
 class PaperRun(BookRun):
     doc_type = "paper"
+    optional_kinds = BookRun.optional_kinds | {"related_work", "abstract", "references"}
     agents = {**BookRun.agents, "outline": PAPER_OUTLINE, "writer": PAPER_WRITER, "reviewer": PAPER_REVIEWER}
 
     def __init__(self, ctx) -> None:  # noqa: ANN001
@@ -345,7 +346,13 @@ class PaperRun(BookRun):
             entry = await REFERENCE.run(self.ctx.llm, {"file_name": ref.file_name if ref else doc, "opening_text": opening})
             self.references[doc] = entry.model_dump()
 
-        await asyncio.gather(*(one(doc, cite) for doc, cite in needed.items()))
+        results = await asyncio.gather(*(one(doc, cite) for doc, cite in needed.items()), return_exceptions=True)
+        for doc, result in zip(needed, results):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException):
+                # That document keeps its file-name entry; a later run retries it.
+                self.sink.emit("generate", f"Reference for '{doc}' could not be formatted ({str(result)[:200]}); using the file name", level="warning")
         atomic_write_json(self.cfg.out_dir / "references.json", self.references)
 
     # ------------------------------------------------------------- assembly
@@ -411,7 +418,9 @@ class PaperRun(BookRun):
                     g = numbering.group(numbering.index.canonical(key))
                     if g not in groups:
                         groups.append(g)
-                out.append("\\cite{" + ",".join(re.sub(r"[^A-Za-z0-9_:\-.]", "_", g) for g in groups) + "}")
+                # Pandoc citation syntax, rendered as \citep{...} by --natbib: the
+                # section text itself goes through pandoc with raw TeX off.
+                out.append("[" + "; ".join(f"@{_bibkey(g)}" for g in groups) + "]")
                 pos = m.end
             out.append(text[pos:])
             return "".join(out)
@@ -435,7 +444,7 @@ class PaperRun(BookRun):
             chunks = []
             for _n, group, ref in numbering.ordered():
                 record = references.get(group)
-                key = re.sub(r"[^A-Za-z0-9_:\-.]", "_", group)
+                key = _bibkey(group)
                 if record and record.get("title"):
                     fields = [("title", record["title"])]
                     if record.get("authors"):
@@ -465,7 +474,13 @@ class PaperRun(BookRun):
         if citation_style == "numeric":
             return AssemblyStyle(**base, md_bibliography=bibliography, tex_bibliography=bibliography)
         return AssemblyStyle(**base, md_bibliography=bibliography, tex_resolve=cite_resolver, tex_bibliography=None, bibtex=True,
-                             latex_vars={"bibliography-file": "refs"})
+                             latex_vars={"bibliography-file": "refs"}, pandoc_args=["--natbib"])
+
+
+def _bibkey(group: str) -> str:
+    """BibTeX key for a reference group, also a valid pandoc citation key
+    (no trailing punctuation)."""
+    return re.sub(r"[^A-Za-z0-9_:\-.]", "_", group).strip(".:-") or "ref"
 
 
 async def run_paper(ctx) -> PipelineOutcome:  # noqa: ANN001

@@ -251,6 +251,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     results: list[SetResult] = []
+    errors: list[tuple[str, str, str]] = []
     with maybe_fake_llm(args.fake_llm):
         for retriever in make_retrievers(args.retriever, None):
             for kb in kbs:
@@ -258,6 +259,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                     print(f"[bench] {retriever.name} on {kb.name} ...", file=sys.stderr, flush=True)
                     try:
                         results.extend(evaluate(retriever, kb, args.k, Path(tmp)))
+                    except Exception as exc:  # noqa: BLE001 - reported as a failed row, the others still run
+                        errors.append((kb.name, retriever.name, f"{type(exc).__name__}: {str(exc)[:300]}"))
+                        print(f"[bench] {retriever.name} on {kb.name} FAILED: {exc}", file=sys.stderr, flush=True)
                     finally:
                         close = getattr(retriever, "close", None)
                         if close:
@@ -269,13 +273,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         else "Real run."
     )
     md = render_markdown(results, args.k, note)
+    if errors:
+        md += "\n## Failed runs (no numbers reported)\n\n| KB | retriever | error |\n|---|---|---|\n"
+        md += "".join(f"| {kb} | {name} | {err.replace('|', '/')} |\n" for kb, name, err in errors)
     (out_dir / "report.md").write_text(md, encoding="utf-8")
     (out_dir / "report.json").write_text(
-        json.dumps([r.__dict__ for r in results], ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps({"results": [r.__dict__ for r in results], "errors": [dict(zip(("kb", "retriever", "error"), e)) for e in errors]},
+                   ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(md)
     print(f"[bench] report written to {out_dir}", file=sys.stderr)
-    return 0
+    return 1 if errors else 0
 
 
 # -------------------------------------------------------- question generation

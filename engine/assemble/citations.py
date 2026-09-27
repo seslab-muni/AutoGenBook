@@ -99,6 +99,17 @@ class CitationIndex:
                                     loc=str(entry.get("loc") or ""), excerpt=str(entry.get("excerpt") or ""), rid=rid))
         return index
 
+    def web_references(self) -> list[Reference]:
+        """The web references (with their RID) this index knows."""
+        rid_of = {key: rid for rid, key in self.rid_to_key.items() if rid.startswith("RID:web:")}
+        out = []
+        for key, ref in self.by_key.items():
+            if ref.kind == "web":
+                if not ref.rid and key in rid_of:
+                    ref.rid = rid_of[key]
+                out.append(ref)
+        return out
+
     def canonical(self, token: str) -> str:
         token = token.strip()
         if token in self.by_key:

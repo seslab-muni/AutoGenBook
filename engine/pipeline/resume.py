@@ -25,6 +25,14 @@ class ResumeDecision:
     graph: DocGraph | None
     accepted: bool
     reason: str
+    refused: bool = False  # a saved structure existed but belongs to another input/mode
+
+    @property
+    def force_txt(self) -> bool:
+        """A refused resume regenerates the outline from the TXT (unless
+        --use-json), as the old engine did: the stale structure JSON was
+        derived from the previous input."""
+        return self.refused
 
 
 def _load_graph(path: Path) -> DocGraph | None:
@@ -59,17 +67,17 @@ def decide_resume(config: RunConfig, input_sha256: str, sink: EventSink) -> Resu
         if not same:
             reason = f"the saved structure belongs to a different input file ({Path(stored_path).name})"
             sink.emit("resume", f"Skipping --resume: {reason}. Starting a new run from the current input.")
-            return ResumeDecision(None, False, reason)
+            return ResumeDecision(None, False, reason, refused=True)
     stored_sha = str(graph.attrs.get("input_sha256") or "").strip()
     if stored_sha and stored_sha != input_sha256:
         reason = f"the input changed since the last run (saved {stored_sha[:12]}..., now {input_sha256[:12]}...)"
         sink.emit("resume", f"Skipping --resume: {reason}. Starting a new run from the current input.")
-        return ResumeDecision(None, False, reason)
+        return ResumeDecision(None, False, reason, refused=True)
     doc_type = str(graph.attrs.get("doc_type") or "").strip()
     if doc_type and doc_type != config.mode:
         reason = f"the saved structure is a {doc_type}, not a {config.mode}"
         sink.emit("resume", f"Skipping --resume: {reason}.")
-        return ResumeDecision(None, False, reason)
+        return ResumeDecision(None, False, reason, refused=True)
     if not stored_sha:
         sink.emit("resume", "Saved structure has no input hash; resuming and stamping the current one.", level="warning")
     return ResumeDecision(graph, True, "accepted")

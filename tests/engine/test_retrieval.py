@@ -26,7 +26,7 @@ from engine.retrieval.lexical import lemma_tokens, plain_tokens
 from engine.retrieval.scope import make_source_filter, resolve_kb_sources
 from engine.retrieval.service import RetrievalService
 from engine.retrieval.types import Block, ExtractedDoc
-from fake_llm import FakeLLM
+from fake_llm import Fault, FakeLLM
 
 REPO = Path(__file__).resolve().parents[2]
 BENCH_KB = REPO / "input" / "bench" / "en_book" / "kb"
@@ -223,6 +223,41 @@ async def test_hybrid_search_with_rerank_fallbacks(tmp_path: Path, endpoint, exp
     assert ctx.text.startswith("[RID:kb:") and 'cite_key="kb_' in ctx.text
     # Diversified: both documents represented in the top 4.
     assert len({item.source for item in ctx.items}) == 2
+    await llm.aclose()
+
+
+async def test_transient_rerank_failure_keeps_the_reranker(tmp_path: Path) -> None:
+    """A throttled/failed rerank request only costs that query its reranking;
+    the endpoint is not given up and the LLM fallback is not used."""
+    fake = FakeLLM(faults=[Fault(status=503, match=lambda c: c.path.endswith("/rerank"), times=4)])
+    service, llm, sink = _service(tmp_path, fake)
+    (tmp_path / "out").mkdir()
+    await service.build_kb()
+    first = await service.context(["When did EDSAC run its first program?"], k=4)
+    second = await service.context(["What did the EDVAC report propose?"], k=4)
+    assert first.items and second.items
+    reranks = [c for c in fake.calls if c.path.endswith("/rerank")]
+    assert len(reranks) == 5 and reranks[-1].status == 200  # 1 + 3 retries failed, the next query reranked
+    assert not fake.chat_calls()  # never fell back to LLM listwise reranking
+    assert any("using the fused order for this query" in e["message"] for e in sink.events)
+    await llm.aclose()
+
+
+async def test_missing_rerank_endpoint_falls_back_for_the_run_and_strict_raises(tmp_path: Path) -> None:
+    from engine.retrieval.kb import HybridRetriever
+    from engine.retrieval.rerank import RemoteReranker, RerankUnavailable
+
+    fake = FakeLLM(rerank_endpoint=None)
+    service, llm, _sink = _service(tmp_path, fake, dense="none", rerank="none")
+    (tmp_path / "out").mkdir()
+    kb = await service.build_kb()
+    remote = RemoteReranker(llm, model="r", base_url="http://fake.local/v1", api_key="k")
+    lenient = HybridRetriever(kb, rerankers=[remote])
+    assert await lenient.search(["EDSAC first program"], k=3)
+    assert remote.unavailable
+    strict = HybridRetriever(kb, rerankers=[RemoteReranker(llm, model="r", base_url="http://fake.local/v1", api_key="k")], strict_rerank=True)
+    with pytest.raises(RerankUnavailable):
+        await strict.search(["EDSAC first program"], k=3)
     await llm.aclose()
 
 

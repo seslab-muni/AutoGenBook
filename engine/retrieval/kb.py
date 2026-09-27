@@ -15,6 +15,8 @@ and turned into items with small-to-big excerpts.
 
 from __future__ import annotations
 
+import asyncio
+
 import hashlib
 import json
 import pickle
@@ -190,8 +192,12 @@ class HybridRetriever:
         item_chars: int = 1500,
         use_lexical: bool = True,
         warn: Callable[[str], None] = lambda _m: None,
+        strict_rerank: bool = False,
     ) -> None:
+        """`strict_rerank` (benchmarks): a reranker error is raised instead of
+        falling back, so a reranked row never silently reports fused order."""
         self.kb = kb
+        self.strict_rerank = strict_rerank
         self.dense = dense
         self.rerankers = list(rerankers)
         self.candidates = candidates
@@ -246,11 +252,17 @@ class HybridRetriever:
                 fused = [fused[j] for j in order]
                 scores = [scores[j] for j in order]
                 break
+            except asyncio.CancelledError:
+                raise
             except RerankUnavailable as exc:
+                if self.strict_rerank:
+                    raise
                 self.warn(f"reranker '{reranker.name}' unavailable ({exc}); trying the next fallback")
                 continue
             except Exception as exc:  # noqa: BLE001 - reranking failures keep the fused order
-                self.warn(f"reranking failed ({exc}); using the fused order")
+                if self.strict_rerank:
+                    raise
+                self.warn(f"reranking failed ({exc}); using the fused order for this query")
                 break
         ranked = list(zip(fused, scores))
         if diversify_sources:
