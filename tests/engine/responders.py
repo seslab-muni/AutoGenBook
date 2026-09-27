@@ -176,9 +176,9 @@ def dumps(obj: Any) -> str:
 _SPEC_TITLE_RE = re.compile(r"(?im)^\s*(?:title|název|nazev)\s*:\s*(.+?)\s*$")
 _TOTAL_PAGES_RE = re.compile(r"(?im)^Total pages:\s*([\d.]+)")
 _CHAPTER_HINT_RE = re.compile(r"(?im)^Suggested number of chapters:\s*(\d+)")
-_PART_PAGES_RE = re.compile(r"(?im)^-\s*Pages:\s*([\d.]+)")
+_PART_PAGES_RE = re.compile(r"(?im)^-\s*(?:Pages|Slides):\s*([\d.]+)")
 _PART_TITLE_RE = re.compile(r"(?im)^-\s*Title:\s*(.+?)\s*$")
-_SUGGESTED_RE = re.compile(r"use about (\d+) of them")
+_SUGGESTED_RE = re.compile(r"(?i)use about (\d+) (?:of them|slides)")
 _BODY_RE = re.compile(r"<<<\n(.*?)\n>>>", re.DOTALL)
 _OVERVIEW_KEY_RE = re.compile(r"(?m)^\[(\d+(?:-\d+)*)\]")
 _PATCHABLE_RE = re.compile(r"Only these sections may be patched:\s*([^.\n]+)\.")
@@ -345,3 +345,40 @@ def bib_entry(call: Any) -> dict:
     name = first_match(re.compile(r"(?m)^File name:\s*(.+?)\s*$"), call.prompt) or "source"
     stem = name.rsplit(".", 1)[0].replace("_", " ").title()
     return {"entry_type": "report", "title": stem, "authors": ["Benchmark, Corpus"], "year": "2026", "venue": "", "publisher": "AutoGenBook", "url": "", "doi": ""}
+
+
+# ------------------------------------------------------------- presentation
+_TARGET_SLIDES_RE = re.compile(r"About (\d+) slides in total")
+_SLIDE_INDEX_RE = re.compile(r"(?m)^Slide (\d+): (.+)$")
+
+
+@register("PresentationOutline")
+def presentation_outline(call: Any) -> dict:
+    prompt = call.prompt
+    target = int(first_match(_TARGET_SLIDES_RE, prompt) or 5)
+    titles = ["Motivation", "Mechanical engines", "Programs on cards", "Stored programs", "Take-aways"][: max(3, min(5, target))]
+    slides = [{"title": t, "summary": f"The fake slide about {t.lower()}.", "n_slides": 1} for t in titles]
+    slides[2]["n_slides"] = 2  # one block of two slides: exercises subdivision
+    return {"title": _spec_title(prompt), "summary": "A fake talk in a few slides.", "audience": "students",
+            "duration_minutes": 10, "style_guidance": "Plain and visual.", "slides": slides}
+
+
+@register("SlideDraft")
+def slide_draft(call: Any) -> dict:
+    prompt = call.prompt
+    key = node_key_of(prompt) or "0"
+    title = _section_title(prompt)
+    found = cite_keys_in(call.user)
+    cites = [k for k in found if not k.startswith("web_")][:2]
+    bullets = [f"- Fake point {i} about {title} ({key})" for i in range(1, 4)]
+    for i, cite in enumerate(cites):
+        bullets[i] += f" [{cite}]"
+    bullets.append(f"- **Key idea:** fake summary line for {key}")
+    return {"body_markdown": "\n".join(bullets), "summary": f"Slide {key} presents {title}.", "citations_used": cites}
+
+
+@register("SlideNarration")
+def slide_narration(call: Any) -> dict:
+    match = _SLIDE_INDEX_RE.search(call.user)
+    index, title = (match.group(1), match.group(2).strip()) if match else ("0", "the slide")
+    return {"narration": f"Fake narration for slide {index}, {title}. It explains the points in plain spoken words for the audience."}

@@ -1,0 +1,10 @@
+{
+ "embed.documents": 2,
+ "embed.query": 14,
+ "presentation.narration": 7,
+ "presentation.outline": 1,
+ "presentation.slide_writer": 6,
+ "presentation.subdivide": 1,
+ "presentation.tts": 7,
+ "rerank": 8
+}

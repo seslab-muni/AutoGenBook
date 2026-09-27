@@ -65,3 +65,13 @@ def test_bench_engines_paper_mode_argv(tmp_path) -> None:
     assert argv[2:6] == ["--mode", "paper", "-i", str(tmp_path / "w" / "paper_input.txt")]
     assert "--export-tex" not in argv and argv[-1] == "--no-pdf"
     assert bench._mode_argv(book, spec, tmp_path / "w", "markdown")[-2:] == ["--no-tex", "--no-pdf"]
+
+
+def test_bench_engines_presentation_mode_argv(tmp_path) -> None:
+    bench = _load("bench_engines")
+    spec = bench.prepare_work_dir(REPO_ROOT / "input" / "bench" / "en_presentation", tmp_path / "w")
+    book = ["py", "run_engine.py", "--mode", "book", "-i", str(tmp_path / "w" / "book_input.txt"), "-o", "out", "--use-txt", "--no-tex", "--no-pdf"]
+    argv = bench._mode_argv(book, spec, tmp_path / "w", "markdown")
+    assert argv[2:6] == ["--mode", "presentation", "-i", str(tmp_path / "w" / "presentation_input.txt")]
+    assert argv[-1] == "--presentation-pptx" and "--no-pdf" not in argv
+    assert bench._mode_argv(book, spec, tmp_path / "w", "pdf")[-2:] == ["--presentation-pptx", "--presentation-tex"]

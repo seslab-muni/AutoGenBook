@@ -152,7 +152,8 @@ class BookRun:
             self.graph.save(self.paths.graph)
             statuses = self._prepare_leaves(resumed=True)
             todo = [s for s in statuses if not s.done]
-            run_kind = "resume" if todo else "export"
+            extra = self.pending_extra(statuses)
+            run_kind = "resume" if (todo or extra) else "export"
             kb_tasks: list[str] = []
             if has_kb and (todo or not self.paths.kb_sources.exists()):
                 self._add(TaskSpec("kb.build", "kb.build", priority=100))
@@ -162,14 +163,14 @@ class BookRun:
                     kb_tasks.append("kb.embed")
             elif cfg.retrieval.enable_web:
                 self.retrieval.enable_web_only()
-            if todo:
+            if todo or extra:
                 self._add_generation(statuses, kb_tasks)
             else:
                 self.sink.emit("generate", f"All {len(statuses)} sections exist; assembling only")
         else:
             # A full run owns the work dir: intermediate results of an earlier
             # (refused or different) run must not leak into this one.
-            _clear_dir(self.paths.work / "work")
+            self.clear_work()
             from_txt = self._structure_from_txt()
             for spec in plan_structure(has_kb=has_kb, need_dense=need_dense, from_txt=from_txt):
                 self._add(spec)
@@ -203,11 +204,25 @@ class BookRun:
         elif assembly.pdf_failed and cfg.pdf_output:
             outcome.exit_code = EXIT_FAILURE
             outcome.error = f"PDF export failed: {assembly.pdf_failed}"
+        elif assembly.export_failed:
+            outcome.exit_code = EXIT_FAILURE
+            outcome.error = assembly.export_failed
         return outcome
 
     # ----------------------------------------------------------- overrides
     def parse_spec(self, text: str) -> BookSpec:
         return parse_book_txt(text)
+
+    def pending_extra(self, statuses: list[LeafStatus]) -> bool:
+        """True when a resumed run has work besides missing leaves (e.g. a
+        presentation's narration for existing slides)."""
+        return False
+
+    def clear_work(self) -> None:
+        _clear_dir(self.paths.work / "work")
+
+    def needs_split(self, node: dict[str, Any], max_pages: float) -> bool:
+        return bool(node.get("needsSubdivision")) or float(node.get("n_pages", 1.0)) >= max_pages
 
     async def assemble(self):  # noqa: ANN201 - AssemblyOutcome
         assert self.graph is not None
@@ -234,7 +249,10 @@ class BookRun:
             "glossary": self.task_glossary,
             "consistency": self.task_consistency,
         }
-        table.update(self.extra_runners())
+        extra = self.extra_runners()
+        if kind in extra and key is not None:  # per-node kinds of a document type
+            return lambda: extra[kind](key)
+        table.update(extra)
         if kind in table:
             return table[kind]
         stage = {"draft": self.task_draft, "review": self.task_review, "revise": self.task_revise, "length": self.task_length}[kind]
@@ -423,7 +441,7 @@ class BookRun:
                 key for key in graph.dfs()
                 if key != ROOT and graph.depth(key) == depth and graph.is_leaf(key)
                 and not graph.nodes[key].get("structure_locked") and not graph.nodes[key].get("content_locked")
-                and (graph.nodes[key].get("needsSubdivision") or float(graph.nodes[key].get("n_pages", 1.0)) >= max_pages)
+                and self.needs_split(graph.nodes[key], max_pages)
             ]
             if not candidates:
                 continue

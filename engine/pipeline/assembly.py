@@ -52,6 +52,7 @@ class AssemblyOutcome:
     audit: AuditReport | None = None
     audit_blocked: bool = False
     pdf_failed: str | None = None
+    export_failed: str | None = None  # a requested non-PDF export (e.g. PPTX) failed
     document: AssembledDocument | None = None
 
 

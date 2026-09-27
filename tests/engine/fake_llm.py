@@ -28,6 +28,7 @@ What it answers:
 - `POST .../embeddings`: deterministic hashed bag-of-words vectors.
 - `POST .../rerank` and `.../score`: lexical-overlap scores (either endpoint
   can be switched off to test the client's fallback).
+- `POST .../audio/speech`: an MP3 of silent frames, 0.4 s per input word.
 - `GET .../models`, Tavily search, and HEAD/GET for DOI/URL verification.
 
 Every request is recorded in `FakeLLM.calls`. Faults (429/503/500 with
@@ -318,6 +319,8 @@ class FakeLLM:
             if self.rerank_endpoint != "score":
                 return _json(404, {"error": {"message": "not found"}})
             return self._score(call)
+        if path.endswith("/audio/speech"):
+            return self._speech(call)
         if path.endswith("/models"):
             return _json(200, {"data": [{"id": "fake-model"}, {"id": "fake-mini"}]})
         if call.method in {"HEAD", "GET"}:
@@ -325,6 +328,18 @@ class FakeLLM:
             ok = any(full.startswith(prefix) for prefix in self.resolvable_urls)
             return FakeResponse(200 if ok else 404, b"", {})
         return _json(404, {"error": {"message": f"no fake route for {url}"}})
+
+    # ------------------------------------------------------------------ audio
+    def _speech(self, call: FakeCall) -> FakeResponse:
+        """OpenAI-style TTS: an MP3 whose length follows the input (0.4 s per
+        word), built from valid MPEG-1 Layer III frames."""
+        payload = call.body or {}
+        text = str(payload.get("input") or "")
+        if not text.strip() or not payload.get("model"):
+            return _json(400, {"error": {"message": "input and model are required"}})
+        frame = bytes([0xFF, 0xFB, 0x90, 0x00]) + bytes(413)  # 128 kbit/s, 44.1 kHz, 1152 samples
+        seconds = max(0.5, 0.4 * len(text.split()))
+        return FakeResponse(200, frame * max(1, round(seconds * 44100 / 1152)), {"content-type": "audio/mpeg"})
 
     # ------------------------------------------------------------------- chat
     def _chat(self, call: FakeCall) -> FakeResponse:

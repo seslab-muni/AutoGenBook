@@ -186,3 +186,29 @@ class BibEntry(BaseModel):
     publisher: str = ""
     url: str = ""
     doi: str = ""
+
+
+# --------------------------------------------------------------- presentation
+class SlidePlan(BaseModel):
+    title: str
+    summary: str = ""
+    n_slides: float = Field(1.0, description="Number of slides this entry needs (1 for a single slide)")
+
+
+class PresentationOutline(BaseModel):
+    title: str
+    summary: str = ""
+    audience: str = ""
+    duration_minutes: float = 15.0
+    style_guidance: str = ""
+    slides: list[SlidePlan] = Field(default_factory=list)
+
+
+class SlideDraft(BaseModel):
+    body_markdown: str = Field(..., description="The slide body in Markdown: bullets, no heading")
+    summary: str = Field("", description="One sentence on what the slide says")
+    citations_used: list[str] = Field(default_factory=list)
+
+
+class SlideNarration(BaseModel):
+    narration: str = Field(..., description="What the presenter says for this slide")

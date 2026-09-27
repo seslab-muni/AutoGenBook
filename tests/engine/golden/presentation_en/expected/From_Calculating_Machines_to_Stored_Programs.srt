@@ -1,0 +1,27 @@
+1
+00:00:00,000 --> 00:00:08,803
+Fake narration for slide 1, From Calculating Machines to Stored Programs. It explains the points in plain spoken words for the audience.
+
+2
+00:00:08,803 --> 00:00:15,595
+Fake narration for slide 2, Motivation. It explains the points in plain spoken words for the audience.
+
+3
+00:00:15,595 --> 00:00:22,805
+Fake narration for slide 3, Mechanical engines. It explains the points in plain spoken words for the audience.
+
+4
+00:00:22,805 --> 00:00:31,216
+Fake narration for slide 4, Programs on cards, part 1. It explains the points in plain spoken words for the audience.
+
+5
+00:00:31,216 --> 00:00:39,627
+Fake narration for slide 5, Programs on cards, part 2. It explains the points in plain spoken words for the audience.
+
+6
+00:00:39,627 --> 00:00:46,837
+Fake narration for slide 6, Stored programs. It explains the points in plain spoken words for the audience.
+
+7
+00:00:46,837 --> 00:00:53,629
+Fake narration for slide 7, Take-aways. It explains the points in plain spoken words for the audience.

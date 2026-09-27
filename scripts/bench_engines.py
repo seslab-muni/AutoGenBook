@@ -1,7 +1,7 @@
 """Engine benchmark: run the old and/or the new engine on the same inputs and compare.
 
 Each run gets a fresh work dir laid out like the API's (`book_input.txt`, or
-the bench's `input_file` for a `"mode": "paper"` bench,
+the bench's `input_file` for a `"mode": "paper"`/`"presentation"` bench,
 `kb/<source_id>/<file>`, optional `out/book_structure.json`) and is started with
 the exact argv/env/cwd the API uses (`api/infrastructure/cli/book_command.py:
 build_command`) through the API's own process driver
@@ -66,6 +66,7 @@ ENTRYPOINTS = {
 LINES_PER_PAGE = 40
 CHARS_PER_LINE = 90
 PAGE_TOLERANCE = 0.25
+SLIDE_LINES = 10  # presentations: max non-empty lines per slide (old engine's limit)
 
 _CITE_TOKEN_RE = re.compile(r"\[([A-Za-z0-9_.:-]+)\]")
 _LATEX_CITE_RE = re.compile(r"\\cite[pt]?\*?(?:\[[^\]]*\])?\{([^}]*)\}")
@@ -124,6 +125,11 @@ def _mode_argv(argv: list[str], bench: dict[str, Any], work_dir: Path, output_fo
     out[out.index("--mode") + 1] = mode
     out[out.index("-i") + 1] = str(work_dir / bench.get("input_file", f"{mode}_input.txt"))
     out = [a for a in out if a not in {"--export-tex", "--no-tex", "--no-pdf"}]
+    if mode == "presentation":
+        # Both engines: deck Markdown always, PPTX always, Beamer for latex/pdf.
+        out += ["--presentation-pptx"]
+        out += {"latex": ["--presentation-tex", "--no-pdf"], "pdf": ["--presentation-tex"]}.get(output_format, [])
+        return out
     out += {"markdown": ["--no-tex", "--no-pdf"], "latex": ["--no-pdf"]}.get(output_format, [])
     return out
 
@@ -338,6 +344,9 @@ def quality_metrics(out_dir: Path) -> dict[str, Any]:
     known = set((kb.get("cite_keys") or {}).keys()) | set((kb.get("rids") or {}).keys())
 
     leaves = _leaves(graph)
+    # Presentations: n_pages counts slides, so the budget is the old engine's
+    # 10-line slide limit instead of 40 typeset lines per page.
+    is_deck = graph.get("graph", {}).get("doc_type") == "presentation" or (out_dir / "presentation_structure.json").exists()
     in_budget = 0
     deviations: list[float] = []
     cites_total = cites_resolved = 0
@@ -350,11 +359,16 @@ def quality_metrics(out_dir: Path) -> dict[str, Any]:
         if text is None:
             continue
         present += 1
-        target = max(1.0, float(node.get("n_pages") or 1.0) * LINES_PER_PAGE)
-        actual = effective_lines(text)
-        deviations.append(abs(actual - target) / target)
-        if abs(actual - target) <= PAGE_TOLERANCE * target:
-            in_budget += 1
+        if is_deck:
+            lines = sum(1 for line in text.splitlines() if line.strip())
+            deviations.append(max(0, lines - SLIDE_LINES) / SLIDE_LINES)
+            in_budget += int(lines <= SLIDE_LINES)
+        else:
+            target = max(1.0, float(node.get("n_pages") or 1.0) * LINES_PER_PAGE)
+            actual = effective_lines(text)
+            deviations.append(abs(actual - target) / target)
+            if abs(actual - target) <= PAGE_TOLERANCE * target:
+                in_budget += 1
         for tok in citation_tokens(text, known):
             cites_total += 1
             if tok in known:
@@ -373,11 +387,12 @@ def quality_metrics(out_dir: Path) -> dict[str, Any]:
                 break
 
     heading_match = None
-    finals = [p for p in out_dir.glob("*.md") if p.name not in {"README.md"}]
+    finals = [p for p in out_dir.glob("*.md") if p.name not in {"README.md", "abstract.md"} and not p.name.endswith("_narration.md")]
     if finals:
         final = max(finals, key=lambda p: p.stat().st_size).read_text(encoding="utf-8", errors="replace")
         headings = [_norm_title(h) for _lvl, h in _HEADING_RE.findall(final)]
-        expected = [_norm_title(str((nodes.get(k) or {}).get("title") or "")) for k, _d in _dfs(graph)]
+        order = leaves if is_deck else [k for k, _d in _dfs(graph)]  # a deck shows only the slides
+        expected = [_norm_title(str((nodes.get(k) or {}).get("title") or "")) for k in order]
         expected = [e for e in expected if e]
         heading_match = round(_lcs(expected, headings) / len(expected), 3) if expected else None
 
@@ -557,7 +572,7 @@ def render_report(runs: list[RunRecord], judgement: dict[str, Any] | None, notes
         )
     lines += [
         "",
-        "| run | page budget in ±25 % | mean abs dev | citations | resolved | unknown | dup. paragraphs | headings vs outline |",
+        "| run | length budget met¹ | mean abs dev | citations | resolved | unknown | dup. paragraphs | headings vs outline |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in runs:
@@ -567,6 +582,8 @@ def render_report(runs: list[RunRecord], judgement: dict[str, Any] | None, notes
             f"{q.get('citation_resolution_rate')} | {q.get('unknown_citations')} | {q.get('duplicated_paragraph_rate')} | "
             f"{q.get('heading_structure_match')} |"
         )
+    lines += ["", "¹ Books and papers: share of sections within ±25 % of `n_pages` x 40 typeset lines. "
+              "Presentations: share of slides with at most 10 non-empty lines (the old engine's slide limit)."]
     if judgement:
         lines += [
             "",

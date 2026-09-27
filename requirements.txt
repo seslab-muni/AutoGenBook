@@ -27,3 +27,6 @@ bm25s>=0.2.1
 simplemma>=1.1
 pypdfium2>=4.30
 pdfplumber>=0.11
+# Optional heavy extras (pyproject [project.optional-dependencies], imported lazily):
+#   local-embeddings: sentence-transformers>=3.0   (AUTOGENBOOK_DENSE=local)
+#   tts-local:        coqui-tts>=0.24              (--presentation-tts-mode local)

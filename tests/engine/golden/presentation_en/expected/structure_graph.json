@@ -1,0 +1,116 @@
+{
+ "edges": [
+  [
+   "book",
+   "1"
+  ],
+  [
+   "book",
+   "2"
+  ],
+  [
+   "book",
+   "3"
+  ],
+  [
+   "book",
+   "4"
+  ],
+  [
+   "book",
+   "5"
+  ],
+  [
+   "3",
+   "3-1"
+  ],
+  [
+   "3",
+   "3-2"
+  ]
+ ],
+ "graph": {
+  "additional_requirements": "Must include: the difference between a programmable calculator and a stored-program computer",
+  "audience": "first-year computer science students",
+  "do_consider_outline": true,
+  "do_consider_previous_sections": true,
+  "doc_type": "presentation",
+  "duration_minutes": 10.0,
+  "engine": "engine",
+  "equation_frequency_level": 4,
+  "footer": "",
+  "header": "",
+  "input_path": "<work>/presentation_input.txt",
+  "input_sha256": "e269bbd76fe998c37eddcd3fdb998618ec7f5a721e1c29899ebbbcad5d6ccd7c",
+  "language": "en",
+  "max_depth": 3,
+  "max_output_pages": 1.0,
+  "n_pages": 6.0,
+  "outline": true,
+  "paginate": false,
+  "style_guidance": "clear, visual, few words per slide",
+  "subdivision_complete": true,
+  "summary": "A short talk for first-year students on how programmable machines became general-purpose computers: Babbage's engines, punched-card programs, and the stored-program idea of the EDVAC report and the Manchester Baby.",
+  "target_readers": "first-year computer science students",
+  "theme": "Madrid",
+  "title": "From Calculating Machines to Stored Programs"
+ },
+ "nodes": {
+  "1": {
+   "content_file_path": "<work>/out/sections/1.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "summary": "The fake slide about motivation.",
+   "title": "Motivation"
+  },
+  "2": {
+   "content_file_path": "<work>/out/sections/2.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "summary": "The fake slide about mechanical engines.",
+   "title": "Mechanical engines"
+  },
+  "3": {
+   "n_pages": 2.0,
+   "needsSubdivision": true,
+   "summary": "The fake slide about programs on cards.",
+   "title": "Programs on cards"
+  },
+  "3-1": {
+   "content_file_path": "<work>/out/sections/3-1.md",
+   "n_pages": 1.0,
+   "needsSubdivision": true,
+   "structure_locked": false,
+   "summary": "Part 1 of Programs on cards.",
+   "title": "Programs on cards, part 1"
+  },
+  "3-2": {
+   "content_file_path": "<work>/out/sections/3-2.md",
+   "n_pages": 1.0,
+   "needsSubdivision": true,
+   "structure_locked": false,
+   "summary": "Part 2 of Programs on cards.",
+   "title": "Programs on cards, part 2"
+  },
+  "4": {
+   "content_file_path": "<work>/out/sections/4.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "summary": "The fake slide about stored programs.",
+   "title": "Stored programs"
+  },
+  "5": {
+   "content_file_path": "<work>/out/sections/5.md",
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "summary": "The fake slide about take-aways.",
+   "title": "Take-aways"
+  },
+  "book": {
+   "n_pages": 6.0,
+   "needsSubdivision": true,
+   "summary": "A short talk for first-year students on how programmable machines became general-purpose computers: Babbage's engines, punched-card programs, and the stored-program idea of the EDVAC report and the Manchester Baby.",
+   "title": "From Calculating Machines to Stored Programs"
+  }
+ }
+}

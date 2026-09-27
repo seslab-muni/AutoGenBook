@@ -38,6 +38,14 @@ _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def _env_str(env: Mapping[str, str], name: str, default: str = "") -> str:
     value = env.get(name)
     return value.strip() if value and value.strip() else default
@@ -137,6 +145,9 @@ class PresentationSettings:
     tts_model: str = DEFAULT_TTS_MODEL
     tts_voice: str = "alloy"
     tts_base_url: str = DEFAULT_OPENROUTER_BASE_URL
+    tts_api_key: str | None = None
+    tts_local_model: str | None = None  # Coqui model name override for --presentation-tts-mode local
+    tts_speaker_wavs: tuple[Path, ...] = ()  # XTTS reference recordings (AUTOGENBOOK_TTS_SPEAKER_WAV)
     exclude_slides: str = ""
     disable_general_knowledge_citation: bool = False
 
@@ -296,6 +307,11 @@ class RunConfig:
             tts_model=args.presentation_tts_model or _env_str(env, "AUTOGENBOOK_TTS_MODEL", DEFAULT_TTS_MODEL),
             tts_voice=_env_str(env, "OPENROUTER_TTS_VOICE", "alloy"),
             tts_base_url=_env_str(env, "AUTOGENBOOK_TTS_BASE_URL", base_url),
+            tts_api_key=_env_str(env, "AUTOGENBOOK_TTS_API_KEY") or api_key,
+            tts_local_model=_env_str(env, "AUTOGENBOOK_TTS_LOCAL_MODEL") or None,
+            tts_speaker_wavs=tuple(
+                Path(p).expanduser() for p in _env_str(env, "AUTOGENBOOK_TTS_SPEAKER_WAV").split(",") if p.strip()
+            ),
             exclude_slides=args.presentation_exclude_slides or "",
             disable_general_knowledge_citation=bool(args.disable_general_knowledge_citation),
         )
@@ -339,11 +355,7 @@ class RunConfig:
         for f in fields(self):
             value = getattr(self, f.name)
             if f.name in {"llm", "retrieval", "presentation"}:
-                out[f.name] = {
-                    k.name: (str(getattr(value, k.name)) if isinstance(getattr(value, k.name), Path) else getattr(value, k.name))
-                    for k in fields(value)
-                    if "api_key" not in k.name
-                }
+                out[f.name] = {k.name: _json_safe(getattr(value, k.name)) for k in fields(value) if "api_key" not in k.name}
             elif f.name == "args":
                 continue
             else:

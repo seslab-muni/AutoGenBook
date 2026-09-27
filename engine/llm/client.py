@@ -146,13 +146,20 @@ class LLMClient:
         node_key: str | None = None,
         response_format: str | None = None,
         usage_of: Callable[[T], tuple[int, int, int, Any]] = lambda _r: (0, 0, 0, None),
+        limited: bool = True,
     ) -> T:
+        """One logical request with transient retries and a ledger entry per
+        attempt. `limited=False` (media such as TTS) bypasses the adaptive
+        LLM limiter: those requests do not compete for chat concurrency."""
         attempt = 0
         while True:
             attempt += 1
             started = time.perf_counter()
             try:
-                async with self.limiter.slot():
+                if limited:
+                    async with self.limiter.slot():
+                        result = await fn()
+                else:
                     result = await fn()
             except asyncio.CancelledError:
                 raise
@@ -166,7 +173,7 @@ class LLMClient:
                         error=str(exc)[:500],
                     )
                 )
-                if status in THROTTLE_STATUS:
+                if status in THROTTLE_STATUS and limited:
                     self.limiter.on_throttle()
                 if is_transient(exc) and attempt <= self.settings.max_retries:
                     delay = backoff_seconds(attempt - 1, retry_after=retry_after_seconds(exc))
@@ -178,7 +185,10 @@ class LLMClient:
                     continue
                 raise
             prompt, completion, total, provider_cost = usage_of(result)
-            cost, source = await self.pricing.cost(model, prompt, completion, provider_cost)
+            if kind == "tts":  # priced per character/second, not per token: provider-reported or unknown
+                cost, source = (float(provider_cost), "provider") if provider_cost is not None else (None, None)
+            else:
+                cost, source = await self.pricing.cost(model, prompt, completion, provider_cost)
             self.ledger.record(
                 UsageEntry(
                     label=label, kind=kind, model=model, node_key=node_key, attempt=attempt, status="ok",
@@ -187,7 +197,8 @@ class LLMClient:
                     latency_s=round(time.perf_counter() - started, 3),
                 )
             )
-            self.limiter.on_success()
+            if limited:
+                self.limiter.on_success()
             return result
 
     # ------------------------------------------------------------------ chat
@@ -412,16 +423,24 @@ class LLMClient:
         return await self._call(fn, label=label, kind=kind, model=model, usage_of=usage_of)
 
     async def post_bytes(
-        self, url: str, payload: dict[str, Any], *, label: str, kind: str, model: str, api_key: str | None = None
+        self, url: str, payload: dict[str, Any], *, label: str, kind: str, model: str, api_key: str | None = None,
+        node_key: str | None = None, limited: bool = True, timeout: float | None = None,
     ) -> bytes:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        cost: dict[str, float | None] = {"value": None}
 
         async def fn() -> bytes:
-            resp = await self.http.post(url, json=payload, headers=headers)
+            resp = await self.http.post(url, json=payload, headers=headers, **({"timeout": timeout} if timeout else {}))
             resp.raise_for_status()
+            reported = resp.headers.get("x-openrouter-cost") or resp.headers.get("x-cost-usd")
+            try:
+                cost["value"] = float(reported) if reported else None
+            except ValueError:
+                cost["value"] = None
             return resp.content
 
-        return await self._call(fn, label=label, kind=kind, model=model)
+        return await self._call(fn, label=label, kind=kind, model=model, node_key=node_key, limited=limited,
+                                usage_of=lambda _data: (0, 0, 0, cost["value"]))
 
     async def aclose(self) -> None:
         for client in self._clients.values():

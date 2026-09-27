@@ -25,7 +25,8 @@ dependencies = [
 [project.optional-dependencies]
 # Heavy, optional engine extras, imported lazily.
 local-embeddings = ["sentence-transformers>=3.0"]
-tts-local = ["TTS>=0.22", "pydub>=0.25"]
+# Coqui TTS for --presentation-tts-mode local (the maintained fork; still imported as `TTS.api`).
+tts-local = ["coqui-tts>=0.24"]
 
 [project.scripts]
 autogenbook = "autogenbook:main"
