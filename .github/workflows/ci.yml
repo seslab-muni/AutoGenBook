@@ -60,6 +60,16 @@ jobs:
       - name: Run api/ test suite (pytest, against Postgres)
         run: pytest tests/api
 
+      - name: Install pandoc (engine LaTeX export tests)
+        # `tests/engine` skips its pandoc/LuaLaTeX tests when the binaries are missing; pandoc
+        # alone is small, so the Markdown -> LaTeX path is exercised here (PDF tests still skip).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pandoc
+
+      - name: Run engine test suite (pytest, fake LLM, no network)
+        # The rewritten engine (`engine/`, epic #158): unit, contract and golden tests against the
+        # in-process fake LLM (`tests/engine/fake_llm.py`).
+        run: pytest tests/engine
+
       - name: Run CLI unit test suite
         # `tests/` isn't a package (no `__init__.py`), so bare `python -m
         # unittest` performs top-level discovery differently across Python

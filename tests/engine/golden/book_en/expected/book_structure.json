@@ -1,0 +1,126 @@
+{
+ "additional_requirements": "Explain each technical idea (finite differences, conditional branching, stored program) with a simple example. Keep dates and attributions accurate and cite the provided sources.",
+ "childs": [
+  {
+   "childs": [
+    {
+     "childs": [],
+     "content_file": "",
+     "content_locked": false,
+     "kb_scope": "inherit",
+     "kb_sources": [],
+     "n_pages": 2.0,
+     "needsSubdivision": false,
+     "structure_locked": false,
+     "summary": "Section 1 of chapter 1: aspect 1 of topic 1.",
+     "title": "Topic 1.1"
+    },
+    {
+     "childs": [],
+     "content_file": "",
+     "content_locked": false,
+     "kb_scope": "inherit",
+     "kb_sources": [],
+     "n_pages": 2.0,
+     "needsSubdivision": false,
+     "structure_locked": false,
+     "summary": "Section 2 of chapter 1: aspect 2 of topic 1.",
+     "title": "Topic 1.2"
+    }
+   ],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 4.0,
+   "needsSubdivision": true,
+   "structure_locked": false,
+   "summary": "Chapter 1 explains topic 1 step by step.",
+   "title": "Chapter 1 of How Computers Came to Be: From Calculating Machines to the Stored Program"
+  },
+  {
+   "childs": [
+    {
+     "childs": [],
+     "content_file": "",
+     "content_locked": false,
+     "kb_scope": "inherit",
+     "kb_sources": [],
+     "n_pages": 2.0,
+     "needsSubdivision": false,
+     "structure_locked": false,
+     "summary": "Section 1 of chapter 2: aspect 1 of topic 2.",
+     "title": "Topic 2.1"
+    },
+    {
+     "childs": [],
+     "content_file": "",
+     "content_locked": false,
+     "kb_scope": "inherit",
+     "kb_sources": [],
+     "n_pages": 2.0,
+     "needsSubdivision": false,
+     "structure_locked": false,
+     "summary": "Section 2 of chapter 2: aspect 2 of topic 2.",
+     "title": "Topic 2.2"
+    }
+   ],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 4.0,
+   "needsSubdivision": true,
+   "structure_locked": false,
+   "summary": "Chapter 2 explains topic 2 step by step.",
+   "title": "Chapter 2 of How Computers Came to Be: From Calculating Machines to the Stored Program"
+  },
+  {
+   "childs": [
+    {
+     "childs": [],
+     "content_file": "",
+     "content_locked": false,
+     "kb_scope": "inherit",
+     "kb_sources": [],
+     "n_pages": 2.0,
+     "needsSubdivision": false,
+     "structure_locked": false,
+     "summary": "Section 1 of chapter 3: aspect 1 of topic 3.",
+     "title": "Topic 3.1"
+    },
+    {
+     "childs": [],
+     "content_file": "",
+     "content_locked": false,
+     "kb_scope": "inherit",
+     "kb_sources": [],
+     "n_pages": 2.0,
+     "needsSubdivision": false,
+     "structure_locked": false,
+     "summary": "Section 2 of chapter 3: aspect 2 of topic 3.",
+     "title": "Topic 3.2"
+    }
+   ],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 4.0,
+   "needsSubdivision": true,
+   "structure_locked": false,
+   "summary": "Chapter 3 explains topic 3 step by step.",
+   "title": "Chapter 3 of How Computers Came to Be: From Calculating Machines to the Stored Program"
+  }
+ ],
+ "do_consider_outline": true,
+ "do_consider_previous_sections": true,
+ "equation_frequency_level": 2,
+ "language": "en",
+ "max_depth": 5,
+ "max_output_pages": 1.5,
+ "n_pages": 12.0,
+ "summary": "A fake book about How Computers Came to Be: From Calculating Machines to the Stored Program.",
+ "target_readers": "first-year university students of computer science and interested general readers without a technical background",
+ "title": "How Computers Came to Be: From Calculating Machines to the Stored Program"
+}

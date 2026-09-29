@@ -1,0 +1,14 @@
+{
+ "book.consistency": 1,
+ "book.glossary": 1,
+ "book.reviser": 4,
+ "embed.documents": 2,
+ "embed.query": 15,
+ "paper.abstract": 1,
+ "paper.outline": 1,
+ "paper.reference": 2,
+ "paper.related_work": 1,
+ "paper.reviewer": 8,
+ "paper.writer": 6,
+ "rerank": 10
+}

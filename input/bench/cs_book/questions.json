@@ -1,0 +1,503 @@
+{
+ "description": "Questions for the cs_book KB (English sources). The 'cs' set is the cross-lingual one: Czech questions against English sources.",
+ "authoring": "Hand-written by the implementing agent against the committed KB texts (no LLM endpoint was reachable); regenerate or extend with `scripts/bench_retrieval.py generate-questions`.",
+ "relevance": "A retrieved item is relevant when its excerpt contains the answer span (case-, accent-, whitespace- and hyphenation-insensitive).",
+ "sets": {
+  "en": [
+   {
+    "id": "en-01",
+    "question": "Which branch of AI produces new content such as text, code or images?",
+    "answer": "Generative AI is the branch that produces new content",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-02",
+    "question": "What is the instruction given to a generative model called?",
+    "answer": "The instruction a user gives to a generative model is called a prompt",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-03",
+    "question": "What is the core training task of a large language model?",
+    "answer": "given a sequence of text, predict the next piece of text",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-04",
+    "question": "Roughly how much of an English word does one token correspond to?",
+    "answer": "one token corresponds to roughly three quarters of an English word",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-05",
+    "question": "Why do languages like Czech need more tokens for the same text?",
+    "answer": "languages with rich inflection such as Czech need more tokens for the same content",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-06",
+    "question": "What is the vector of numbers assigned to each token called?",
+    "answer": "Each token is mapped to a vector of numbers called an embedding",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-07",
+    "question": "Which technique lets a model answer using passages retrieved from trusted documents?",
+    "answer": "This technique is the basis of retrieval-augmented generation",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-08",
+    "question": "Why does a language model know nothing about recent events?",
+    "answer": "every model has a knowledge cut-off date",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-09",
+    "question": "What do enterprise licences usually guarantee about conversations?",
+    "answer": "Institutional or enterprise licences usually guarantee that conversations are not used to train future models",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-10",
+    "question": "What is a hallucination in generative AI?",
+    "answer": "A hallucination is a fluent, confident statement that is false",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-11",
+    "question": "What kind of references can language models invent?",
+    "answer": "Models may invent references to articles that do not exist",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-12",
+    "question": "How can bias appear subtly in generated exercises?",
+    "answer": "for example in the default names chosen for characters in an exercise",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-13",
+    "question": "What happens if you ask a model about the current exam schedule of a course?",
+    "answer": "Asking a model about the current exam schedule of a course will produce an invented answer",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-14",
+    "question": "Can language models take ethical decisions on behalf of a teacher?",
+    "answer": "They cannot take ethical decisions on behalf of a teacher",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-15",
+    "question": "What is the most common mistake when writing a prompt?",
+    "answer": "Omitting the audience is the most common mistake",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-16",
+    "question": "What is few-shot prompting?",
+    "answer": "In few-shot prompting the instruction is followed by a small number of worked examples",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-17",
+    "question": "Which prompting technique asks the model to reason step by step?",
+    "answer": "Chain-of-thought prompting asks the model to reason step by step",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-18",
+    "question": "Does assigning a role give the model new expertise?",
+    "answer": "but it does not give the model any expertise it did not already have",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-19",
+    "question": "Where do teachers report the largest time savings from generative tools?",
+    "answer": "Teachers report the largest time savings when they use generative tools for first drafts",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-20",
+    "question": "What should you ask for besides the correct answer when generating quiz questions?",
+    "answer": "the typical misconception behind each wrong option",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-21",
+    "question": "How should a teacher calibrate a rubric drafted with AI?",
+    "answer": "calibrate it on a few real student submissions",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-22",
+    "question": "What should students be told about automated feedback?",
+    "answer": "students should be told clearly which parts of the feedback process are automated",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-23",
+    "question": "How can generative tools improve accessibility for students?",
+    "answer": "producing plain-language summaries or transcripts",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-24",
+    "question": "How can teachers build AI literacy in class?",
+    "answer": "Teachers can build this literacy by demonstrating a hallucination in class",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "en-25",
+    "question": "What five principles should the use of generative AI in teaching rest on?",
+    "answer": "transparency, privacy, fairness, integrity and accountability",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-26",
+    "question": "What does the principle of fairness require?",
+    "answer": "Fairness requires that no student is disadvantaged because they cannot afford a paid tool",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-27",
+    "question": "Who is accountable for a grade when a teacher uses a model to grade short answers?",
+    "answer": "remains accountable for the grade and must be able to explain it",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-28",
+    "question": "Which student data can count as personal data under the GDPR?",
+    "answer": "Student names, identification numbers, grades, submitted work and even writing style can be personal data",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-29",
+    "question": "What agreement must the university have with an external AI provider?",
+    "answer": "a data processing agreement with the provider",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-30",
+    "question": "What does data minimisation mean?",
+    "answer": "only the data that are strictly necessary for the task should be processed",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-31",
+    "question": "What should be carried out before deploying a tool that processes student data at scale?",
+    "answer": "a data protection impact assessment (DPIA) should be carried out before deployment",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-32",
+    "question": "When was the EU AI Act adopted?",
+    "answer": "known as the AI Act, was adopted in 2024",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-33",
+    "question": "Is education a high-risk area under the AI Act?",
+    "answer": "Education is explicitly named among the high-risk areas",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-34",
+    "question": "When does a chat assistant become a high-risk AI system?",
+    "answer": "the same technology becomes high-risk when it is used to assign grades automatically",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-35",
+    "question": "What is a typical example of an assignment where using an AI tool is required?",
+    "answer": "Critique of an AI-generated text",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-36",
+    "question": "What should a declaration of AI use contain?",
+    "answer": "the declaration should name the tool, describe what it was used for, and include the key prompts",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-37",
+    "question": "In APA style, who is named as the author when citing a generative AI model?",
+    "answer": "names the company that developed the model as the author",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-38",
+    "question": "Which texts do AI detectors frequently flag incorrectly?",
+    "answer": "detectors frequently flag texts written by non-native speakers as generated",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-39",
+    "question": "Is an AI detector score evidence of misconduct?",
+    "answer": "A detector score is therefore not evidence of misconduct",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-40",
+    "question": "What are process portfolios?",
+    "answer": "Process portfolios, in which students submit drafts, notes and reflections",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "en-41",
+    "question": "Where should a course redesign start?",
+    "answer": "A course redesign should start from the learning outcomes",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   }
+  ],
+  "cs": [
+   {
+    "id": "cs-01",
+    "question": "Která oblast umělé inteligence vytváří nový obsah, například text nebo obrázky?",
+    "answer": "Generative AI is the branch that produces new content",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-02",
+    "question": "Jak se nazývá pokyn, který uživatel zadává generativnímu modelu?",
+    "answer": "The instruction a user gives to a generative model is called a prompt",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-03",
+    "question": "Jaká je základní úloha, na kterou se trénují velké jazykové modely?",
+    "answer": "given a sequence of text, predict the next piece of text",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-04",
+    "question": "Jaké části anglického slova přibližně odpovídá jeden token?",
+    "answer": "one token corresponds to roughly three quarters of an English word",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-05",
+    "question": "Proč čeština potřebuje více tokenů pro stejný obsah?",
+    "answer": "languages with rich inflection such as Czech need more tokens for the same content",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-06",
+    "question": "Jak se nazývá číselný vektor přiřazený každému tokenu?",
+    "answer": "Each token is mapped to a vector of numbers called an embedding",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-07",
+    "question": "Jak se nazývá technika, kdy model odpovídá na základě pasáží vyhledaných v důvěryhodných dokumentech?",
+    "answer": "This technique is the basis of retrieval-augmented generation",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-08",
+    "question": "Proč jazykový model neví nic o nedávných událostech?",
+    "answer": "every model has a knowledge cut-off date",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-09",
+    "question": "Co obvykle zaručují institucionální nebo podnikové licence ohledně konverzací?",
+    "answer": "Institutional or enterprise licences usually guarantee that conversations are not used to train future models",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-10",
+    "question": "Co je halucinace u generativní AI?",
+    "answer": "A hallucination is a fluent, confident statement that is false",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-11",
+    "question": "Jaké odkazy si mohou jazykové modely vymýšlet?",
+    "answer": "Models may invent references to articles that do not exist",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-12",
+    "question": "Jak se může zkreslení nenápadně projevit ve vygenerovaných cvičeních?",
+    "answer": "for example in the default names chosen for characters in an exercise",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-13",
+    "question": "Co se stane, když se modelu zeptáte na aktuální rozpis zkoušek předmětu?",
+    "answer": "Asking a model about the current exam schedule of a course will produce an invented answer",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-14",
+    "question": "Mohou jazykové modely činit etická rozhodnutí za učitele?",
+    "answer": "They cannot take ethical decisions on behalf of a teacher",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-15",
+    "question": "Jaká je nejčastější chyba při psaní promptu?",
+    "answer": "Omitting the audience is the most common mistake",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-16",
+    "question": "Co je few-shot prompting, tedy prompt s několika vzorovými příklady?",
+    "answer": "In few-shot prompting the instruction is followed by a small number of worked examples",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-17",
+    "question": "Která technika promptování žádá model, aby uvažoval krok za krokem?",
+    "answer": "Chain-of-thought prompting asks the model to reason step by step",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-18",
+    "question": "Získá model přidělením role nové odborné znalosti?",
+    "answer": "but it does not give the model any expertise it did not already have",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-19",
+    "question": "Při čem učitelé uvádějí největší úsporu času díky generativním nástrojům?",
+    "answer": "Teachers report the largest time savings when they use generative tools for first drafts",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-20",
+    "question": "Co si kromě správné odpovědi vyžádat při generování testových otázek?",
+    "answer": "the typical misconception behind each wrong option",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-21",
+    "question": "Jak má učitel vyladit hodnoticí kritéria navržená pomocí AI?",
+    "answer": "calibrate it on a few real student submissions",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-22",
+    "question": "Co by měli studenti vědět o automatizované zpětné vazbě?",
+    "answer": "students should be told clearly which parts of the feedback process are automated",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-23",
+    "question": "Jak mohou generativní nástroje zlepšit přístupnost výuky pro studenty?",
+    "answer": "producing plain-language summaries or transcripts",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-24",
+    "question": "Jak mohou učitelé rozvíjet AI gramotnost studentů ve výuce?",
+    "answer": "Teachers can build this literacy by demonstrating a hallucination in class",
+    "source": "genai-teaching-guide/genai_teaching_guide.md"
+   },
+   {
+    "id": "cs-25",
+    "question": "Na jakých pěti principech má stát využití generativní AI ve výuce?",
+    "answer": "transparency, privacy, fairness, integrity and accountability",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-26",
+    "question": "Co vyžaduje princip spravedlnosti při používání AI?",
+    "answer": "Fairness requires that no student is disadvantaged because they cannot afford a paid tool",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-27",
+    "question": "Kdo odpovídá za známku, když učitel použije model k hodnocení krátkých odpovědí?",
+    "answer": "remains accountable for the grade and must be able to explain it",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-28",
+    "question": "Které údaje o studentech mohou být podle GDPR osobními údaji?",
+    "answer": "Student names, identification numbers, grades, submitted work and even writing style can be personal data",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-29",
+    "question": "Jakou smlouvu musí mít univerzita s externím poskytovatelem AI služby?",
+    "answer": "a data processing agreement with the provider",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-30",
+    "question": "Co znamená minimalizace dat?",
+    "answer": "only the data that are strictly necessary for the task should be processed",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-31",
+    "question": "Co je třeba provést před nasazením nástroje, který bude ve velkém zpracovávat data studentů?",
+    "answer": "a data protection impact assessment (DPIA) should be carried out before deployment",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-32",
+    "question": "Kdy byl přijat evropský AI Act?",
+    "answer": "known as the AI Act, was adopted in 2024",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-33",
+    "question": "Patří vzdělávání podle AI Act mezi vysoce rizikové oblasti?",
+    "answer": "Education is explicitly named among the high-risk areas",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-34",
+    "question": "Kdy se chatovací asistent stává vysoce rizikovým systémem AI?",
+    "answer": "the same technology becomes high-risk when it is used to assign grades automatically",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-35",
+    "question": "Jaký je typický příklad zadání, u kterého je použití nástroje AI povinné?",
+    "answer": "Critique of an AI-generated text",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-36",
+    "question": "Co má obsahovat prohlášení o použití AI?",
+    "answer": "the declaration should name the tool, describe what it was used for, and include the key prompts",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-37",
+    "question": "Kdo se v citačním stylu APA uvádí jako autor při citování generativního modelu?",
+    "answer": "names the company that developed the model as the author",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-38",
+    "question": "Které texty detektory AI často chybně označují jako vygenerované?",
+    "answer": "detectors frequently flag texts written by non-native speakers as generated",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-39",
+    "question": "Je skóre detektoru AI důkazem podvodu?",
+    "answer": "A detector score is therefore not evidence of misconduct",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-40",
+    "question": "Co jsou procesní portfolia?",
+    "answer": "Process portfolios, in which students submit drafts, notes and reflections",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   },
+   {
+    "id": "cs-41",
+    "question": "Od čeho by měl začít redesign předmětu?",
+    "answer": "A course redesign should start from the learning outcomes",
+    "source": "assessment-integrity/assessment_and_integrity.pdf"
+   }
+  ]
+ }
+}

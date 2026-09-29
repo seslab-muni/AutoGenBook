@@ -1,0 +1,55 @@
+{
+ "gaps": [
+  "a gap the fake paper fills"
+ ],
+ "items": [
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_5",
+   "doi": null,
+   "kind": "kb",
+   "loc": "chunk 5",
+   "relation": "background",
+   "source": "analytical_engine.md",
+   "summary": "Source 1 gives background.",
+   "title": "analytical_engine.md",
+   "url": null,
+   "verified": true
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1",
+   "doi": null,
+   "kind": "kb",
+   "loc": "page 3, chunk 1",
+   "relation": "background",
+   "source": "stored_program.pdf",
+   "summary": "Source 2 gives background.",
+   "title": "stored_program.pdf",
+   "url": null,
+   "verified": true
+  },
+  {
+   "cite_key": "web_tavily_first_draft_of_a_report_on_the_edvac_64eb8a",
+   "doi": "10.1109/85.238389",
+   "kind": "web",
+   "loc": "example.org",
+   "relation": "background",
+   "source": "Tavily Search",
+   "summary": "Source 3 gives background.",
+   "title": "First Draft of a Report on the EDVAC",
+   "url": "https://example.org/edvac",
+   "verified": true
+  }
+ ],
+ "positioning_statement": "This fake paper builds on the listed sources.",
+ "rejected_unverified": [
+  {
+   "cite_key": "web_tavily_a_dead_link_565787",
+   "doi": null,
+   "rid": "RID:web:tavily:565787400e9d",
+   "source": "Tavily Search",
+   "title": "A dead link",
+   "url": "https://dead.example.net/x",
+   "verified": false
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+{
+ "issues": [
+  {
+   "description": "Section 3-2-1 should give one more example.",
+   "required_fix": "Add a concrete example.",
+   "severity": "minor",
+   "type": "coverage"
+  }
+ ],
+ "ok_to_keep": true,
+ "retrieval_queries": [],
+ "revision_rounds": 1,
+ "suggested_edits": []
+}

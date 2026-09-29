@@ -1,0 +1,105 @@
+{
+ "abstract": "A short review paper arguing that keeping instructions in memory, rather than faster switching, is what turned early calculating machines into general-purpose computers. It traces the idea from the Analytical Engine's punched cards and conditional branching to the EDVAC report, the Manchester Baby and EDSAC. Keywords: history of computing, stored program, Analytical Engine, EDVAC, von Neumann architecture Research questions: Which design decisions separate programmable calculators from general-purpose computers? How did the stored-program idea emerge? Contributions: (1) a comparison of programming methods of early machines, (2) an argument that conditional branching and stored instructions are the decisive features, (3) a short chronology grounded in the provided sources Method: Qualitative comparison of machine designs described in the knowledge base. Notes: Keep dates and attributions exactly as the sources state them; cite every factual claim.",
+ "additional_requirements": "Keep dates and attributions exactly as the sources state them; cite every factual claim.",
+ "citation_style": "bibtex",
+ "contributions": [
+  "a comparison of programming methods of early machines",
+  "an argument that conditional branching and stored instructions are the decisive features",
+  "a short chronology grounded in the provided sources"
+ ],
+ "equation_frequency_level": 3,
+ "keywords": [
+  "history of computing",
+  "stored program",
+  "Analytical Engine",
+  "EDVAC",
+  "von Neumann architecture"
+ ],
+ "language": "en",
+ "max_depth": 3,
+ "max_output_pages": 1.5,
+ "n_pages": 6.0,
+ "sections": [
+  {
+   "childs": [],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "introduction",
+   "structure_locked": false,
+   "summary": "The introduction section of the fake paper.",
+   "title": "Introduction"
+  },
+  {
+   "childs": [],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 0.9,
+   "needsSubdivision": false,
+   "role": "related_work",
+   "structure_locked": false,
+   "summary": "Prior work in the verified sources, organised by theme, and how this paper relates to it.",
+   "title": "Related Work"
+  },
+  {
+   "childs": [],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "method",
+   "structure_locked": false,
+   "summary": "The method section of the fake paper.",
+   "title": "Method"
+  },
+  {
+   "childs": [],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "results",
+   "structure_locked": false,
+   "summary": "The results section of the fake paper.",
+   "title": "Results"
+  },
+  {
+   "childs": [],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "discussion",
+   "structure_locked": false,
+   "summary": "The discussion section of the fake paper.",
+   "title": "Discussion"
+  },
+  {
+   "childs": [],
+   "content_file": "",
+   "content_locked": false,
+   "kb_scope": "inherit",
+   "kb_sources": [],
+   "n_pages": 1.0,
+   "needsSubdivision": false,
+   "role": "conclusion",
+   "structure_locked": false,
+   "summary": "The conclusion section of the fake paper.",
+   "title": "Conclusion"
+  }
+ ],
+ "target_readers": "",
+ "target_venue": "arXiv",
+ "title": "The Stored-Program Concept as the Turning Point of Early Computing"
+}

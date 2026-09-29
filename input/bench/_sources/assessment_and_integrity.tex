@@ -1,0 +1,147 @@
+% Source of input/bench/cs_book/kb/assessment-integrity/assessment_and_integrity.pdf
+% Written for the AutoGenBook benchmark. Original text, Apache 2.0 (repository licence).
+% Build: lualatex assessment_and_integrity.tex (twice). The running header and the
+% page-number footer are deliberate: the new extractor must drop them.
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec}
+\usepackage[margin=28mm]{geometry}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{array}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{Assessment and Academic Integrity in the Age of Generative AI}
+\fancyfoot[C]{Page \thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\title{Assessment and Academic Integrity in the Age of Generative AI}
+\author{AutoGenBook benchmark corpus}
+\date{}
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\section{Ethical principles}
+
+The use of generative AI in teaching should rest on five principles:
+transparency, privacy, fairness, integrity and accountability. Transparency
+means that teachers and students state openly when and how generative tools
+were used. Privacy means that personal data of students are never entered
+into a tool without a legal basis and adequate protection. Fairness requires
+that no student is disadvantaged because they cannot afford a paid tool.
+Integrity means that assessed work reflects the student's own learning.
+Accountability means that a human remains responsible for every decision
+that affects a student.
+
+These principles apply equally to teachers. A teacher who uses a model to
+draft feedback or to grade short answers remains accountable for the grade
+and must be able to explain it.
+
+\section{Data protection}
+
+Within the European Union the processing of personal data is governed by the
+General Data Protection Regulation (GDPR). Student names, identification
+numbers, grades, submitted work and even writing style can be personal data.
+Before student data are processed by an external AI service, the university
+must have a legal basis for the processing and a data processing agreement
+with the provider.
+
+Three practical rules follow from the regulation. The first is data
+minimisation: only the data that are strictly necessary for the task should
+be processed. The second is anonymisation: names and identifiers should be
+removed from texts before they are pasted into a tool. The third is
+documentation: when a new tool will process student data at scale, a data
+protection impact assessment (DPIA) should be carried out before deployment.
+Enterprise licences and locally hosted models make it much easier to meet
+these obligations than free consumer accounts, whose terms often allow the
+provider to use conversations for further training.
+
+\section{The EU AI Act}
+
+The European regulation on artificial intelligence, known as the AI Act, was
+adopted in 2024 and introduces obligations that depend on the risk of an AI
+system. Systems with unacceptable risk are prohibited, high-risk systems must
+meet strict requirements on data quality, documentation and human oversight,
+and systems with limited risk are subject mainly to transparency obligations.
+
+Education is explicitly named among the high-risk areas. AI systems used to
+decide on admission to education, to evaluate learning outcomes, or to
+monitor students during tests are classified as high-risk. A chat assistant
+used by a teacher to draft exercises is not high-risk in itself, but the
+same technology becomes high-risk when it is used to assign grades
+automatically.
+
+\section{Categories of assignments}
+
+Instead of a single rule for the whole university, many institutions ask
+teachers to classify each assignment into one of three categories and to
+state the category in the assignment brief. Table~\ref{tab:categories}
+summarises the scheme.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{>{\raggedright}p{3.2cm} >{\raggedright}p{5.6cm} >{\raggedright\arraybackslash}p{4.2cm}}
+\toprule
+Category & Meaning & Typical example \\
+\midrule
+Prohibited & Generative tools may not be used at all & Closed-book written exam \\
+Permitted with declaration & Tools may be used if the student declares how & Seminar essay \\
+Required & Using a tool is part of the task & Critique of an AI-generated text \\
+\bottomrule
+\end{tabular}
+\caption{Three categories of assignments}
+\label{tab:categories}
+\end{table}
+
+For the category permitted with declaration, the declaration should name the
+tool, describe what it was used for, and include the key prompts. A short
+statement in the syllabus explains the categories to students at the start
+of the semester and prevents misunderstandings later.
+
+\section{Citing generative AI}
+
+When a student uses text or ideas produced by a generative tool, the use
+should be acknowledged like any other source. The major citation styles now
+provide templates for this purpose. In APA style, for example, the reference
+names the company that developed the model as the author, the name and
+version of the model, the date of use and the address of the service. The
+exact prompt should be reported in the text or in an appendix, because the
+same model can produce different answers to the same question.
+
+\section{Why AI detectors are not reliable}
+
+Software that claims to detect text written by generative AI produces both
+false positives and false negatives. Independent evaluations have shown that
+detectors frequently flag texts written by non-native speakers as generated,
+and that light paraphrasing is enough to hide generated text from them.
+A detector score is therefore not evidence of misconduct and must never be
+the sole basis for an accusation. Universities that have studied the problem
+recommend redesigning assessment instead of relying on detection.
+
+\section{Redesigning assessment}
+
+Assessment that is resistant to misuse of generative tools shifts attention
+from the final product to the process of learning. Oral examinations and
+short oral defences of written work allow the teacher to verify
+understanding directly. Process portfolios, in which students submit drafts,
+notes and reflections at several points during the semester, make it
+possible to follow how the work developed. Tasks connected to local data,
+personal experience or recent in-class discussion are difficult to complete
+with a general-purpose model alone.
+
+A course redesign should start from the learning outcomes: for each outcome
+the teacher asks whether the current assessment still provides evidence that
+the student has achieved it when generative tools are freely available. If
+not, the task is changed, moved into the classroom, or complemented by an
+oral component.
+
+\section{Practical checklist}
+
+Before the semester starts, a teacher can use the following checklist:
+decide the category of every assignment; add a statement on generative AI to
+the syllabus; choose tools that are covered by an institutional licence;
+prepare an example of a correct declaration; and plan at least one activity
+that develops the students' ability to evaluate generated content critically.
+During the semester, the teacher collects feedback from students on how the
+rules work in practice and adjusts them for the next run of the course.
+
+\end{document}

@@ -1,0 +1,28 @@
+{
+ "kb_electronic_computing_stored_program_pdf_9dd3310c": {
+  "authors": [
+   "Benchmark, Corpus"
+  ],
+  "doi": "",
+  "entry_type": "report",
+  "publisher": "AutoGenBook",
+  "source_sha256": "f9fcf7fd12e835320bae0a5c46fa12545119dc01cad37973b249a7662b679add",
+  "title": "Stored Program",
+  "url": "",
+  "venue": "",
+  "year": "2026"
+ },
+ "kb_mechanical_computing_analytical_engine_md_9d57f337": {
+  "authors": [
+   "Benchmark, Corpus"
+  ],
+  "doi": "",
+  "entry_type": "report",
+  "publisher": "AutoGenBook",
+  "source_sha256": "61eaab9adc9e8c9783f5957f3a62b55eaab1f414560b8c6b886d6aa7d14f3b85",
+  "title": "Analytical Engine",
+  "url": "",
+  "venue": "",
+  "year": "2026"
+ }
+}

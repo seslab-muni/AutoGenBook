@@ -1,0 +1,27 @@
+# The rewritten engine against the deterministic fake LLM (tests/engine/fake_llm.py),
+# for the Playwright suite without any API key:
+#
+#   echo "AUTH_JWT_SECRET=$(openssl rand -hex 32)" > .env
+#   docker compose -f docker-compose.yml -f docker-compose.engine.yml -f docker-compose.engine-fake.yml up -d --wait --build
+#   (seed a login as in docker-compose.ci.yml, then) cd app && pnpm e2e
+#
+# The fake serves chat completions, embeddings and /rerank on the internal
+# network; its section text contains "Fake generated content", which is what
+# app/e2e/smoke.spec.ts looks for.
+services:
+  fakellm:
+    build:
+      context: .
+    command: python tests/engine/fake_llm.py serve --host 0.0.0.0 --port 8099
+    networks:
+      - backend
+
+  worker:
+    environment:
+      AUTOGENBOOK_LLM_BASE_URL: http://fakellm:8099/v1
+      AUTOGENBOOK_LLM_API_KEY: fake
+      OPENROUTER_API_KEY: ""
+      CLI_RUN_TIMEOUT_S: "300"
+    depends_on:
+      fakellm:
+        condition: service_started

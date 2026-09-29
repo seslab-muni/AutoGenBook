@@ -1,0 +1,5 @@
+Title: How Computers Came to Be: From Calculating Machines to the Stored Program
+Summary: A short introductory book on the history of computing, from the mechanical calculators of Pascal and Leibniz and the punched cards of the Jacquard loom, through Charles Babbage's Difference and Analytical Engines and Ada Lovelace's notes, to the electronic machines of the 1940s, the stored-program concept, and the transistor. The book explains the key technical ideas in plain language and shows how each generation of machines prepared the next.
+Target readers: first-year university students of computer science and interested general readers without a technical background
+Total pages: 12
+Additional requirements: Explain each technical idea (finite differences, conditional branching, stored program) with a simple example. Keep dates and attributions accurate and cite the provided sources.

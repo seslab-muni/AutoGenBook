@@ -290,8 +290,10 @@ Decided design, all behind a `Retriever` protocol:
   and model; brute-force cosine in NumPy, no vector database.
 - **Fusion and reranking**: reciprocal rank fusion of both top-30 lists, then e-INFRA's
   `qwen3-reranker-4b` through vLLM's rerank or score endpoint (whichever the gateway proxies),
-  down to `k` (default 6); listwise LLM reranking with the mini model is the fallback. Source
-  diversification and the 6000-char context cap stay.
+  down to `k` (default 6); listwise LLM reranking with the mini model is the fallback. The gateway
+  serves the Qwen3 reranker as a bare classifier, so the client applies the model's own
+  `<Instruct>/<Query>/<Document>` template (without it the reranker scored below fused order on
+  every benchmark set; with it, above). Source diversification and the 6000-char context cap stay.
 - **Queries**: the per-section query drops the book summary; the pipeline supplies one to three
   focused queries (section summary, glossary terms, writer/reviewer-generated queries) whose results
   are fused.
@@ -447,3 +449,130 @@ Settled in the September 2026 review:
 | API scope | `api/` and `app/` frozen until the switch; `events.jsonl` and streaming adopted afterwards |
 | Retrieval | hybrid from the start: lemmatised BM25 + e-INFRA `qwen3-embedding-4b` + e-INFRA `qwen3-reranker-4b`; structure-aware chunking; no PyMuPDF |
 | Python | 3.12, matching the Docker image |
+
+## Appendix A. Running the tests and benchmarks locally
+
+Everything below runs from a fresh clone on Linux or macOS with Python 3.12. Commands are run
+from the repository root unless a step says otherwise.
+
+### A.1 Clone and virtualenv
+
+```bash
+git clone https://github.com/seslab-muni/AutoGenBook.git
+cd AutoGenBook
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r api/requirements-dev.txt   # engine, old CLI, API and pytest
+```
+
+Optional system tools. Tests that need a missing tool skip cleanly instead of failing:
+
+- `pandoc` for the LaTeX, Beamer and paper `.tex` tests.
+- `lualatex` and `bibtex` for the PDF tests. On Debian/Ubuntu, install `texlive-luatex`, `texlive-latex-extra`, `texlive-lang-czechslovak` and `texlive-bibtex-extra`.
+
+Optional Python extras are imported only when used (`pip install '.[local-embeddings]'`,
+`pip install '.[tts-local]'`).
+
+### A.2 Test suites
+
+```bash
+pytest tests/engine                              # engine: contract, golden, unit tests; fake LLM, no network
+python -m unittest discover -s tests -p "test_*.py"   # the old CLI's suite (unchanged)
+AUTH_JWT_SECRET="$(openssl rand -hex 32)" pytest tests/api   # the API's suite (uses tests/api/fake_cli.py)
+python -m autogenbook.smoke_prompts              # old prompt packs
+```
+
+`tests/engine/test_contract_*` is the frozen contract of section 3: argv, stdout, `structure_graph.json`, sections, reviews, `kb_sources.json`, `run_meta.json` and run kinds, for book, paper and presentation.
+
+The golden runs (`test_golden_{book,paper,presentation}.py`) replay recorded LLM replies. After an intentional prompt or assembly change, re-record them with `ENGINE_UPDATE_GOLDEN=1 pytest tests/engine/test_golden_*.py`.
+
+`ENGINE_TEST_COQUI=1` enables the single test that loads a real Coqui model. It is off by default because loading a model may download it.
+
+### A.3 Retrieval benchmark: old KB vs new hybrid (e-INFRA)
+
+```bash
+export AUTOGENBOOK_LLM_BASE_URL=https://llm.ai.e-infra.cz/v1/
+export AUTOGENBOOK_LLM_API_KEY=...            # your e-INFRA CZ API token
+unset OPENROUTER_API_KEY                      # it takes precedence over AUTOGENBOOK_LLM_API_KEY (API rule)
+# Embedding/reranker models default to qwen3-embedding-4b / qwen3-reranker-4b on the same
+# endpoint; override with AUTOGENBOOK_EMBED_MODEL / AUTOGENBOOK_RERANK_MODEL if the names differ
+# (curl -s -H "Authorization: Bearer $AUTOGENBOOK_LLM_API_KEY" "$AUTOGENBOOK_LLM_BASE_URL"models).
+# hybrid-llmrerank additionally needs a chat model: export AUTOGENBOOK_LLM_MINI_MODEL=<model id>
+
+python scripts/bench_retrieval.py --retriever old,bm25-plain,bm25-lemma,dense,hybrid,hybrid-rerank --k 6   # = --retriever all
+python scripts/bench_retrieval.py --retriever hybrid-llmrerank,dense:local --k 6   # LLM listwise rerank; local e5 (needs the extra)
+```
+
+Both benchmark KBs (`input/bench/cs_book`, `input/bench/en_book`) and both question languages run by default. The script writes a Markdown table of recall@1/3/k, MRR and cold/warm build time, plus JSON, under `output/bench/retrieval-<timestamp>/`.
+
+Reranked rows are strict: if the reranker is unavailable or fails, the row is reported under "Failed runs" and the script exits 1, instead of silently reporting fused-order numbers.
+
+`--fake-llm` proves the script works without a key, but its dense and rerank numbers are meaningless.
+
+### A.4 Engine benchmark: old vs new at concurrency 1 and 4, and the sweep
+
+Both engines see the same environment. Set the endpoint as in A.3, then:
+
+```bash
+export AUTOGENBOOK_LLM_MODEL=...          # chat model id on the endpoint (same for both engines)
+export AUTOGENBOOK_LLM_MINI_MODEL=...     # smaller model for reference formatting and the judge
+
+# Old (sequential) vs new at concurrency 1 and 4, with the blind pairwise judge (both orders)
+python scripts/bench_engines.py --compare --input input/bench/en_book --concurrency 1,4 --judge
+python scripts/bench_engines.py --compare --input input/bench/cs_book --concurrency 1,4 --judge
+
+# Concurrency sweep of the new engine: throughput, errors and 429s per level
+python scripts/bench_engines.py --engine new --input input/bench/en_book --sweep 1,2,4,8
+
+# Paper and presentation types
+python scripts/bench_engines.py --compare --input input/bench/en_paper --concurrency 1,4 --judge
+python scripts/bench_engines.py --compare --input input/bench/en_presentation --concurrency 1,4
+
+# Reuse an old-engine run instead of repeating it (it is the slow one)
+python scripts/bench_engines.py --compare --old-run output/bench/<ts>/old --input input/bench/en_book --concurrency 4 --judge
+```
+
+Every run starts through the API's own `build_command` and `subprocess_runner`. The script writes `report.md`, `report.json`, every work dir and every stdout log under `output/bench/<timestamp>/`.
+
+Append `--fake-llm` to any command to smoke-test the harness without a key. Those numbers are **fake-LLM smoke numbers**: timings, token counts and quality metrics measure the harness, not a model.
+
+### A.5 API end to end against the new engine
+
+The switch is a single setting: `CLI_ENTRYPOINT=run_engine.py` for the `api` and `worker` services (`docker-compose.engine.yml`). To exercise the web stack with the deterministic fake LLM, with no key and no network, add `docker-compose.engine-fake.yml`:
+
+```bash
+cp .env.example .env
+echo "AUTH_JWT_SECRET=$(openssl rand -hex 32)" >> .env
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.engine.yml -f docker-compose.engine-fake.yml"
+$COMPOSE up -d --wait --build
+$COMPOSE exec -T -e AUTOGENBOOK_USER_PASSWORD='E2ePassw0rd!' api \
+  python -m api.scripts.users create --email e2e@example.com --name "E2E User"
+
+AUTH_JWT_SECRET="$(openssl rand -hex 32)" pytest tests/api   # API suite (host venv from A.1)
+pytest tests/engine/test_contract_api_e2e.py                 # API adapter -> run_engine.py, no Docker
+
+cd app
+pnpm install
+pnpm exec playwright install --with-deps chromium   # once per machine
+pnpm e2e                                            # Playwright smoke + a11y against http://127.0.0.1:8080
+```
+
+To run the stack against a real endpoint instead, drop `docker-compose.engine-fake.yml` and set `AUTOGENBOOK_LLM_BASE_URL`, `AUTOGENBOOK_LLM_API_KEY` and `AUTOGENBOOK_LLM_MODEL` in `.env`. Rolling back means removing `docker-compose.engine.yml`, so the services run `main.py` again.
+
+## Appendix B. Contract notes from the implementation
+
+These are places where section 3 and the current API code disagree or are silent. Where they disagree, the engine follows the API code.
+
+- **API key precedence.** `OPENROUTER_API_KEY` wins over `AUTOGENBOOK_LLM_API_KEY` when both are set (`api/core/settings.py`, and the old client). Unset the OpenRouter key when targeting another endpoint.
+- **Citation tokens.** Section files store one `[cite_key]` bracket per key (`[a] [b]`). The API's importer (`graph_import._CITATION_TOKEN_RE`) only reads single-key brackets. `\cite{}`, `\footnote{Source: ...}` and `[a; b]` written by a model are rewritten outside code; the final document renders adjacent markers as `[1, 2]`.
+- **Writing instructions.** The API strips only a trailing `\n\nWriting instructions: ...` paragraph. TXT outline bullets (`- Writing instructions: ...`) are therefore moved into that shape when the spec is parsed.
+- **Resume.** Refused when `input_sha256`, `input_path` or `doc_type` differ. A refused resume regenerates the outline from the TXT, unless `--use-json`, when the content changed or cannot be proven unchanged. A graph without a stored hash is accepted and stamped, as `tests/api/fake_cli.py` does. A graph this engine saved before subdivision finished (`subdivision_complete: false`) is subdivided on resume.
+- **`run_meta.json` `run_kind`.** The values are `full`, `resume` and `export` (informational; the API keeps its own kind).
+- **Engine state.** Engine state lives under `out/.kb_cache/engine/`, which the API does not upload. A full run clears it along with stale section and review files, keeping content-lock sources.
+- **Web references.** Cited web references are added to `kb_sources.json` `cite_keys`/`rids` (never `chunks`), with extra `kind`/`title`/`url`/`doi` fields that the API ignores.
+- **Graph root.** The root is `book` for every document type. The old presentation mode used `presentation`, and its slides lived in `slides/<key>.md`; here slides are `sections/<key>.md`.
+- **Strict audit.** It exits 4 whenever it finds errors, including Markdown-only runs.
+- **PDF output.** A PDF produced by a nonstop LuaLaTeX run with errors is kept, and the errors are reported as `[WARN]`. Failing explicitly requested LaTeX (`--export-tex`, `--presentation-tex`) fails the run; a paper's default `.tex` failing under `--no-pdf` is only a warning.
+- **`kb_sources.json` `page_keys`.** These stay path-dependent, as in the old engine.
+- **Engine-only settings.** `AUTOGENBOOK_CONCURRENCY`, `AUTOGENBOOK_EMBED_*`, `AUTOGENBOOK_RERANK_*`, `AUTOGENBOOK_DENSE` and `AUTOGENBOOK_TTS_*` are not on the API's environment allow-list. Under the web stack the engine uses its defaults: concurrency 4, and embeddings and reranking on the LLM base URL with the e-INFRA model names.
+- **Flags not ported.** `--presentation-video`, `--presentation-image-model`, `--no-image` and `--presentation-citations` (slide images and video) are rejected with exit 2. `--paper-input` is new, and `-i` still works for every mode.

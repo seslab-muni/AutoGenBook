@@ -1,0 +1,8 @@
+Title: The Stored-Program Concept as the Turning Point of Early Computing
+Summary: A short review paper arguing that keeping instructions in memory, rather than faster switching, is what turned early calculating machines into general-purpose computers. It traces the idea from the Analytical Engine's punched cards and conditional branching to the EDVAC report, the Manchester Baby and EDSAC.
+Keywords: history of computing, stored program, Analytical Engine, EDVAC, von Neumann architecture
+Research questions: Which design decisions separate programmable calculators from general-purpose computers? How did the stored-program idea emerge?
+Contributions: (1) a comparison of programming methods of early machines, (2) an argument that conditional branching and stored instructions are the decisive features, (3) a short chronology grounded in the provided sources
+Method: Qualitative comparison of machine designs described in the knowledge base.
+Notes: Keep dates and attributions exactly as the sources state them; cite every factual claim.
+Total pages: 6

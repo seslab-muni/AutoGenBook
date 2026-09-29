@@ -1,0 +1,28 @@
+{
+ "fingerprint": "912ca50d40583d83f9d97d9d",
+ "glossary": {
+  "audience": "Readers new to the topic.",
+  "conventions": [
+   "Use SI units."
+  ],
+  "notation": [
+   {
+    "meaning": "a variable",
+    "symbol": "x"
+   }
+  ],
+  "terms": [
+   {
+    "definition": "a term used consistently in the fake book",
+    "note": "",
+    "term": "fake term"
+   },
+   {
+    "definition": "the method discussed in the book",
+    "note": "",
+    "term": "approach"
+   }
+  ],
+  "tone": "Clear and precise."
+ }
+}

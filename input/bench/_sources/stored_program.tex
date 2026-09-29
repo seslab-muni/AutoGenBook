@@ -1,0 +1,144 @@
+% Source of input/bench/en_book/kb/electronic-computing/stored_program.pdf
+% Written for the AutoGenBook benchmark. Original text, Apache 2.0 (repository licence).
+% Build: lualatex stored_program.tex (twice). Running header and page-number footer are
+% deliberate: the new extractor must drop them.
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec}
+\usepackage[margin=28mm]{geometry}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{array}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{The Stored-Program Computer}
+\fancyhead[R]{Benchmark corpus}
+\fancyfoot[C]{\thepage}
+\title{The Stored-Program Computer: From Theory to Transistors}
+\author{AutoGenBook benchmark corpus}
+\date{}
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\section{A theory of computation}
+
+In 1936 the British mathematician Alan Turing published a paper on computable
+numbers in which he described an abstract machine that reads and writes
+symbols on an unbounded tape according to a finite table of rules. Turing
+showed that a single universal machine could imitate any other such machine
+if the description of that machine was written on its tape. The universal
+machine anticipated the idea that a program is itself a kind of data. In the
+same year the American logician Alonzo Church reached equivalent conclusions
+with a different formalism, and the claim that these models capture
+everything that can be computed mechanically became known as the
+Church--Turing thesis.
+
+\section{Electronic machines of the war years}
+
+The first electronic digital devices used vacuum tubes as switches, because
+tubes could change state thousands of times faster than the relays of
+electromechanical calculators. Between 1939 and 1942 John Atanasoff and
+Clifford Berry built at Iowa State College a machine for solving systems of
+linear equations. It computed in binary and stored intermediate values on
+rotating drums of capacitors, but it was not programmable.
+
+In Britain, the engineer Tommy Flowers designed Colossus to help break the
+Lorenz cipher used by the German high command. The first Colossus was
+operational at Bletchley Park in early 1944. It was programmed by switches
+and plugs, and ten machines were in use by the end of the war. Their
+existence remained secret until the 1970s.
+
+\section{ENIAC}
+
+ENIAC, the Electronic Numerical Integrator and Computer, was built at the
+University of Pennsylvania by John Mauchly and J. Presper Eckert and was
+completed in 1945. It was designed to calculate artillery firing tables for
+the United States Army. The machine contained about 17,468 vacuum tubes,
+weighed around 27 tonnes and occupied a large room.
+
+ENIAC was fast, performing about five thousand additions per second, but it
+had no stored program. To change the problem it solved, operators had to
+reconnect cables on plugboards and set thousands of switches, a process that
+could take days. The women who programmed it, among them Kathleen McNulty,
+Jean Jennings and Frances Elizabeth Holberton, worked out the wiring from
+the mathematical description of each problem.
+
+\section{The EDVAC report and the stored-program concept}
+
+Even before ENIAC was finished, its designers planned a successor that would
+avoid the rewiring problem. In June 1945 the mathematician John von Neumann,
+who had joined the discussions as a consultant, wrote the First Draft of a
+Report on the EDVAC. The report described a machine whose instructions were
+held in the same memory as the data, encoded as numbers. A program could
+then be loaded as quickly as data, and the machine could even modify its own
+instructions.
+
+The organisation described in the report consisted of a central arithmetic
+unit, a control unit, a memory, and input and output devices. It became
+known as the von Neumann architecture, although the ideas were developed
+jointly with Eckert and Mauchly, who disputed the attribution. The
+separation between a processor that fetches instructions and a memory that
+holds both instructions and data is still the basis of most computers.
+
+\section{The first stored programs}
+
+The first machine to run a program stored in its electronic memory was the
+Manchester Small-Scale Experimental Machine, nicknamed the Baby, built by
+Frederic Williams, Tom Kilburn and Geoff Tootill at the University of
+Manchester. On 21 June 1948 it ran a program that found the highest proper
+factor of a number. Its memory was a cathode-ray tube that stored bits as
+charged spots on the screen, a device known as the Williams tube.
+
+The first stored-program computer to provide a regular computing service was
+EDSAC, built at the University of Cambridge under the direction of Maurice
+Wilkes. It ran its first program in May 1949. The EDSAC team introduced a
+library of subroutines and a simple assembler called initial orders, which
+translated mnemonic instructions into machine code when a program was
+loaded.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{>{\raggedright}p{2.8cm} >{\raggedright}p{1.6cm} >{\raggedright}p{3.6cm} >{\raggedright\arraybackslash}p{4.2cm}}
+\toprule
+Machine & Year & Switching technology & Programming method \\
+\midrule
+Colossus & 1944 & Vacuum tubes & Switches and plugs \\
+ENIAC & 1945 & Vacuum tubes & Plugboards and switches \\
+Manchester Baby & 1948 & Vacuum tubes & Stored program \\
+EDSAC & 1949 & Vacuum tubes & Stored program with subroutines \\
+\bottomrule
+\end{tabular}
+\caption{Early electronic computers}
+\label{tab:machines}
+\end{table}
+
+\section{From vacuum tubes to transistors}
+
+Vacuum tubes were bulky, consumed a lot of power and failed often. In
+December 1947 John Bardeen and Walter Brattain, working in the group of
+William Shockley at Bell Laboratories, demonstrated the point-contact
+transistor, a solid-state amplifier and switch made of germanium. The three
+received the Nobel Prize in Physics in 1956. By the late 1950s transistors
+had replaced tubes in new computers, which became smaller, cheaper and far
+more reliable.
+
+The next step was to place many transistors on a single piece of
+semiconductor. In 1958 Jack Kilby at Texas Instruments built the first
+integrated circuit from germanium, and in 1959 Robert Noyce at Fairchild
+Semiconductor developed a silicon integrated circuit using the planar
+process, which made mass production practical. In 1965 Gordon Moore
+observed that the number of components on an integrated circuit was
+doubling at a regular rate, an observation that became known as Moore's law
+and guided the semiconductor industry for decades.
+
+\section{Why the stored program mattered}
+
+The stored-program concept turned the computer from a configurable
+calculator into a universal machine in Turing's sense. Because programs were
+data, they could be written, copied, loaded and translated by other
+programs. Assemblers, compilers and operating systems all depend on this
+property. The history of software, from the subroutine library of EDSAC to
+modern programming languages, begins with the decision to keep instructions
+in memory.
+
+\end{document}

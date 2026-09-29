@@ -1,0 +1,539 @@
+{
+ "description": "Questions for the en_book KB (English sources). The 'cs' set is the cross-lingual one: Czech questions against English sources.",
+ "authoring": "Hand-written by the implementing agent against the committed KB texts (no LLM endpoint was reachable); regenerate or extend with `scripts/bench_retrieval.py generate-questions`.",
+ "relevance": "A retrieved item is relevant when its excerpt contains the answer span (case-, accent-, whitespace- and hyphenation-insensitive).",
+ "sets": {
+  "en": [
+   {
+    "id": "en-01",
+    "question": "Who built an adding machine in 1642?",
+    "answer": "In 1642 the French mathematician Blaise Pascal built a machine that could add and subtract",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-02",
+    "question": "How did Pascal's machine handle carrying between digits?",
+    "answer": "which solved the problem of carrying automatically",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-03",
+    "question": "What was the central component of Leibniz's calculating machine?",
+    "answer": "Its central component, the stepped drum",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-04",
+    "question": "When did Jacquard demonstrate his card-controlled loom?",
+    "answer": "In 1804 Joseph Marie Jacquard demonstrated a loom controlled by a chain of punched cards",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-05",
+    "question": "How could the woven pattern of a Jacquard loom be changed?",
+    "answer": "Changing the cards changed the pattern without rebuilding the machine",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-06",
+    "question": "Why were printed mathematical tables unreliable in the early nineteenth century?",
+    "answer": "These tables were computed by hand and contained many errors",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-07",
+    "question": "What mathematical method was the Difference Engine based on?",
+    "answer": "His Difference Engine was based on the method of finite differences",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-08",
+    "question": "Why could a machine that only adds tabulate polynomials?",
+    "answer": "every value of the table can be obtained from the previous ones by addition alone",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-09",
+    "question": "Why did the construction of the Difference Engine stop?",
+    "answer": "the project stopped in 1833 after disputes with the engineer Joseph Clement",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-10",
+    "question": "When was a Difference Engine No. 2 completed in London?",
+    "answer": "In 1991 the Science Museum in London completed a Difference Engine No. 2",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-11",
+    "question": "How did the store of the Analytical Engine hold numbers?",
+    "answer": "The store held numbers on columns of wheels",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-12",
+    "question": "What storage capacity did Babbage plan for the Analytical Engine?",
+    "answer": "about one thousand numbers of fifty digits each",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-13",
+    "question": "What did the mill of the Analytical Engine do?",
+    "answer": "The mill performed arithmetic operations on numbers brought from the store",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-14",
+    "question": "What did the operation cards of the Analytical Engine specify?",
+    "answer": "operation cards specified what the mill should do",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-15",
+    "question": "What made the Analytical Engine a general-purpose machine?",
+    "answer": "This conditional branching, together with the ability to repeat a sequence of operations",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-16",
+    "question": "Whose daughter was Ada Lovelace?",
+    "answer": "Ada Lovelace, a mathematician and the daughter of the poet Lord Byron",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-17",
+    "question": "How long were Lovelace's notes compared to the article she translated?",
+    "answer": "about three times longer than the original text",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-18",
+    "question": "Which numbers did Note G show the engine could compute?",
+    "answer": "how the engine could compute the Bernoulli numbers",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-19",
+    "question": "What did Lovelace suggest the engine might compose?",
+    "answer": "She suggested that it might compose elaborate pieces of music",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-20",
+    "question": "Who built a working difference engine in 1853?",
+    "answer": "Georg and Edvard Scheutz built a working difference engine in 1853",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-21",
+    "question": "For which census did Hollerith build tabulating machines?",
+    "answer": "For the 1890 United States census he built electric tabulating machines",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-22",
+    "question": "When was the firm that absorbed Hollerith's company renamed IBM?",
+    "answer": "renamed International Business Machines (IBM) in 1924",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "en-23",
+    "question": "When did Turing publish his paper on computable numbers?",
+    "answer": "In 1936 the British mathematician Alan Turing published a paper on computable numbers",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-24",
+    "question": "What did Turing show a universal machine could do?",
+    "answer": "a single universal machine could imitate any other such machine",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-25",
+    "question": "What does the Church-Turing thesis claim these models capture?",
+    "answer": "everything that can be computed mechanically",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-26",
+    "question": "Why did the first electronic computers use vacuum tubes?",
+    "answer": "tubes could change state thousands of times faster than the relays",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-27",
+    "question": "How did the Atanasoff-Berry machine store intermediate values?",
+    "answer": "It computed in binary and stored intermediate values on rotating drums of capacitors",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-28",
+    "question": "What was Colossus designed to do?",
+    "answer": "to help break the Lorenz cipher used by the German high command",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-29",
+    "question": "When was the first Colossus operational?",
+    "answer": "The first Colossus was operational at Bletchley Park in early 1944",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-30",
+    "question": "What was ENIAC designed to calculate?",
+    "answer": "It was designed to calculate artillery firing tables for the United States Army",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-31",
+    "question": "How many vacuum tubes did ENIAC contain?",
+    "answer": "The machine contained about 17,468 vacuum tubes",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-32",
+    "question": "How many additions per second could ENIAC perform?",
+    "answer": "performing about five thousand additions per second",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-33",
+    "question": "How was ENIAC reprogrammed for a new problem?",
+    "answer": "operators had to reconnect cables on plugboards and set thousands of switches",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-34",
+    "question": "Which report did von Neumann write in June 1945?",
+    "answer": "wrote the First Draft of a Report",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-35",
+    "question": "What is the key idea of the machine described in the EDVAC report?",
+    "answer": "whose instructions were held in the same memory as the data",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-36",
+    "question": "What components did the organisation in the EDVAC report consist of?",
+    "answer": "a central arithmetic unit, a control unit, a memory, and input and output devices",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-37",
+    "question": "What did the Manchester Baby's first program compute?",
+    "answer": "On 21 June 1948 it ran a program that found the highest proper factor of a number",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-38",
+    "question": "What was the memory device of the Manchester Baby called?",
+    "answer": "a device known as the Williams tube",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-39",
+    "question": "When did EDSAC run its first program?",
+    "answer": "It ran its first program in May 1949",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-40",
+    "question": "What was EDSAC's simple assembler called?",
+    "answer": "a simple assembler called initial orders",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-41",
+    "question": "Who demonstrated the point-contact transistor in 1947?",
+    "answer": "In December 1947 John Bardeen and Walter Brattain",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-42",
+    "question": "Who built the first integrated circuit?",
+    "answer": "In 1958 Jack Kilby at Texas Instruments built the first integrated circuit",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-43",
+    "question": "What is Gordon Moore's observation about integrated circuits known as?",
+    "answer": "an observation that became known as Moore's law",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "en-44",
+    "question": "Which programming method is listed for EDSAC in the table of early computers?",
+    "answer": "Stored program with subroutines",
+    "source": "electronic-computing/stored_program.pdf"
+   }
+  ],
+  "cs": [
+   {
+    "id": "cs-01",
+    "question": "Kdo v roce 1642 sestrojil stroj, který uměl sčítat a odčítat?",
+    "answer": "In 1642 the French mathematician Blaise Pascal built a machine that could add and subtract",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-02",
+    "question": "Jak Pascalův stroj řešil přenos do vyššího řádu?",
+    "answer": "which solved the problem of carrying automatically",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-03",
+    "question": "Co bylo hlavní součástí Leibnizova počítacího stroje?",
+    "answer": "Its central component, the stepped drum",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-04",
+    "question": "Kdy Jacquard předvedl tkalcovský stav řízený děrnými štítky?",
+    "answer": "In 1804 Joseph Marie Jacquard demonstrated a loom controlled by a chain of punched cards",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-05",
+    "question": "Jak se dal změnit tkaný vzor na Jacquardově stavu?",
+    "answer": "Changing the cards changed the pattern without rebuilding the machine",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-06",
+    "question": "Proč byly tištěné matematické tabulky na počátku 19. století nespolehlivé?",
+    "answer": "These tables were computed by hand and contained many errors",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-07",
+    "question": "Na jaké matematické metodě byl založen Babbageův diferenční stroj?",
+    "answer": "His Difference Engine was based on the method of finite differences",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-08",
+    "question": "Proč stačilo stroji pouze sčítat, aby mohl tabelovat polynomy?",
+    "answer": "every value of the table can be obtained from the previous ones by addition alone",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-09",
+    "question": "Proč se stavba diferenčního stroje zastavila?",
+    "answer": "the project stopped in 1833 after disputes with the engineer Joseph Clement",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-10",
+    "question": "Kdy bylo v Londýně dokončeno sestavení diferenčního stroje č. 2?",
+    "answer": "In 1991 the Science Museum in London completed a Difference Engine No. 2",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-11",
+    "question": "Jak paměť analytického stroje uchovávala čísla?",
+    "answer": "The store held numbers on columns of wheels",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-12",
+    "question": "Jakou kapacitu paměti Babbage plánoval pro analytický stroj?",
+    "answer": "about one thousand numbers of fifty digits each",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-13",
+    "question": "Co dělala početní jednotka, takzvaný mlýn, analytického stroje?",
+    "answer": "The mill performed arithmetic operations on numbers brought from the store",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-14",
+    "question": "Co určovaly operační štítky analytického stroje?",
+    "answer": "operation cards specified what the mill should do",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-15",
+    "question": "Co udělalo z analytického stroje univerzální stroj?",
+    "answer": "This conditional branching, together with the ability to repeat a sequence of operations",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-16",
+    "question": "Čí dcerou byla Ada Lovelace?",
+    "answer": "Ada Lovelace, a mathematician and the daughter of the poet Lord Byron",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-17",
+    "question": "Jak dlouhé byly poznámky Ady Lovelace ve srovnání s článkem, který přeložila?",
+    "answer": "about three times longer than the original text",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-18",
+    "question": "Jaká čísla podle poznámky G uměl stroj vypočítat?",
+    "answer": "how the engine could compute the Bernoulli numbers",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-19",
+    "question": "Co podle Ady Lovelace mohl stroj komponovat?",
+    "answer": "She suggested that it might compose elaborate pieces of music",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-20",
+    "question": "Kdo sestrojil funkční diferenční stroj v roce 1853?",
+    "answer": "Georg and Edvard Scheutz built a working difference engine in 1853",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-21",
+    "question": "Pro které sčítání lidu sestrojil Hollerith tabelační stroje?",
+    "answer": "For the 1890 United States census he built electric tabulating machines",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-22",
+    "question": "Kdy byla firma, jejíž součástí se stala Hollerithova společnost, přejmenována na IBM?",
+    "answer": "renamed International Business Machines (IBM) in 1924",
+    "source": "mechanical-computing/analytical_engine.md"
+   },
+   {
+    "id": "cs-23",
+    "question": "Kdy Turing publikoval svůj článek o vyčíslitelných číslech?",
+    "answer": "In 1936 the British mathematician Alan Turing published a paper on computable numbers",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-24",
+    "question": "Co podle Turinga dokázal univerzální stroj?",
+    "answer": "a single universal machine could imitate any other such machine",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-25",
+    "question": "Co podle Churchovy-Turingovy teze tyto modely zachycují?",
+    "answer": "everything that can be computed mechanically",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-26",
+    "question": "Proč první elektronické počítače používaly elektronky?",
+    "answer": "tubes could change state thousands of times faster than the relays",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-27",
+    "question": "Jak stroj Atanasoffa a Berryho ukládal mezivýsledky?",
+    "answer": "It computed in binary and stored intermediate values on rotating drums of capacitors",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-28",
+    "question": "K čemu byl navržen počítač Colossus?",
+    "answer": "to help break the Lorenz cipher used by the German high command",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-29",
+    "question": "Kdy byl první Colossus uveden do provozu?",
+    "answer": "The first Colossus was operational at Bletchley Park in early 1944",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-30",
+    "question": "K výpočtu čeho byl ENIAC navržen?",
+    "answer": "It was designed to calculate artillery firing tables for the United States Army",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-31",
+    "question": "Kolik elektronek obsahoval ENIAC?",
+    "answer": "The machine contained about 17,468 vacuum tubes",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-32",
+    "question": "Kolik sčítání za sekundu zvládl ENIAC?",
+    "answer": "performing about five thousand additions per second",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-33",
+    "question": "Jak se ENIAC přeprogramovával na nový problém?",
+    "answer": "operators had to reconnect cables on plugboards and set thousands of switches",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-34",
+    "question": "Jakou zprávu napsal von Neumann v červnu 1945?",
+    "answer": "wrote the First Draft of a Report",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-35",
+    "question": "Jaká je klíčová myšlenka stroje popsaného ve zprávě o EDVAC?",
+    "answer": "whose instructions were held in the same memory as the data",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-36",
+    "question": "Z jakých částí se skládala organizace počítače popsaná ve zprávě o EDVAC?",
+    "answer": "a central arithmetic unit, a control unit, a memory, and input and output devices",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-37",
+    "question": "Co počítal první program počítače Manchester Baby?",
+    "answer": "On 21 June 1948 it ran a program that found the highest proper factor of a number",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-38",
+    "question": "Jak se nazývalo paměťové zařízení počítače Manchester Baby?",
+    "answer": "a device known as the Williams tube",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-39",
+    "question": "Kdy EDSAC spustil svůj první program?",
+    "answer": "It ran its first program in May 1949",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-40",
+    "question": "Jak se jmenoval jednoduchý assembler počítače EDSAC?",
+    "answer": "a simple assembler called initial orders",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-41",
+    "question": "Kdo v roce 1947 předvedl hrotový tranzistor?",
+    "answer": "In December 1947 John Bardeen and Walter Brattain",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-42",
+    "question": "Kdo sestrojil první integrovaný obvod?",
+    "answer": "In 1958 Jack Kilby at Texas Instruments built the first integrated circuit",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-43",
+    "question": "Jak se nazývá pozorování Gordona Moora o integrovaných obvodech?",
+    "answer": "an observation that became known as Moore's law",
+    "source": "electronic-computing/stored_program.pdf"
+   },
+   {
+    "id": "cs-44",
+    "question": "Jaký způsob programování je v tabulce raných počítačů uveden u EDSAC?",
+    "answer": "Stored program with subroutines",
+    "source": "electronic-computing/stored_program.pdf"
+   }
+  ]
+ }
+}

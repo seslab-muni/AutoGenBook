@@ -1,0 +1,39 @@
+{
+ "slides": [
+  {
+   "index": 1,
+   "narration": "Fake narration for slide 1, From Calculating Machines to Stored Programs. It explains the points in plain spoken words for the audience.",
+   "title": "From Calculating Machines to Stored Programs"
+  },
+  {
+   "index": 2,
+   "narration": "Fake narration for slide 2, Motivation. It explains the points in plain spoken words for the audience.",
+   "title": "Motivation"
+  },
+  {
+   "index": 3,
+   "narration": "Fake narration for slide 3, Mechanical engines. It explains the points in plain spoken words for the audience.",
+   "title": "Mechanical engines"
+  },
+  {
+   "index": 4,
+   "narration": "Fake narration for slide 4, Programs on cards, part 1. It explains the points in plain spoken words for the audience.",
+   "title": "Programs on cards, part 1"
+  },
+  {
+   "index": 5,
+   "narration": "Fake narration for slide 5, Programs on cards, part 2. It explains the points in plain spoken words for the audience.",
+   "title": "Programs on cards, part 2"
+  },
+  {
+   "index": 6,
+   "narration": "Fake narration for slide 6, Stored programs. It explains the points in plain spoken words for the audience.",
+   "title": "Stored programs"
+  },
+  {
+   "index": 7,
+   "narration": "Fake narration for slide 7, Take-aways. It explains the points in plain spoken words for the audience.",
+   "title": "Take-aways"
+  }
+ ]
+}

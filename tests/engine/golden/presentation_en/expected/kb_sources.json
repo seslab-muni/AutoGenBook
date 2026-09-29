@@ -1,0 +1,535 @@
+{
+ "chunks": [
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1",
+   "excerpt": "AutoGenBook benchmark corpus",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors"
+   ],
+   "loc": "page 1, chunk 1",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_2",
+   "excerpt": "In 1936 the British mathematician Alan Turing published a paper on computable",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "A theory of computation"
+   ],
+   "loc": "page 1, chunk 2",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:2",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_3",
+   "excerpt": "The first electronic digital devices used vacuum tubes as switches, because tubes",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "Electronic machines of the war years"
+   ],
+   "loc": "page 1, chunk 3",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:3",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_4",
+   "excerpt": "ENIAC, the Electronic Numerical Integrator and Computer, was built at the University",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "ENIAC"
+   ],
+   "loc": "page 1, chunk 4",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:4",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_5",
+   "excerpt": "Even before ENIAC was finished, its designers planned a successor that would",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "The EDVAC report and the stored-program concept"
+   ],
+   "loc": "page 1, chunk 5",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:5",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_1",
+   "excerpt": "The first machine to run a program stored in its electronic memory",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "The first stored programs"
+   ],
+   "loc": "page 2, chunk 1",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_2",
+   "excerpt": "Machine Year Switching technology Programming method Colossus 1944 Vacuum tubes Switches and",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "The first stored programs"
+   ],
+   "loc": "page 2, chunk 2",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:2",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3",
+   "excerpt": "Table 1: Early electronic computers",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "The first stored programs"
+   ],
+   "loc": "page 2, chunk 3",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:3",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_4",
+   "excerpt": "Vacuum tubes were bulky, consumed a lot of power and failed often.",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "From vacuum tubes to transistors"
+   ],
+   "loc": "page 2, chunk 4",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:4",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1",
+   "excerpt": "The stored-program concept turned the computer from a configurable calculator into a",
+   "heading_path": [
+    "stored program",
+    "The Stored-Program Computer: From Theory to Transistors",
+    "Why the stored program mattered"
+   ],
+   "loc": "page 3, chunk 1",
+   "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_3:1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1",
+   "excerpt": "Written for the AutoGenBook benchmark. Original text, released under the repository's Apache",
+   "heading_path": [
+    "analytical engine",
+    "From Calculating Machines to the Analytical Engine"
+   ],
+   "loc": "chunk 1",
+   "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:1",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_2",
+   "excerpt": "The desire to mechanise arithmetic is old. In 1642 the French mathematician",
+   "heading_path": [
+    "analytical engine",
+    "From Calculating Machines to the Analytical Engine",
+    "Early calculating machines"
+   ],
+   "loc": "chunk 2",
+   "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:2",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_3",
+   "excerpt": "A second line of development came from the textile industry. In 1804",
+   "heading_path": [
+    "analytical engine",
+    "From Calculating Machines to the Analytical Engine",
+    "Punched cards and the Jacquard loom"
+   ],
+   "loc": "chunk 3",
+   "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:3",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_4",
+   "excerpt": "In the early nineteenth century navigation, engineering and finance depended on printed",
+   "heading_path": [
+    "analytical engine",
+    "From Calculating Machines to the Analytical Engine",
+    "Babbage and the Difference Engine"
+   ],
+   "loc": "chunk 4",
+   "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:4",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_5",
+   "excerpt": "While working on the Difference Engine, Babbage conceived a far more general",
+   "heading_path": [
+    "analytical engine",
+    "From Calculating Machines to the Analytical Engine",
+    "The Analytical Engine"
+   ],
+   "loc": "chunk 5",
+   "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:5",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_6",
+   "excerpt": "In 1842 the Italian engineer Luigi Menabrea published a description of the",
+   "heading_path": [
+    "analytical engine",
+    "From Calculating Machines to the Analytical Engine",
+    "Ada Lovelace and the first published program"
+   ],
+   "loc": "chunk 6",
+   "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:6",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  {
+   "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7",
+   "excerpt": "Babbage's ideas had little direct influence on the builders of the first",
+   "heading_path": [
+    "analytical engine",
+    "From Calculating Machines to the Analytical Engine",
+    "The legacy of mechanical computing"
+   ],
+   "loc": "chunk 7",
+   "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:7",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  }
+ ],
+ "cite_keys": {
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1": {
+   "excerpt": "AutoGenBook benchmark corpus",
+   "loc": "page 1, chunk 1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_2": {
+   "excerpt": "In 1936 the British mathematician Alan Turing published a paper on computable",
+   "loc": "page 1, chunk 2",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_3": {
+   "excerpt": "The first electronic digital devices used vacuum tubes as switches, because tubes",
+   "loc": "page 1, chunk 3",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_4": {
+   "excerpt": "ENIAC, the Electronic Numerical Integrator and Computer, was built at the University",
+   "loc": "page 1, chunk 4",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_5": {
+   "excerpt": "Even before ENIAC was finished, its designers planned a successor that would",
+   "loc": "page 1, chunk 5",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_1": {
+   "excerpt": "The first machine to run a program stored in its electronic memory",
+   "loc": "page 2, chunk 1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_2": {
+   "excerpt": "Machine Year Switching technology Programming method Colossus 1944 Vacuum tubes Switches and",
+   "loc": "page 2, chunk 2",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3": {
+   "excerpt": "Table 1: Early electronic computers",
+   "loc": "page 2, chunk 3",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_4": {
+   "excerpt": "Vacuum tubes were bulky, consumed a lot of power and failed often.",
+   "loc": "page 2, chunk 4",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1": {
+   "excerpt": "The stored-program concept turned the computer from a configurable calculator into a",
+   "loc": "page 3, chunk 1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1": {
+   "excerpt": "Written for the AutoGenBook benchmark. Original text, released under the repository's Apache",
+   "loc": "chunk 1",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_2": {
+   "excerpt": "The desire to mechanise arithmetic is old. In 1642 the French mathematician",
+   "loc": "chunk 2",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_3": {
+   "excerpt": "A second line of development came from the textile industry. In 1804",
+   "loc": "chunk 3",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_4": {
+   "excerpt": "In the early nineteenth century navigation, engineering and finance depended on printed",
+   "loc": "chunk 4",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_5": {
+   "excerpt": "While working on the Difference Engine, Babbage conceived a far more general",
+   "loc": "chunk 5",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_6": {
+   "excerpt": "In 1842 the Italian engineer Luigi Menabrea published a description of the",
+   "loc": "chunk 6",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7": {
+   "excerpt": "Babbage's ideas had little direct influence on the builders of the first",
+   "loc": "chunk 7",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  }
+ },
+ "page_keys": {
+  "analytical_engine_<hash>_chunk_1": [
+   {
+    "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_1",
+    "excerpt": "Written for the AutoGenBook benchmark. Original text, released under the repository's Apache",
+    "loc": "chunk 1",
+    "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:1",
+    "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+   }
+  ],
+  "analytical_engine_<hash>_chunk_2": [
+   {
+    "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_2",
+    "excerpt": "The desire to mechanise arithmetic is old. In 1642 the French mathematician",
+    "loc": "chunk 2",
+    "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:2",
+    "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+   }
+  ],
+  "analytical_engine_<hash>_chunk_3": [
+   {
+    "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_3",
+    "excerpt": "A second line of development came from the textile industry. In 1804",
+    "loc": "chunk 3",
+    "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:3",
+    "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+   }
+  ],
+  "analytical_engine_<hash>_chunk_4": [
+   {
+    "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_4",
+    "excerpt": "In the early nineteenth century navigation, engineering and finance depended on printed",
+    "loc": "chunk 4",
+    "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:4",
+    "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+   }
+  ],
+  "analytical_engine_<hash>_chunk_5": [
+   {
+    "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_5",
+    "excerpt": "While working on the Difference Engine, Babbage conceived a far more general",
+    "loc": "chunk 5",
+    "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:5",
+    "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+   }
+  ],
+  "analytical_engine_<hash>_chunk_6": [
+   {
+    "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_6",
+    "excerpt": "In 1842 the Italian engineer Luigi Menabrea published a description of the",
+    "loc": "chunk 6",
+    "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:6",
+    "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+   }
+  ],
+  "analytical_engine_<hash>_chunk_7": [
+   {
+    "cite_key": "kb_mechanical_computing_analytical_engine_md_9d57f337_chunk_7",
+    "excerpt": "Babbage's ideas had little direct influence on the builders of the first",
+    "loc": "chunk 7",
+    "rid": "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:7",
+    "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+   }
+  ],
+  "stored_program_<hash>_page_1_chunk_1": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_1",
+    "excerpt": "AutoGenBook benchmark corpus",
+    "loc": "page 1, chunk 1",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:1",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_1_chunk_2": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_2",
+    "excerpt": "In 1936 the British mathematician Alan Turing published a paper on computable",
+    "loc": "page 1, chunk 2",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:2",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_1_chunk_3": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_3",
+    "excerpt": "The first electronic digital devices used vacuum tubes as switches, because tubes",
+    "loc": "page 1, chunk 3",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:3",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_1_chunk_4": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_4",
+    "excerpt": "ENIAC, the Electronic Numerical Integrator and Computer, was built at the University",
+    "loc": "page 1, chunk 4",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:4",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_1_chunk_5": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_1_5",
+    "excerpt": "Even before ENIAC was finished, its designers planned a successor that would",
+    "loc": "page 1, chunk 5",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:5",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_2_chunk_1": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_1",
+    "excerpt": "The first machine to run a program stored in its electronic memory",
+    "loc": "page 2, chunk 1",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:1",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_2_chunk_2": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_2",
+    "excerpt": "Machine Year Switching technology Programming method Colossus 1944 Vacuum tubes Switches and",
+    "loc": "page 2, chunk 2",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:2",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_2_chunk_3": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_3",
+    "excerpt": "Table 1: Early electronic computers",
+    "loc": "page 2, chunk 3",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:3",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_2_chunk_4": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_2_4",
+    "excerpt": "Vacuum tubes were bulky, consumed a lot of power and failed often.",
+    "loc": "page 2, chunk 4",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:4",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ],
+  "stored_program_<hash>_page_3_chunk_1": [
+   {
+    "cite_key": "kb_electronic_computing_stored_program_pdf_9dd3310c_page_3_1",
+    "excerpt": "The stored-program concept turned the computer from a configurable calculator into a",
+    "loc": "page 3, chunk 1",
+    "rid": "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_3:1",
+    "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+   }
+  ]
+ },
+ "rids": {
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:1": {
+   "excerpt": "AutoGenBook benchmark corpus",
+   "loc": "page 1, chunk 1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:2": {
+   "excerpt": "In 1936 the British mathematician Alan Turing published a paper on computable",
+   "loc": "page 1, chunk 2",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:3": {
+   "excerpt": "The first electronic digital devices used vacuum tubes as switches, because tubes",
+   "loc": "page 1, chunk 3",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:4": {
+   "excerpt": "ENIAC, the Electronic Numerical Integrator and Computer, was built at the University",
+   "loc": "page 1, chunk 4",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_1:5": {
+   "excerpt": "Even before ENIAC was finished, its designers planned a successor that would",
+   "loc": "page 1, chunk 5",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:1": {
+   "excerpt": "The first machine to run a program stored in its electronic memory",
+   "loc": "page 2, chunk 1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:2": {
+   "excerpt": "Machine Year Switching technology Programming method Colossus 1944 Vacuum tubes Switches and",
+   "loc": "page 2, chunk 2",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:3": {
+   "excerpt": "Table 1: Early electronic computers",
+   "loc": "page 2, chunk 3",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_2:4": {
+   "excerpt": "Vacuum tubes were bulky, consumed a lot of power and failed often.",
+   "loc": "page 2, chunk 4",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:electronic_computing_stored_program_pdf_9dd3310c:page_3:1": {
+   "excerpt": "The stored-program concept turned the computer from a configurable calculator into a",
+   "loc": "page 3, chunk 1",
+   "source_path": "<work>/kb/electronic-computing/stored_program.pdf"
+  },
+  "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:1": {
+   "excerpt": "Written for the AutoGenBook benchmark. Original text, released under the repository's Apache",
+   "loc": "chunk 1",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:2": {
+   "excerpt": "The desire to mechanise arithmetic is old. In 1642 the French mathematician",
+   "loc": "chunk 2",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:3": {
+   "excerpt": "A second line of development came from the textile industry. In 1804",
+   "loc": "chunk 3",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:4": {
+   "excerpt": "In the early nineteenth century navigation, engineering and finance depended on printed",
+   "loc": "chunk 4",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:5": {
+   "excerpt": "While working on the Difference Engine, Babbage conceived a far more general",
+   "loc": "chunk 5",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:6": {
+   "excerpt": "In 1842 the Italian engineer Luigi Menabrea published a description of the",
+   "loc": "chunk 6",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  },
+  "RID:kb:mechanical_computing_analytical_engine_md_9d57f337:chunk:7": {
+   "excerpt": "Babbage's ideas had little direct influence on the builders of the first",
+   "loc": "chunk 7",
+   "source_path": "<work>/kb/mechanical-computing/analytical_engine.md"
+  }
+ }
+}

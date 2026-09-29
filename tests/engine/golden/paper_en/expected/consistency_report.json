@@ -1,0 +1,31 @@
+{
+ "findings": [
+  {
+   "description": "Sections 1 and 2 both introduce the approach.",
+   "node_keys": [
+    "1",
+    "2"
+   ],
+   "required_fix": "Keep the introduction in 1 and refer back to it in 2.",
+   "severity": "minor",
+   "type": "duplicated_coverage"
+  },
+  {
+   "description": "Section 6 uses a synonym instead of the glossary term.",
+   "node_keys": [
+    "6"
+   ],
+   "required_fix": "Use 'fake term'.",
+   "severity": "minor",
+   "type": "terminology"
+  }
+ ],
+ "patch_instructions": {
+  "1": "Refer back to the earlier introduction instead of repeating it.",
+  "2": "Refer back to the earlier introduction instead of repeating it."
+ },
+ "patched": [
+  "1",
+  "2"
+ ]
+}

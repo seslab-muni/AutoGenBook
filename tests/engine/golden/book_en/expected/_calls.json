@@ -1,0 +1,12 @@
+{
+ "book.consistency": 1,
+ "book.glossary": 1,
+ "book.outline": 1,
+ "book.reviewer": 16,
+ "book.reviser": 6,
+ "book.subdivide": 6,
+ "book.writer": 12,
+ "embed.documents": 2,
+ "embed.query": 29,
+ "rerank": 24
+}
