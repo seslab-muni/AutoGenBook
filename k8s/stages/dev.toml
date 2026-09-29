@@ -1,0 +1,21 @@
+# Dev (beta) stage: any commit can be deployed here and tried out before it is promoted to prod.
+#
+#   python scripts/deploy.py --stage dev --bootstrap --apply   # first time: storage, db, ...
+#   python scripts/deploy.py --stage dev --apply               # deploy the checked-out commit
+#
+# It runs the base manifests in k8s/ with the differences below, in its own namespace with its
+# own database, object storage, volumes and secrets. See docs/DEPLOY_GUIDE.md section 18.
+
+namespace = "autogenbook-dev"
+host = "seslab-autogenbook-dev.dyn.cloud.e-infra.cz"
+env_file = ".env.dev"   # source of `--sync-secrets` (gitignored)
+
+# Deployment replica counts that differ from the base manifests.
+[replicas]
+worker = 2
+
+# Additions to / overrides of k8s/configmap.yaml's `data` for this stage. Applied by
+# `--bootstrap` (which also restarts api/worker when the effective config changed).
+[config]
+# The rewritten engine (epic #158). deploy.py refuses to deploy a commit that has no such file.
+CLI_ENTRYPOINT = "run_engine.py"

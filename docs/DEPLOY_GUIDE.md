@@ -198,10 +198,10 @@ kubectl create secret generic autogenbook-secrets \
 
 **Rotating any of these later**: put the same keys in a `.env.production` file at the repo root
 (plain `KEY=VALUE` lines - gitignored by `/.env*` in `.gitignore`, and `scripts/deploy.py`
-refuses to read it if it somehow isn't) and run `python scripts/deploy.py --sync-secrets` to see
-which keys would change, or add `--apply` to actually write them - it's idempotent, unlike the
-`create` command above, and never prints any secret value, only which keys are new/changed/
-unchanged.
+refuses to read it if it somehow isn't) and run `python scripts/deploy.py --stage prod --sync-secrets`
+to see which keys would change, or add `--apply` to actually write them - it's idempotent, unlike
+the `create` command above, and never prints any secret value, only which keys are new/changed/
+unchanged. The dev stage reads `.env.dev` instead (section 18).
 
 ## 5. Storage
 
@@ -810,6 +810,9 @@ matching `docker-compose.yml`'s `frontend`/`backend` network split (`web`↔`api
 
 ## 14. Deploy order
 
+`python scripts/deploy.py --stage <stage> --bootstrap --apply` does all of this, in this order,
+for a stage (section 18) - the commands below are what it runs, for reference.
+
 ```bash
 kubectl apply -f k8s/configmap.yaml
 kubectl create secret generic autogenbook-secrets --from-literal=...   # from step 4, if not already applied
@@ -847,16 +850,23 @@ file), tags images by git commit SHA instead of a hand-picked version number, an
 rolls every Deployment it touched back to its previous state if any rollout fails - so the
 cluster never ends up with an api/web pair that were never meant to run together.
 
+Every run targets one stage (section 18): normally a commit goes to `--stage dev` first and
+reaches prod by promotion (`--stage prod --promote`), not by a build of its own.
+
 ```bash
 # Show what would be deployed, without touching anything (the default - always safe to run):
-python scripts/deploy.py
+python scripts/deploy.py --stage dev
 
 # Actually build/push/apply it, with a confirmation prompt:
-python scripts/deploy.py --apply
+python scripts/deploy.py --stage dev --apply
 
-# Sync .env.production's values into the autogenbook-secrets Secret (see step 4) - also
+# Roll out on prod exactly what dev runs (no rebuild) - plan first, then for real:
+python scripts/deploy.py --stage prod --promote
+python scripts/deploy.py --stage prod --promote --apply
+
+# Sync .env.production's values into prod's autogenbook-secrets Secret (see step 4) - also
 # dry-run by default, and never prints secret values:
-python scripts/deploy.py --sync-secrets --apply
+python scripts/deploy.py --stage prod --sync-secrets --apply
 ```
 
 Run `python scripts/deploy.py --help` for every flag (`--force {core,web,all}` to rebuild
@@ -920,3 +930,102 @@ the frontend changes.
   `seslab-autogenbook.dyn.cloud.e-infra.cz` / `1.0.0`) and committed as real files under `k8s/` —
   `kubectl apply -f k8s/<file>.yaml` per the deploy order in step 14, `k8s/ingress.yaml`
   included (see its header comment for why it's safe to apply as-is).
+
+## 18. Stages: dev (beta) and prod
+
+There are two complete, independent copies of the stack, one per namespace: **prod**
+(`autogenbook`, https://seslab-autogenbook.dyn.cloud.e-infra.cz), what users use, and **dev**
+(`autogenbook-dev`, https://seslab-autogenbook-dev.dyn.cloud.e-infra.cz), where a new version is
+tried out first. Each has its own Postgres, MinIO bucket, volumes, Secret, Ingress and user
+accounts, so nothing done on dev can touch prod's data. They have to be separate namespaces rather
+than differently named objects in one: every manifest, NetworkPolicy and in-cluster host name
+(`db`, `minio`, `api`) is written against "the stack in this namespace".
+
+### Releases and promotion
+
+What is shared is the images: both stages pull the same `autogenbook:<sha>` / `autogenbook-web:<sha>`
+tags from Harbor. A **release** is the vector {core image tag, web image tag, the commit they and
+the manifests come from}; after every successful apply `deploy.py` records that commit on the
+stage's Deployments as the `autogenbook.io/release-commit` annotation. Releases move forward like
+this:
+
+1. **Try a branch on dev** - any commit, from any branch: `deploy.py --stage dev --apply` builds
+   whatever changed since dev's release and rolls it out. Dev's manifests are rendered into temp
+   files, so this never leaves anything to commit.
+2. **Merge, then deploy `main` to dev.** PRs are squash-merged, so the commits dev ran never become
+   part of `main`: once the PR is in, `deploy.py --stage dev --apply` from an up-to-date `main`
+   makes dev run the release candidate itself. An image is only rebuilt if its sources on `main`
+   differ from what dev runs - often neither does, and then the very images you tried are what
+   gets promoted. Check it on the dev URL.
+3. **Promote to prod** from that same checkout of `main`:
+   `deploy.py --stage prod --promote` shows the plan, `--apply` carries it out. Nothing is built:
+   prod gets dev's image tags. The script then asks you to commit the retagged `k8s/*.yaml`
+   ("Promote dev release <sha> to prod") and push - k8s/ keeps recording what prod runs, as before.
+
+A promotion is refused unless:
+
+- dev is healthy: api, worker and web completely rolled out, every replica available, and api and
+  worker on the same image;
+- dev's images match its release commit (dev's last deploy finished - a rollout that was slow
+  finishes by re-running the same `--stage dev --apply`, which then records the release);
+- the release commit is on the checked-out branch - prod only gets releases that are part of
+  `main` (merge first, then promote), even though dev can run a feature branch;
+- the release contains the commits prod runs now, so a promotion can never take prod backwards,
+  e.g. past a fix deployed straight to prod;
+- `k8s/api.yaml`, `k8s/worker.yaml` and `k8s/web.yaml` on disk, which is what gets applied, are
+  the release's own (image tags aside) - otherwise deploy HEAD to dev first, so it is tested
+  with them.
+
+The rollback, slow-rollout and migration rules of section 16 apply to a promotion unchanged; the
+Alembic migrations it counts are those between prod's core image and dev's.
+
+`deploy.py --stage prod --apply` still builds HEAD straight into prod, for emergencies. Deploy a
+commit containing that fix to dev afterwards - the "never backwards" rule refuses the next
+promotion until dev has it.
+
+### Stage files
+
+`k8s/stages/<stage>.toml` holds everything that differs between the stages; the manifests in
+`k8s/` are shared.
+
+| key | meaning |
+| --- | --- |
+| `namespace` | the stage's namespace |
+| `host` | its Ingress host; the TLS Secret is named after it (`<host with dots as dashes>-tls`) |
+| `env_file` | the gitignored file `--sync-secrets` reads (`.env.production`, `.env.dev`) |
+| `base = true` | prod only: `k8s/*.yaml` are its manifests exactly as they are, and deploys write image tags into them |
+| `promote_from` | the stage `--promote` takes its release from (prod: `dev`) |
+| `[replicas]` | replica counts that differ from `k8s/<name>.yaml` (dev: 2 workers instead of 5) |
+| `[config]` | ConfigMap entries added to or overriding `k8s/configmap.yaml` (dev: `CLI_ENTRYPOINT = "run_engine.py"`, the rewritten engine) |
+
+`[config]` and `k8s/configmap.yaml` reach a stage with `--bootstrap`, which applies the
+ConfigMap and restarts api and worker if it changed; a plain deploy only notes that the live
+ConfigMap differs. A promotion moves images, not config - its plan says when dev's config
+differs from prod's. `deploy.py` also refuses any deploy or promotion whose core image would not
+contain the stage's `CLI_ENTRYPOINT`, so dev can only run commits that have `run_engine.py`
+(the engine rewrite branch, until it is merged). When that engine is promoted to prod for good,
+move `CLI_ENTRYPOINT: "run_engine.py"` into `k8s/configmap.yaml`, delete it from `dev.toml`, and
+run `deploy.py --stage prod --bootstrap --apply`.
+
+Resources: with dev's two workers the dev stack is 7.5 CPU / 12.25 GiB at its limits, peaking at
+8.5 CPU / 14.25 GiB while api rolls out (`maxSurge`); prod with five workers is 13.5 CPU /
+24.25 GiB, peaking at 14.5 CPU / 26.25 GiB. Size each namespace's ResourceQuota for its own
+stage.
+
+### Setting up dev (once)
+
+1. Create `.env.dev` at the repo root with the same keys as `.env.production` (step 4) but dev's
+   own values: a new `POSTGRES_PASSWORD`, `S3_SECRET_KEY` and `AUTH_JWT_SECRET`, and a
+   `DATABASE_URL` using that password (the host stays `db` - it resolves inside dev's own
+   namespace). The API keys may be shared with prod or separate.
+2. `python scripts/deploy.py --stage dev --sync-secrets --apply` creates dev's Secret.
+3. Check out a commit that has `run_engine.py`, then run
+   `python scripts/deploy.py --stage dev --bootstrap` to review the plan, and the same with
+   `--apply` to carry it out. It applies the ConfigMap, volumes, Postgres and MinIO, creates the
+   bucket, builds and rolls out api/worker/web, and then applies the network policies and the
+   Ingress (the certificate takes a minute to issue).
+4. Create an account, since dev has its own database:
+   `kubectl exec -n autogenbook-dev deploy/api -- python -m api.scripts.users create --email you@example.com --name "Your Name"`.
+
+Dev's database is forward-only like prod's (section 16): after deploying a branch that adds an
+Alembic migration, dev can't go back to a commit without it; deploy a commit that contains it.

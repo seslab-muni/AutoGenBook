@@ -1,0 +1,23 @@
+# Production stage: the setup that has always been deployed - the base manifests in k8s/ as they
+# are. Releases reach it by promotion from dev, which deploys the exact images dev ran, without a
+# rebuild:
+#
+#   python scripts/deploy.py --stage prod --promote            # show the plan
+#   python scripts/deploy.py --stage prod --promote --apply    # promote
+#
+# `--stage prod --apply` (build HEAD straight into prod) still works for emergencies.
+# See docs/DEPLOY_GUIDE.md section 18.
+
+namespace = "autogenbook"
+host = "seslab-autogenbook.dyn.cloud.e-infra.cz"
+env_file = ".env.production"   # source of `--sync-secrets` (gitignored)
+promote_from = "dev"
+
+# k8s/*.yaml are prod's manifests exactly as they are: deploys and promotions write the new image
+# tags into them, to be committed, and prod can't have a [replicas] table - change
+# k8s/<name>.yaml itself instead (every stage inherits it; dev overrides what it needs).
+base = true
+
+# Additions to / overrides of k8s/configmap.yaml's `data` for this stage. Applied by
+# `--bootstrap` (which also restarts api/worker when the effective config changed).
+[config]
