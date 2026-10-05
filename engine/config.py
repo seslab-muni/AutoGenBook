@@ -20,6 +20,7 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "openai/gpt-5-mini"
 DEFAULT_EMBED_MODEL = "qwen3-embedding-4b"
 DEFAULT_RERANK_MODEL = "qwen3-reranker-4b"
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 DEFAULT_TTS_MODEL = "openai/gpt-4o-mini-tts-2025-12-15"
 DEFAULT_CONCURRENCY = 4
 MODES = ("book", "paper", "presentation")
@@ -96,6 +97,10 @@ class LLMSettings:
     pricing_timeout_s: float = 30.0
     pricing_cache_path: Path | None = None
     temperature: float = 0.3
+    # OpenAI-style `reasoning_effort` sent with every chat request when set
+    # (gpt-oss-120b on e-INFRA spends ~1500 hidden reasoning tokens per call
+    # at its default effort). None = not sent; the model's default applies.
+    reasoning_effort: str | None = None
 
     @property
     def is_openrouter(self) -> bool:
@@ -218,6 +223,9 @@ class RunConfig:
         )
         model = _env_str(env, "AUTOGENBOOK_LLM_MODEL", DEFAULT_MODEL)
         mini = _env_str(env, "AUTOGENBOOK_LLM_MINI_MODEL", model)
+        reasoning_effort = _env_str(env, "AUTOGENBOOK_LLM_REASONING_EFFORT").lower() or None
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise ConfigError(f"AUTOGENBOOK_LLM_REASONING_EFFORT must be one of {', '.join(REASONING_EFFORTS)}")
         cache_dir_raw = _env_str(env, "AUTOGENBOOK_KB_EXTRACT_CACHE_DIR")
         extract_cache_dir = Path(cache_dir_raw).expanduser().resolve() if cache_dir_raw else None
         pricing_cache = _env_str(env, "AUTOGENBOOK_PRICING_CACHE")
@@ -240,6 +248,7 @@ class RunConfig:
             pricing_disabled=_env_bool(env, "OPENROUTER_PRICING_DISABLE", False),
             pricing_timeout_s=_env_float(env, "OPENROUTER_PRICING_TIMEOUT", 30.0),
             pricing_cache_path=pricing_cache_path,
+            reasoning_effort=reasoning_effort,
         )
 
         kb_dir = Path(args.kb_dir).expanduser().resolve() if args.kb_dir else None

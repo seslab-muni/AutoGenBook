@@ -239,6 +239,11 @@ gone.
   level is probed once per run and model and cached, so e-INFRA models that lack schema support do
   not pay a failed request per call. A single repair call is the last resort, and it is itemised in
   the usage ledger like any other call.
+- Reasoning effort: `AUTOGENBOOK_LLM_REASONING_EFFORT` (`none`, `minimal`, `low`, `medium`, `high`,
+  `xhigh`; unset by default) is sent as the OpenAI `reasoning_effort` field with every chat
+  request. A model that rejects the field has it dropped for the rest of the run. On e-INFRA,
+  gpt-oss-120b reasons by default (about 1,500 hidden tokens per call, reported in
+  `reasoning_content` and not counted as reasoning tokens); `low` is the recommended setting.
 - Cost: provider-reported cost when present; OpenRouter list prices only when the base URL is
   OpenRouter; otherwise cost is reported as unknown (null), never as a made-up number.
 - Retries: transient errors only, exponential backoff with jitter, honouring `Retry-After`.
@@ -515,7 +520,9 @@ Both engines see the same environment. Set the endpoint as in A.3, then:
 
 ```bash
 export AUTOGENBOOK_LLM_MODEL=...          # chat model id on the endpoint (same for both engines)
-export AUTOGENBOOK_LLM_MINI_MODEL=...     # smaller model for reference formatting and the judge
+export AUTOGENBOOK_LLM_MINI_MODEL=...     # smaller model for reference formatting and the fallback reranker
+export AUTOGENBOOK_LLM_REASONING_EFFORT=low   # optional; sent by the new engine only
+export AUTOGENBOOK_JUDGE_MODEL=...        # judge model (or --judge-model); use another family than the writer
 
 # Old (sequential) vs new at concurrency 1 and 4, with the blind pairwise judge (both orders)
 python scripts/bench_engines.py --compare --input input/bench/en_book --concurrency 1,4 --judge
@@ -574,5 +581,5 @@ These are places where section 3 and the current API code disagree or are silent
 - **Strict audit.** It exits 4 whenever it finds errors, including Markdown-only runs.
 - **PDF output.** A PDF produced by a nonstop LuaLaTeX run with errors is kept, and the errors are reported as `[WARN]`. Failing explicitly requested LaTeX (`--export-tex`, `--presentation-tex`) fails the run; a paper's default `.tex` failing under `--no-pdf` is only a warning.
 - **`kb_sources.json` `page_keys`.** These stay path-dependent, as in the old engine.
-- **Engine-only settings.** `AUTOGENBOOK_CONCURRENCY`, `AUTOGENBOOK_EMBED_*`, `AUTOGENBOOK_RERANK_*`, `AUTOGENBOOK_DENSE` and `AUTOGENBOOK_TTS_*` are not on the API's environment allow-list. Under the web stack the engine uses its defaults: concurrency 4, and embeddings and reranking on the LLM base URL with the e-INFRA model names.
+- **Engine-only settings.** `AUTOGENBOOK_CONCURRENCY`, `AUTOGENBOOK_LLM_REASONING_EFFORT`, `AUTOGENBOOK_EMBED_*`, `AUTOGENBOOK_RERANK_*`, `AUTOGENBOOK_DENSE` and `AUTOGENBOOK_TTS_*` are not on the API's environment allow-list. Under the web stack the engine uses its defaults: concurrency 4, no reasoning effort sent (the model's own default), and embeddings and reranking on the LLM base URL with the e-INFRA model names. Setting a reasoning effort for web runs needs `AUTOGENBOOK_LLM_REASONING_EFFORT` added to `ENV_ALLOWLIST` in `api/infrastructure/cli/book_command.py`, which is part of the switch (phase 5), not of this PR.
 - **Flags not ported.** `--presentation-video`, `--presentation-image-model`, `--no-image` and `--presentation-citations` (slide images and video) are rejected with exit 2. `--paper-input` is new, and `-i` still works for every mode.

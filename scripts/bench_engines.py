@@ -27,7 +27,11 @@ Usage (from the repo root; see docs/ENGINE_REWRITE.md appendix A):
 LLM settings come from the usual environment (`AUTOGENBOOK_LLM_BASE_URL`,
 `AUTOGENBOOK_LLM_API_KEY`/`OPENROUTER_API_KEY`, `AUTOGENBOOK_LLM_MODEL`,
 `AUTOGENBOOK_LLM_MINI_MODEL`); both engines see the same values. The judge
-uses `--judge-model` (default: the mini model).
+model is `--judge-model`, else `AUTOGENBOOK_JUDGE_MODEL`, else the mini model;
+pick a model from a different family than the one that wrote the texts.
+`AUTOGENBOOK_LLM_REASONING_EFFORT` is forwarded to the new engine only (the
+API's allow-list does not carry it and the old engine has no such setting);
+the report notes say so.
 
 Output: `report.md` + `report.json` under `--out` (default
 `output/bench/<timestamp>/`), plus every run's work dir and stdout log.
@@ -166,9 +170,10 @@ def run_one(
         if context_mode:
             argv += ["--context-mode", context_mode]
         # Engine-only knobs the API's allow-list would drop; forwarded so a bench
-        # run can select embedding/rerank models without touching the API.
+        # run can select embedding/rerank models and the reasoning effort
+        # without touching the API.
         for key, value in os.environ.items():
-            if key.startswith(("AUTOGENBOOK_EMBED", "AUTOGENBOOK_RERANK", "AUTOGENBOOK_DENSE")):
+            if key.startswith(("AUTOGENBOOK_EMBED", "AUTOGENBOOK_RERANK", "AUTOGENBOOK_DENSE", "AUTOGENBOOK_LLM_REASONING_EFFORT")):
                 env[key] = value
     argv += extra_args
     stage_counts: dict[str, int] = {}
@@ -423,6 +428,14 @@ JUDGE_SCHEMA = {
     "required": ["winner", "grounding", "coherence", "pedagogy", "adherence", "reason"],
 }
 
+def resolve_judge_model(flag: str | None, env: Any) -> str:
+    """`--judge-model`, then AUTOGENBOOK_JUDGE_MODEL, then the mini and the main model."""
+    for value in (flag, env.get("AUTOGENBOOK_JUDGE_MODEL"), env.get("AUTOGENBOOK_LLM_MINI_MODEL"), env.get("AUTOGENBOOK_LLM_MODEL")):
+        if value and value.strip():
+            return value.strip()
+    return "openai/gpt-5-mini"
+
+
 JUDGE_PROMPT = """You compare two versions of the same book section written by two different systems.
 Judge them blind on four criteria and pick an overall winner:
 - grounding: claims are supported by the cited sources, citations look real and specific;
@@ -643,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--format", choices=["markdown", "latex", "pdf"], default=None)
     parser.add_argument("--judge", action="store_true", help="blind pairwise judge (needs an old and a new run)")
     parser.add_argument("--judge-samples", type=int, default=12)
-    parser.add_argument("--judge-model", default=None)
+    parser.add_argument("--judge-model", default=None, help="judge model id (env AUTOGENBOOK_JUDGE_MODEL; default: the mini model)")
     parser.add_argument("--fake-llm", action="store_true", help="serve tests/engine/fake_llm.py for the new engine")
     parser.add_argument("--timeout", type=float, default=6 * 3600)
     parser.add_argument("--old-run", default=None, help="reuse an existing old-engine work dir instead of running it")
@@ -663,6 +676,9 @@ def main(argv: list[str] | None = None) -> int:
             notes.append("**Fake-LLM smoke numbers** (tests/engine/fake_llm.py): timings, tokens and quality are not real.")
         model = os.environ.get("AUTOGENBOOK_LLM_MODEL") or "openai/gpt-5-mini (default)"
         notes.append(f"model: `{model}`; base URL: `{os.environ.get('AUTOGENBOOK_LLM_BASE_URL') or 'OpenRouter (default)'}`")
+        effort = (os.environ.get("AUTOGENBOOK_LLM_REASONING_EFFORT") or "").strip()
+        if effort:
+            notes.append(f"reasoning effort: `{effort}` (sent by the new engine only; the old engine runs the model's default)")
         for engine in engines:
             if engine == "old" and args.old_run:
                 old_dir = Path(args.old_run)
@@ -689,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
                 old_runs = new_runs[:1]
                 notes.append("judge ran new-vs-new (smoke): no old run available")
             if old_runs and new_runs:
-                judge_model = args.judge_model or os.environ.get("AUTOGENBOOK_LLM_MINI_MODEL") or os.environ.get("AUTOGENBOOK_LLM_MODEL") or "openai/gpt-5-mini"
+                judge_model = resolve_judge_model(args.judge_model, os.environ)
                 judgement = judge(old_runs[0], new_runs[-1], samples=args.judge_samples, model=judge_model)
             else:
                 notes.append("judge skipped: needs one old and one new run")

@@ -43,6 +43,8 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "AUTOGENBOOK_LLM_MODEL",
         "AUTOGENBOOK_LLM_MINI_MODEL",
         "AUTOGENBOOK_FORCE_MINI_MODEL",
+        "AUTOGENBOOK_LLM_REASONING_EFFORT",
+        "AUTOGENBOOK_JUDGE_MODEL",
         "AUTOGENBOOK_CONCURRENCY",
         "AUTOGENBOOK_BOOK_AUTHOR",
         "AUTOGENBOOK_EMBED_MODEL",

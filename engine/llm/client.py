@@ -101,6 +101,7 @@ class LLMClient:
         self._probe_locks: dict[str, asyncio.Lock] = {}
         self._no_temperature: set[str] = set()
         self._no_stream_options: set[str] = set()
+        self._no_reasoning_effort: set[str] = set()
 
     # ------------------------------------------------------------ plumbing
     def _on_limit_change(self, old: int, new: int, reason: str) -> None:
@@ -231,8 +232,14 @@ class LLMClient:
                 kwargs["max_tokens"] = max_tokens
             if response_format:
                 kwargs["response_format"] = response_format
+            # extra_body rather than named arguments: independent of the SDK version.
+            extra_body: dict[str, Any] = {}
             if self.settings.is_openrouter:
-                kwargs["extra_body"] = {"usage": {"include": True}}
+                extra_body["usage"] = {"include": True}
+            if self.settings.reasoning_effort and model not in self._no_reasoning_effort:
+                extra_body["reasoning_effort"] = self.settings.reasoning_effort
+            if extra_body:
+                kwargs["extra_body"] = extra_body
             try:
                 if not stream:
                     completion = await self._call(
@@ -266,6 +273,13 @@ class LLMClient:
                 message = str(exc).lower()
                 if "temperature" in message and model not in self._no_temperature:
                     self._no_temperature.add(model)
+                    continue
+                if (
+                    ("reasoning_effort" in message or "reasoning effort" in message)
+                    and "reasoning_effort" in (kwargs.get("extra_body") or {})
+                ):
+                    # The model does not take it (e.g. a non-reasoning mini model): drop it for this model.
+                    self._no_reasoning_effort.add(model)
                     continue
                 if stream and "stream_options" in message and model not in self._no_stream_options:
                     self._no_stream_options.add(model)

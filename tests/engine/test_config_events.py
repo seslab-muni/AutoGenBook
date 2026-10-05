@@ -126,3 +126,11 @@ def test_stream_and_jsonl_sinks(tmp_path: Path) -> None:
     assert set(records[0]) == {"ts", "stage", "level", "node_key", "message", "payload"}
     assert len(records) == 2 and records[1]["level"] == "debug"
     assert memory.lines() == ["[GEN] Starting section 'A'"]
+
+
+def test_reasoning_effort_env(tmp_path: Path) -> None:
+    base = ["-i", "x", "-o", str(tmp_path)]
+    assert _cfg(base, {}).llm.reasoning_effort is None
+    assert _cfg(base, {"AUTOGENBOOK_LLM_REASONING_EFFORT": " Low "}).llm.reasoning_effort == "low"
+    with pytest.raises(ConfigError, match="AUTOGENBOOK_LLM_REASONING_EFFORT"):
+        _cfg(base, {"AUTOGENBOOK_LLM_REASONING_EFFORT": "tiny"})
