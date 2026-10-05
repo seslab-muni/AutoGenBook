@@ -19,3 +19,8 @@ worker = 2
 [config]
 # The rewritten engine (epic #158). deploy.py refuses to deploy a commit that has no such file.
 CLI_ENTRYPOINT = "run_engine.py"
+AUTOGENBOOK_LLM_BASE_URL = "https://llm.ai.e-infra.cz/v1/"
+AUTOGENBOOK_LLM_MODEL = "gpt-oss-120b"
+AUTOGENBOOK_LLM_MINI_MODEL = "gpt-oss-120b"
+AUTOGENBOOK_LLM_REASONING_EFFORT = "low"
+AUTOGENBOOK_CONCURRENCY = "2"
