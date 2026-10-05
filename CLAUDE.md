@@ -28,6 +28,12 @@ python -m autogenbook.smoke_prompts
 # Schema smoke tests
 python -m autogenbook.schemas.smoke
 
+# New engine (engine/, epic #158) test suite: fake LLM, no network. Tests marked `bench`
+# (benchmark harness, retrieval evals) are deselected unless --bench is given. Benchmarks
+# (--bench, scripts/bench_engines.py, scripts/bench_retrieval.py) are run locally only, never in CI.
+pytest tests/engine
+pytest tests/engine --bench -m bench
+
 # End-to-end smoke run (requires OPENROUTER_API_KEY unless AUTOGENBOOK_SMOKE_FAST=1)
 python -m autogenbook.smoke_test
 

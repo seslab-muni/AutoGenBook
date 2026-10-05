@@ -274,3 +274,33 @@ async def test_reasoning_is_never_the_answer(tmp_path: Path) -> None:
     text = await client.complete_text(MESSAGES, label="t")
     assert text.text == "" and text.finish_reason == "length"
     await client.aclose()
+
+
+async def test_reasoning_effort_is_sent_only_when_configured(tmp_path: Path) -> None:
+    fake = FakeLLM()
+    plain = _client(fake, tmp_path)
+    await plain.complete_text(MESSAGES, label="a")
+    assert "reasoning_effort" not in fake.calls[-1].body
+    await plain.aclose()
+    low = _client(fake, tmp_path, reasoning_effort="low")
+    await low.complete_text(MESSAGES, label="b")
+    await low.complete_text(MESSAGES, label="c", role="mini")
+    assert [c.body.get("reasoning_effort") for c in fake.calls[-2:]] == ["low", "low"]
+    await low.aclose()
+
+
+async def test_reasoning_effort_rejection_is_remembered_per_model(tmp_path: Path) -> None:
+    seen: list[tuple[str, bool]] = []
+
+    def reject(call):
+        has = "reasoning_effort" in call.body
+        seen.append((call.body["model"], has))
+        return has and call.body["model"] == "m-mini"
+
+    fake = FakeLLM(faults=[Fault(status=400, match=reject, times=None, message="Unknown parameter: 'reasoning_effort'")])
+    client = _client(fake, tmp_path, reasoning_effort="low")
+    await client.complete_text(MESSAGES, label="a", role="mini")
+    await client.complete_text(MESSAGES, label="b", role="mini")
+    await client.complete_text(MESSAGES, label="c")
+    assert seen == [("m-mini", True), ("m-mini", False), ("m-mini", False), ("m-main", True)]
+    await client.aclose()

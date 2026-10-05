@@ -16,6 +16,7 @@ __pycache__/
 .pytest_cache/
 api/coverage.xml
 .coverage
+.idea/
 
 # Static analysis (docs/STATIC_ANALYSIS.md)
 .scannerwork/

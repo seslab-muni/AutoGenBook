@@ -21,6 +21,35 @@ if str(REPO_ROOT) not in sys.path:
 from fake_llm import FakeLLM  # noqa: E402
 
 
+BENCH_HELP = "also run the tests marked `bench` (benchmark harness checks and retrieval evals; off by default)"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--bench", action="store_true", default=False, help=BENCH_HELP)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "bench: benchmark harness and evaluation tests. Deselected unless `--bench` is given "
+        "(`pytest tests/engine --bench -m bench` runs only them). Benchmarks are run locally, "
+        "by hand, when a change is to be measured; CI never runs them.",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """`bench` tests are measurement, not regression checks: without `--bench` they are
+    deselected so `pytest tests/engine` stays the quick, always-on suite."""
+    if config.getoption("--bench"):
+        return
+    kept, dropped = [], []
+    for item in items:
+        (dropped if item.get_closest_marker("bench") else kept).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept
+
+
 @pytest.fixture
 def repo_root() -> Path:
     return REPO_ROOT
@@ -43,6 +72,8 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "AUTOGENBOOK_LLM_MODEL",
         "AUTOGENBOOK_LLM_MINI_MODEL",
         "AUTOGENBOOK_FORCE_MINI_MODEL",
+        "AUTOGENBOOK_LLM_REASONING_EFFORT",
+        "AUTOGENBOOK_JUDGE_MODEL",
         "AUTOGENBOOK_CONCURRENCY",
         "AUTOGENBOOK_BOOK_AUTHOR",
         "AUTOGENBOOK_EMBED_MODEL",

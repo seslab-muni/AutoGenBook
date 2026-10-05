@@ -12,8 +12,8 @@ the PR description of #159 are superseded by this file.
 
 | Question | Answer | Evidence |
 |---|---|---|
-| Is the new engine faster? | Yes: 2.3x wall-clock on the English benchmark book at concurrency 4, with 25% fewer tokens, despite the endpoint throttling it for part of the run | section 6 |
-| Is it better? | Yes on this book: a blind pairwise judge preferred the new engine in 23 of 24 judgements (win rate 0.96, 95% CI 0.80 to 0.99); 82% of sections hit their length budget versus 12% | section 6 |
+| Is the new engine faster? | Yes: 1.6 to 2.3 times faster wall-clock on the English benchmark book at concurrency 4 over three runs, despite the endpoint throttling every run | section 6 |
+| Is it better? | Yes on this book: two blind pairwise judges from different model families preferred the new engine in 23 of 24 (gpt-oss-120b) and 24 of 24 (kimi-k3, on two further runs) judgements; sections are on average 9 to 18% over their length budget versus 94% | section 6 |
 | Is retrieval better? | Yes: hybrid BM25 + embeddings + reranker reaches recall@6 of 1.00 on all four question sets; the old KB is at 0.51 to 0.57 on the Czech-question sets | section 5 |
 | Is the rewrite complete? | No: phases 1 to 4, 6 and 7 of the plan are implemented and tested; phase 5 (parity on all inputs, concurrency sweep, cluster switch) is partly done by this measurement; phase 8 (delete the old engine) has not started | section 8 |
 
@@ -97,6 +97,22 @@ Generation speed measured with one 250-word prompt (`max_tokens` 800) per model,
 | glm-5.3 | 14.5 s | 469 | 87 | 32 |
 | gemma4 | 44.0 s | 413 | 0 | 9 |
 | deepseek-v4.1-flash | 58.1 s | 800 | 800 | 14 |
+
+Behaviour on an engine-style request (one Czech paragraph of about 120 words, `json_schema`
+response format, `max_tokens` 1,500 to 3,000), one request per model:
+
+| Model | json_schema result | Wall | Completion tokens | Notes |
+|---|---|---:|---:|---|
+| gpt-oss-120b, default effort | valid | 9.5 s | 1,802 | reasons about 1,500 tokens per call; the gateway returns them in `reasoning_content` and reports 0 reasoning tokens |
+| gpt-oss-120b, `reasoning_effort=low` | valid | 1.5 s | 261 | |
+| glm-5.3 | valid | 12.0 s | 350 | 16 reasoning tokens |
+| mistral-medium-3.5 | valid | 14.6 s | 244 | no reasoning |
+| kimi-k3 | valid | 38.0 s | 1,435 | 999 reasoning tokens; 12.9 s with `enable_thinking=false` |
+| gemma4 | valid | 17.9 s | 264 | |
+| command-a | valid | 33.2 s | 271 | |
+| qwen3.8-27b | valid only with `enable_thinking=false` (2.9 s, 318 tokens) | | | otherwise the whole budget goes to reasoning and the content is empty |
+| qwen3.5, qwen3.8-flash-next | empty content, `finish_reason=length` | | | unusable as served |
+| deepseek-v4.1-flash, deepseek-thinking | HTTP 500 from the vLLM backend | | | |
 
 This matters for any comparison: a first attempt at the engine benchmark on deepseek-v4.1-flash
 (a thinking model on this gateway, two thirds of every reply spent on reasoning) took 2 hours to
@@ -255,19 +271,81 @@ citations, not verified against the KB.
 New-engine win rate 0.958, 95% confidence interval 0.798 to 0.993. The switch bar in the plan
 is "not significantly below 0.5".
 
-### 6.4 Caveats
+### 6.4 Second judge, repeat run and reasoning effort
 
-- One book, one model, one run each. The Czech book, the paper and the presentation inputs are
+Two more runs of the new engine on the same input, both judged by kimi-k3 (a different model
+family than the writer) against the same old-engine run. Settings: `AUTOGENBOOK_JUDGE_MODEL=kimi-k3`
+and, for the last column, `AUTOGENBOOK_LLM_REASONING_EFFORT=low`. Reports:
+`output/bench/engines-en_book-run2-default-effort/` and `output/bench/engines-en_book-effort-low/`.
+
+| | old | new, default effort, run 1 | new, default effort, run 2 | new, effort `low` |
+|---|---:|---:|---:|---:|
+| wall clock | 928.6 s | 397.0 s | 589.2 s | 428.9 s |
+| leaf sections (own outline each run) | 17 | 11 | 14 | 12 |
+| LLM requests (chat, embeddings, rerank) | 92 | 140 | 223 | 205 |
+| chat requests | 92 | 56 | 87 | 89 |
+| prompt tokens | 263,863 | 215,084 | 340,986 | 307,483 |
+| completion tokens | 154,771 | 101,424 | 151,505 | 85,577 |
+| HTTP 429 | 0 | 2 | 4 | 4 |
+| sections within ±25% of the page budget | 2 of 17 | 9 of 11 | 10 of 14 | 2 of 12 |
+| typeset lines / budget, mean (min to max) | 1.94 (1.12 to 4.00) | 1.09 (0.73 to 1.40) | 1.18 (0.84 to 1.34) | 1.32 (0.81 to 1.65) |
+| mean absolute deviation from the budget | 0.938 | 0.167 | 0.221 | 0.355 |
+| citations, all resolving | 48 | 37 | 57 | 44 |
+| judge | | gpt-oss-120b | kimi-k3 | kimi-k3 |
+| judgements won by new / old / tie | | 23 / 1 / 0 | 24 / 0 / 0 | 24 / 0 / 0 |
+| grounding (new / old / tie) | | 20 / 3 / 1 | 22 / 0 / 2 | 19 / 2 / 3 |
+| coherence | | 23 / 1 / 0 | 24 / 0 / 0 | 24 / 0 / 0 |
+| pedagogy | | 22 / 2 / 0 | 22 / 2 / 0 | 24 / 0 / 0 |
+| adherence | | 24 / 0 / 0 | 23 / 0 / 1 | 24 / 0 / 0 |
+
+Mean completion tokens and latency per successful chat call:
+
+| Agent | default effort (run 1 / run 2) | effort `low` |
+|---|---:|---:|
+| outline | 2,504 / 2,739 tokens, 13.9 / 19.2 s | 1,329 tokens, 7.7 s |
+| glossary | 2,260 / 2,226 tokens, 12.8 / 15.7 s | 1,222 tokens, 7.2 s |
+| writer | 1,446 / 1,431 tokens, 11.8 / 12.6 s | 1,076 tokens, 7.8 s |
+| reviewer | 1,658 / 1,657 tokens, 13.7 / 16.2 s | 670 tokens, 5.4 s |
+| reviser | 2,078 / 1,835 tokens, 16.1 / 15.1 s | 1,318 tokens, 10.0 s |
+| length pass | 1,590 / 2,396 tokens, 14.3 / 22.3 s | 924 tokens, 6.7 s |
+| consistency | 2,541 / 3,542 tokens, 14.2 / 19.9 s | 1,086 tokens, 6.0 s |
+| number of length passes in the run | 6 / 8 | 23 |
+
+What this shows:
+
+- **The quality result holds with an independent judge.** kimi-k3 preferred the new engine in
+  all 48 judgements across two runs, so the first result was not self-preference of gpt-oss-120b.
+- **Run-to-run variance is large.** The two default-effort runs differ by 48% in wall clock
+  (397 s and 589 s) because each run writes its own outline (11 and 14 leaves), reviews trigger a
+  different number of revisions, and the endpoint throttles differently. A single run supports
+  "about 1.6 to 2.3 times faster than the old engine", not a precise factor.
+- **`reasoning_effort=low` halves the cost of each call** (latency and completion tokens both
+  drop by 25 to 60% depending on the agent; total completion tokens are the lowest of all runs).
+- **It does not shorten the run by itself, and it weakens length control.** The word count per
+  section is the same as at default effort (about 1.25 times 400 words per budgeted page in all
+  three runs), but the text is split into more and shorter paragraphs, so sections typeset to
+  1.32 times their budget instead of 1.09 to 1.18. Most sections land just outside the ±25% band,
+  which is why the in-budget count drops from 9 or 10 to 2. The engine reacts with 23 length
+  passes instead of 6 to 8, and those passes do not bring the sections back into the band. The
+  old engine is still far worse on the same measure (1.94).
+- **Follow-up worth doing**: a per-agent reasoning effort (low for writer, reviewer and reviser,
+  the model default for the length pass and the outline), or a length prompt that states the
+  budget in typeset lines. Either should keep the per-call saving without the extra passes.
+
+### 6.5 Caveats
+
+- One book and one writer model; one old-engine run and three new-engine runs. The Czech book, the paper and the presentation inputs are
   not yet compared with real models; each is roughly an hour on gpt-oss-120b.
-- The judge model is the model that wrote both texts. The comparison is blind and both orders
-  are scored, but self-preference bias is not excluded. A second judge model would settle it.
+- In the first run the judge model is the model that wrote both texts. The two later runs were
+  judged by kimi-k3 with the same outcome (section 6.4).
 - Because the outlines differ, the section title and summary shown to the judge are the new
   engine's. The adherence criterion (24 to 0) therefore favours the new engine by construction
   and should be quoted with that caveat; the other three criteria do not depend on the summary.
 - The judge does not see the sources, so "grounding" measures how well-supported the text looks,
   not factual accuracy against the KB. The deterministic citation checks (section 6.2) cover
   whether cited keys exist, not whether the claim matches the source.
-- The new engine was throttled during the run, so 2.3x is a floor for this endpoint at
+- The new engine was throttled in every run (2 to 4 HTTP 429 responses, each halving the
+  concurrency for a while), so the measured speed-up is a floor for this endpoint at
   concurrency 4. The plan's concurrency sweep (1, 2, 4, 8) has not been run with a real model.
 - The old engine's cost is an OpenRouter list price for a model the gateway serves for free; it
   is there to make old-engine numbers comparable with earlier OpenRouter runs, not a real charge.
@@ -276,7 +354,7 @@ is "not significantly below 0.5".
 
 | Suite | Result |
 |---|---|
-| `pytest tests/engine` | 226 passed, 12 skipped, 2 failed. Both failures (`test_contract_api_e2e.py::test_artifacts_are_classified_and_citations_imported`, `test_contract_run_kinds.py::test_export_generates_nothing`) need pandoc, which is not installed here; the PR's CI, with pandoc, reports 238 passed, 1 skipped |
+| `pytest tests/engine` | 230 passed, 12 skipped, 2 failed. Both failures (`test_contract_api_e2e.py::test_artifacts_are_classified_and_citations_imported`, `test_contract_run_kinds.py::test_export_generates_nothing`) need pandoc, which is not installed here; the PR's CI, with pandoc, reports 238 passed, 1 skipped |
 | Golden runs (book, paper, presentation at concurrency 1 and 4) | pass after re-recording for the reranker fix |
 | Old CLI `python -m unittest` | 123 OK (per the PR description; not re-run today) |
 | `pytest tests/api` | 471 passed, 2 skipped (per the PR description; not re-run today) |
@@ -300,21 +378,29 @@ Everything is on PR #159, unmerged; all milestone issues are open.
 ## 9. Reproducing the numbers
 
 ```bash
-# environment (.env already holds the e-INFRA base URL and key)
+# environment: .env holds the e-INFRA base URL and key, and since 27 September 2026
+#   AUTOGENBOOK_LLM_MODEL=gpt-oss-120b  AUTOGENBOOK_LLM_MINI_MODEL=gpt-oss-120b
+#   AUTOGENBOOK_LLM_REASONING_EFFORT=low  AUTOGENBOOK_JUDGE_MODEL=kimi-k3  (force-mini unset)
+# The runs in sections 5 and 6.1 to 6.3 predate that: no reasoning effort, judge gpt-oss-120b,
+# and deepseek-v4.1-flash as mini model for the listwise reranker row.
 set -a; . ./.env; set +a; unset OPENROUTER_API_KEY
-export AUTOGENBOOK_LLM_MINI_MODEL=deepseek-v4.1-flash   # the id in .env, deepseek-v4-flash, does not exist on the gateway
 
 # retrieval
 python scripts/bench_retrieval.py --retriever all --k 6
 python scripts/bench_retrieval.py --retriever hybrid-llmrerank --k 6
 
 # engine comparison (about 25 minutes on gpt-oss-120b for en_book)
-AUTOGENBOOK_LLM_MODEL=gpt-oss-120b AUTOGENBOOK_LLM_MINI_MODEL=gpt-oss-120b \
+AUTOGENBOOK_LLM_REASONING_EFFORT= AUTOGENBOOK_JUDGE_MODEL=gpt-oss-120b \
   python scripts/bench_engines.py --compare --input input/bench/en_book --concurrency 4 --judge
 
+# repeat the new engine only and judge against the stored old run (sections 6.4)
+AUTOGENBOOK_LLM_REASONING_EFFORT= python scripts/bench_engines.py --compare \
+  --old-run output/bench/engines-en_book/old --input input/bench/en_book --concurrency 4 --judge
+python scripts/bench_engines.py --compare \
+  --old-run output/bench/engines-en_book/old --input input/bench/en_book --concurrency 4 --judge
+
 # still to run for phase 5
-AUTOGENBOOK_LLM_MODEL=gpt-oss-120b AUTOGENBOOK_LLM_MINI_MODEL=gpt-oss-120b \
-  python scripts/bench_engines.py --compare --input input/bench/cs_book --concurrency 1,4 --judge
+python scripts/bench_engines.py --compare --input input/bench/cs_book --concurrency 1,4 --judge
 python scripts/bench_engines.py --engine new --input input/bench/en_book --sweep 1,2,4,8
 python scripts/bench_engines.py --compare --input input/bench/en_paper --concurrency 1,4 --judge
 python scripts/bench_engines.py --compare --input input/bench/en_presentation --concurrency 1,4

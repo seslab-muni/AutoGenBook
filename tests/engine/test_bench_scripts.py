@@ -7,6 +7,12 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
+# Benchmark harness checks: deselected by default, run locally with `pytest tests/engine --bench`
+# (see conftest.py). Not part of CI.
+pytestmark = pytest.mark.bench
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -76,3 +82,18 @@ def test_bench_engines_presentation_mode_argv(tmp_path) -> None:
     assert argv[2:6] == ["--mode", "presentation", "-i", str(tmp_path / "w" / "presentation_input.txt")]
     assert argv[-1] == "--presentation-pptx" and "--no-pdf" not in argv
     assert bench._mode_argv(book, spec, tmp_path / "w", "pdf")[-2:] == ["--presentation-pptx", "--presentation-tex"]
+
+
+def test_judge_model_precedence() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("bench_engines_judge", REPO_ROOT / "scripts" / "bench_engines.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    env = {"AUTOGENBOOK_JUDGE_MODEL": "kimi-k3", "AUTOGENBOOK_LLM_MINI_MODEL": "mini", "AUTOGENBOOK_LLM_MODEL": "main"}
+    assert module.resolve_judge_model("flag-model", env) == "flag-model"
+    assert module.resolve_judge_model(None, env) == "kimi-k3"
+    assert module.resolve_judge_model(None, {**env, "AUTOGENBOOK_JUDGE_MODEL": " "}) == "mini"
+    assert module.resolve_judge_model(None, {"AUTOGENBOOK_LLM_MODEL": "main"}) == "main"
+    assert module.resolve_judge_model(None, {}) == "openai/gpt-5-mini"
