@@ -32,8 +32,8 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "bench: benchmark harness and evaluation tests. Deselected unless `--bench` is given "
-        "(`pytest tests/engine --bench -m bench` runs only them); CI runs them on demand "
-        "from .github/workflows/bench.yml, not on every push.",
+        "(`pytest tests/engine --bench -m bench` runs only them). Benchmarks are run locally, "
+        "by hand, when a change is to be measured; CI never runs them.",
     )
 
 

@@ -496,10 +496,10 @@ The golden runs (`test_golden_{book,paper,presentation}.py`) replay recorded LLM
 
 Tests marked `bench` (`test_bench_scripts.py`, the "new BM25 is not worse than the old KB" eval in
 `test_retrieval.py`) are measurement, not regression checks: `pytest tests/engine` deselects them
-so the always-on CI job stays inside its 15-minute limit. `--bench` includes them, `--bench -m bench`
-runs only them. On GitHub they run on demand from `.github/workflows/bench.yml` ("Run workflow",
-or `gh workflow run bench.yml`), which can also run `scripts/bench_engines.py` against the real
-endpoint when the LLM secrets are configured and uploads the reports as an artifact.
+so the CI job stays inside its 15-minute limit. `--bench` includes them, `--bench -m bench` runs
+only them. **Benchmarks are run locally only**, by hand, when a change is to be measured: the
+`bench` tests with `--bench`, and `scripts/bench_engines.py` / `scripts/bench_retrieval.py` as in
+sections A.3 and A.4. There is no CI job for them, by design.
 
 ### A.3 Retrieval benchmark: old KB vs new hybrid (e-INFRA)
 

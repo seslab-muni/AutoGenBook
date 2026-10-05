@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-# Benchmark harness checks: deselected by default, run with `pytest tests/engine --bench`
-# (see conftest.py) or on demand from .github/workflows/bench.yml.
+# Benchmark harness checks: deselected by default, run locally with `pytest tests/engine --bench`
+# (see conftest.py). Not part of CI.
 pytestmark = pytest.mark.bench
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

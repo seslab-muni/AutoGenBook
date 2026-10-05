@@ -70,7 +70,7 @@ jobs:
       - name: Run engine test suite (pytest, fake LLM, no network)
         # The rewritten engine (`engine/`, epic #158): unit, contract and golden tests against the
         # in-process fake LLM (`tests/engine/fake_llm.py`). Tests marked `bench` (the benchmark
-        # harness and retrieval evals) are deselected here; bench.yml runs them on demand.
+        # harness and retrieval evals) are deselected: benchmarks are run locally, never in CI.
         run: pytest tests/engine --timeout=300
 
       - name: Run CLI unit test suite
