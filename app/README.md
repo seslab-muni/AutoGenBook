@@ -13,7 +13,10 @@ source/outline/editor/run views (`src/routes/p.$projectId*.tsx` →
 `src/features/{sources,outline,editor,runs}`), and export handling
 (`src/features/exports`). See `src/features/<projects|sources|outline|editor|runs|exports>`
 for the current feature set and their component tests for coverage, and
-`../docs/WEB_UI.md` for the screen/state-ownership/SSE overview.
+`../docs/WEB_UI.md` for the screen/state-ownership/SSE overview. The header's
+account menu also opens an Account dialog (`src/features/account`) where a user
+stores their own LLM API key (per-user LLM key); the start-run dialog gates on
+it when the deployment's `LLM_KEY_POLICY` is `required`.
 
 ## Prerequisites
 

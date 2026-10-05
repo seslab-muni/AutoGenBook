@@ -32,6 +32,31 @@ export function useLoginMutation() {
   });
 }
 
+/**
+ * Per-user LLM key: `PUT /auth/me/llm-key` answers with the updated `UserOut`, which is written
+ * straight into `auth.me()`'s cache so the account dialog and the start-run gating see it at once.
+ * The key itself is only ever in the request body - never cached or echoed back.
+ */
+export function useSetLlmKeyMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (apiKey: string) =>
+      unwrap(apiClient.PUT('/api/v1/auth/me/llm-key', { body: { apiKey } })),
+    onSuccess: (user) => {
+      queryClient.setQueryData(authKeys.me(), user);
+    },
+  });
+}
+
+/** Per-user LLM key: `DELETE /auth/me/llm-key` has no body, so refetch `auth.me()` to pick up the cleared key. */
+export function useClearLlmKeyMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(apiClient.DELETE('/api/v1/auth/me/llm-key')),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: authKeys.me() }),
+  });
+}
+
 /** On success: drops every cached `auth`-scoped query so the next `auth.me()` read goes to the network. */
 export function useLogoutMutation() {
   const queryClient = useQueryClient();

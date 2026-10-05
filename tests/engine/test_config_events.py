@@ -134,3 +134,21 @@ def test_reasoning_effort_env(tmp_path: Path) -> None:
     assert _cfg(base, {"AUTOGENBOOK_LLM_REASONING_EFFORT": " Low "}).llm.reasoning_effort == "low"
     with pytest.raises(ConfigError, match="AUTOGENBOOK_LLM_REASONING_EFFORT"):
         _cfg(base, {"AUTOGENBOOK_LLM_REASONING_EFFORT": "tiny"})
+
+
+def test_empty_concurrency_and_reasoning_effort_mean_default(tmp_path: Path) -> None:
+    # docker-compose passes `AUTOGENBOOK_CONCURRENCY=${AUTOGENBOOK_CONCURRENCY:-}` etc., so an
+    # unset deployment variable reaches the engine as an empty string, not as an absent one.
+    base = ["-i", "x.txt", "-o", str(tmp_path / "out")]
+    cfg = _cfg(base, {"AUTOGENBOOK_CONCURRENCY": "", "AUTOGENBOOK_LLM_REASONING_EFFORT": "  "})
+    assert cfg.concurrency == 4
+    assert cfg.llm.reasoning_effort is None
+
+
+def test_body_headings_flag_and_env(tmp_path: Path) -> None:
+    base = ["-i", "x", "-o", str(tmp_path)]
+    assert _cfg(base, {}).body_headings is False
+    assert _cfg(base + ["--body-headings"], {}).body_headings is True
+    assert _cfg(base, {"AUTOGENBOOK_BODY_HEADINGS": "1"}).body_headings is True
+    assert _cfg(base, {"AUTOGENBOOK_BODY_HEADINGS": "off"}).body_headings is False
+    assert _cfg(base, {}).describe()["body_headings"] is False

@@ -113,6 +113,14 @@ REQUIRED_SECRET_KEYS = (
 # TAVILY_API_KEY is the one key docs/DEPLOY_GUIDE.md documents as allowed to be blank (web
 # retrieval is optional) - every other key must actually have a value, not just be present.
 OPTIONAL_EMPTY_SECRET_KEYS = frozenset({"TAVILY_API_KEY"})
+# Per-user LLM key: the Fernet key that encrypts users' stored LLM API keys. Unlike the keys above
+# it may be absent from the env file altogether (the feature is then simply disabled), so adding
+# it to REQUIRED_SECRET_KEYS would make every existing env file fail validation. It is written
+# into the Secret when the env file has a non-empty value for it; when it doesn't, the live
+# Secret's current value is carried over (never silently removed - `plan_secret_values`), and
+# only `--drop-optional-secret KEY` removes it. Losing/rotating it makes every
+# stored user key undecryptable (their runs then fail with a clear error until re-entered).
+OPTIONAL_SECRET_KEYS = ("LLM_KEY_ENCRYPTION_KEY",)
 
 # Anything under app/ only ever affects the web image.
 WEB_PREFIX = "app/"
@@ -1646,17 +1654,57 @@ def validate_secret_values(values: dict[str, str]) -> None:
         raise DeployError("required key(s) present but empty: " + ", ".join(empty))
 
 
+def plan_secret_values(
+    values: dict[str, str],
+    current: dict[str, str] | None,
+    drop: tuple[str, ...] = (),
+) -> tuple[dict[str, str], dict[str, str]]:
+    """`(key -> value to write, key -> plan note)` for the Secret: the required keys from the
+    env file, plus each OPTIONAL_SECRET_KEYS entry resolved as: the env file's non-empty value if
+    it has one; else removed *only* if explicitly named in `drop` (--drop-optional-secret); else
+    the live Secret's current value carried over untouched. Never removing by omission matters:
+    `kubectl apply` of the regenerated manifest would otherwise delete a key (e.g. the encryption
+    key) the env file simply didn't mention, breaking every user's stored LLM key."""
+    to_write = {key: values[key] for key in REQUIRED_SECRET_KEYS}
+    notes: dict[str, str] = {}
+    for key in OPTIONAL_SECRET_KEYS:
+        live_b64 = (current or {}).get(key)
+        if key in drop:
+            if values.get(key):
+                raise DeployError(f"{key} is set in the env file but also passed to --drop-optional-secret")
+            notes[key] = "REMOVED" if live_b64 is not None else "not present (nothing to remove)"
+        elif values.get(key):
+            to_write[key] = values[key]
+        elif live_b64 is not None:
+            to_write[key] = base64.b64decode(live_b64).decode()
+            notes[key] = "KEPT from the cluster (not in the env file; pass --drop-optional-secret to remove)"
+    return to_write, notes
+
+
+# Wide enough for the longest secret key name (LLM_KEY_ENCRYPTION_KEY is 22 characters).
+KEY_COL_WIDTH = 26
+
+
+def dropped_keys_still_present(current: dict[str, str] | None, drop: tuple[str, ...]) -> list[str]:
+    """Keys passed to --drop-optional-secret that are still in the live Secret. `kubectl apply`
+    only prunes keys recorded in the last-applied annotation, so a hand-created key survives it."""
+    return [key for key in drop if key in (current or {})]
+
+
 def sync_secrets(args: argparse.Namespace, stage: Stage) -> int:
     env_file = args.env_file or REPO_ROOT / stage.env_file
     ensure_ignored(env_file)
     values = read_env_file(env_file)
     validate_secret_values(values)
-
     current = kubectl_get_secret_data(SECRET_NAME, stage.namespace)
+    to_write, notes = plan_secret_values(values, current, tuple(args.drop_optional_secret or ()))
+    secret_keys = tuple(to_write)
     print(f"Secret sync plan for secret/{SECRET_NAME} in namespace {stage.namespace} (values never shown):\n")
-    for key in REQUIRED_SECRET_KEYS:
-        new_b64 = base64.b64encode(values[key].encode()).decode()
-        if current is None:
+    for key in secret_keys:
+        new_b64 = base64.b64encode(to_write[key].encode()).decode()
+        if key in notes:
+            status = notes[key]
+        elif current is None:
             status = "NEW (secret doesn't exist yet)"
         elif key not in current:
             status = "NEW key"
@@ -1664,7 +1712,10 @@ def sync_secrets(args: argparse.Namespace, stage: Stage) -> int:
             status = "CHANGED"
         else:
             status = "unchanged"
-        print(f"  {key:<20} {status}")
+        print(f"  {key:<{KEY_COL_WIDTH}} {status}")
+    for key, note in notes.items():
+        if key not in to_write:
+            print(f"  {key:<{KEY_COL_WIDTH}} {note}")
 
     if not args.apply:
         print("\nDry run - pass --apply to write this to the cluster.")
@@ -1675,17 +1726,28 @@ def sync_secrets(args: argparse.Namespace, stage: Stage) -> int:
         return 0
 
     create_cmd = ["kubectl", "create", "secret", "generic", SECRET_NAME, "-n", stage.namespace]
-    for key in REQUIRED_SECRET_KEYS:
-        create_cmd.append(f"--from-literal={key}={values[key]}")
+    for key in secret_keys:
+        create_cmd.append(f"--from-literal={key}={to_write[key]}")
     create_cmd += ["--dry-run=client", "-o", "yaml"]
 
     print(
         f"\n$ kubectl create secret generic {SECRET_NAME} -n {stage.namespace} "
-        f"--from-literal=<{len(REQUIRED_SECRET_KEYS)} keys, values redacted> --dry-run=client -o yaml | kubectl apply -f -"
+        f"--from-literal=<{len(secret_keys)} keys, values redacted> --dry-run=client -o yaml | kubectl apply -f -"
     )
     manifest = subprocess.run(create_cmd, stdout=subprocess.PIPE, text=True, check=True).stdout
     subprocess.run(["kubectl", "apply", "-n", stage.namespace, "-f", "-"], input=manifest, text=True, check=True)
     print(f"\nsecret/{SECRET_NAME} synced.")
+    leftover = dropped_keys_still_present(
+        kubectl_get_secret_data(SECRET_NAME, stage.namespace), tuple(args.drop_optional_secret or ())
+    )
+    if leftover:
+        print(
+            f"warning: {', '.join(leftover)} is still present in secret/{SECRET_NAME} (kubectl apply only "
+            "removes keys it created itself); remove it by hand: "
+            f"kubectl patch secret {SECRET_NAME} -n {stage.namespace} --type=json "
+            + "-p '[" + ",".join(f'{{"op":"remove","path":"/data/{k}"}}' for k in leftover) + "]'",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1725,6 +1787,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
               """
             + ", ".join(REQUIRED_SECRET_KEYS)
             + """
+            (plus, optionally, """
+            + ", ".join(OPTIONAL_SECRET_KEYS)
+            + """ - enables per-user LLM keys; synced only when set)
 
             See docs/DEPLOY_GUIDE.md (section 18 for stages) for the runbook this automates."""
         ),
@@ -1766,6 +1831,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Rebuild the given image(s) regardless of what changed since the deployed commit. "
         "'core' is the shared api/worker image.",
+    )
+    parser.add_argument(
+        "--drop-optional-secret",
+        action="append",
+        choices=OPTIONAL_SECRET_KEYS,
+        metavar="KEY",
+        help="With --sync-secrets: remove this optional key from the live Secret. Without this flag an "
+        "optional key missing from the env file is kept as it is on the cluster. "
+        f"One of: {', '.join(OPTIONAL_SECRET_KEYS)}.",
     )
     parser.add_argument(
         "--rollout-timeout",
@@ -1812,6 +1886,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     try:
         stage = load_stage(args.stage)
+        if args.drop_optional_secret and not args.sync_secrets:
+            raise DeployError("--drop-optional-secret only applies together with --sync-secrets")
         if args.sync_secrets:
             if args.promote or args.bootstrap or args.force:
                 raise DeployError("--sync-secrets only syncs the Secret - run --promote/--bootstrap/--force separately")

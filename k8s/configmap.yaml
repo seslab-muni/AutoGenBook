@@ -12,6 +12,10 @@ data:
   KB_EXTRACT_CACHE_DIR: "/app/kb_cache"
   MAX_UPLOAD_MB: "200"
   MAX_QUEUED_RUNS_PER_PROJECT: "5"
+  # Per-user LLM keys. LLM_KEY_ENCRYPTION_KEY (a Secret key, optional) turns the feature on;
+  # `required` needs it. 4 = the e-INFRA gateway's parallel-request limit per key.
+  LLM_KEY_POLICY: "optional"
+  LLM_USER_KEY_CONCURRENCY: "4"
   WORKER_CONCURRENCY: "1"
   WORKER_POLL_INTERVAL_S: "2"
   WORKER_STALE_S: "300"

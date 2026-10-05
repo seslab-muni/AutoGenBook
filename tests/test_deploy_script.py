@@ -166,6 +166,80 @@ class ReadEnvFileTests(unittest.TestCase):
                 deploy.read_env_file(path)
 
 
+class OptionalSecretKeysTests(unittest.TestCase):
+    """Per-user LLM key: LLM_KEY_ENCRYPTION_KEY must not make existing env files fail, and a
+    sync must never silently remove it from the live Secret."""
+
+    KEY = "LLM_KEY_ENCRYPTION_KEY"
+
+    def _base(self):
+        values = {key: "x" for key in deploy.REQUIRED_SECRET_KEYS}
+        values["TAVILY_API_KEY"] = ""
+        return values
+
+    @staticmethod
+    def _live(**kv):
+        import base64
+
+        return {k: base64.b64encode(v.encode()).decode() for k, v in kv.items()}
+
+    def test_env_file_without_the_key_still_validates(self):
+        deploy.validate_secret_values(self._base())  # must not raise
+
+    def test_absent_everywhere_is_omitted(self):
+        to_write, notes = deploy.plan_secret_values(self._base(), None)
+        self.assertNotIn(self.KEY, to_write)
+        self.assertEqual(notes, {})
+
+    def test_env_value_is_synced(self):
+        to_write, _ = deploy.plan_secret_values({**self._base(), self.KEY: "abc"}, self._live(**{self.KEY: "old"}))
+        self.assertEqual(to_write[self.KEY], "abc")
+
+    def test_missing_from_env_file_keeps_the_live_value(self):
+        for env_value in (None, ""):
+            values = self._base()
+            if env_value is not None:
+                values[self.KEY] = env_value
+            to_write, notes = deploy.plan_secret_values(values, self._live(**{self.KEY: "live-secret"}))
+            self.assertEqual(to_write[self.KEY], "live-secret")
+            self.assertIn("KEPT", notes[self.KEY])
+
+    def test_explicit_drop_removes_it_and_says_so(self):
+        to_write, notes = deploy.plan_secret_values(
+            self._base(), self._live(**{self.KEY: "live-secret"}), drop=(self.KEY,)
+        )
+        self.assertNotIn(self.KEY, to_write)
+        self.assertEqual(notes[self.KEY], "REMOVED")
+
+    def test_drop_with_env_value_is_an_error(self):
+        with self.assertRaises(deploy.DeployError):
+            deploy.plan_secret_values({**self._base(), self.KEY: "abc"}, None, drop=(self.KEY,))
+
+
+class DropOptionalSecretTests(unittest.TestCase):
+    def test_flag_without_sync_secrets_is_rejected(self):
+        import contextlib
+        import io
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = deploy.main(["--stage", "dev", "--drop-optional-secret", "LLM_KEY_ENCRYPTION_KEY"])
+        self.assertEqual(code, 1)
+        self.assertIn("--sync-secrets", err.getvalue())
+
+    def test_dropped_key_still_in_the_live_secret_is_reported(self):
+        live = {"LLM_KEY_ENCRYPTION_KEY": "eA==", "AUTH_JWT_SECRET": "eA=="}
+        self.assertEqual(
+            deploy.dropped_keys_still_present(live, ("LLM_KEY_ENCRYPTION_KEY",)), ["LLM_KEY_ENCRYPTION_KEY"]
+        )
+        self.assertEqual(deploy.dropped_keys_still_present({"AUTH_JWT_SECRET": "eA=="}, ("LLM_KEY_ENCRYPTION_KEY",)), [])
+        self.assertEqual(deploy.dropped_keys_still_present(None, ("LLM_KEY_ENCRYPTION_KEY",)), [])
+
+    def test_key_column_fits_the_longest_secret_name(self):
+        longest = max(len(k) for k in deploy.REQUIRED_SECRET_KEYS + deploy.OPTIONAL_SECRET_KEYS)
+        self.assertGreater(deploy.KEY_COL_WIDTH, longest)
+
+
 class ValidateSecretValuesTests(unittest.TestCase):
     def _complete_values(self, **overrides):
         values = {key: "x" for key in deploy.REQUIRED_SECRET_KEYS}

@@ -111,6 +111,22 @@ const systemHandlers = [
 // ---------------------------------------------------------------------------
 
 /**
+ * Mirrors `queue_admission_blocker`'s `llm_key_missing` rule: under policy `required` every
+ * run-queuing endpoint (create, regenerate, retry, export) answers 409 `llm_key_required` for a
+ * user without a stored key.
+ */
+function llmKeyRequiredProblem(request: Request) {
+  if (db.llmKeyPolicy !== 'required' || db.llmKey) return null;
+  return problemResponse(
+    409,
+    'Conflict',
+    new URL(request.url).pathname,
+    'This deployment requires your own LLM API key to start runs; set it in your account settings first',
+    'llm_key_required',
+  );
+}
+
+/**
  * MSW doesn't enforce the real httpOnly-cookie mechanism, so — like every other mock handler —
  * these default to "signed in as `MOCK_USER`" rather than actually tracking a session; a test
  * exercising logged-out behavior (`require-auth`, the 401 response middleware) overrides
@@ -125,7 +141,59 @@ const authHandlers = [
     return problemResponse(401, 'Invalid email or password', new URL(request.url).pathname);
   }),
 
-  http.get('*/api/v1/auth/me', () => HttpResponse.json(MOCK_USER)),
+  http.get('*/api/v1/auth/me', () =>
+    HttpResponse.json({
+      ...MOCK_USER,
+      llmKeyConfigurable: db.llmKeyConfigurable,
+      llmKeyPolicy: db.llmKeyPolicy,
+      llmKey: db.llmKey,
+    }),
+  ),
+
+  // Per-user LLM key. Mirrors the real API: 409 `llm_key_disabled` when the deployment has no
+  // encryption key, 422 for a blank key, and the response only ever carries the last four chars.
+  http.put('*/api/v1/auth/me/llm-key', async ({ request }) => {
+    const instance = new URL(request.url).pathname;
+    if (!db.llmKeyConfigurable) {
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'per-user LLM keys are not enabled on this deployment (LLM_KEY_ENCRYPTION_KEY is not set)',
+        'llm_key_disabled',
+      );
+    }
+    const body = (await request.json()) as { apiKey: string };
+    const key = body.apiKey.trim();
+    if (!key) {
+      return problemResponse(
+        422,
+        'Validation Failed',
+        instance,
+        'apiKey must not be empty or blank',
+      );
+    }
+    if (key.length > 512) {
+      return problemResponse(
+        422,
+        'Validation Failed',
+        instance,
+        'apiKey must be at most 512 characters',
+      );
+    }
+    db.llmKey = { last4: key.slice(-4), updatedAt: db.now() };
+    return HttpResponse.json({
+      ...MOCK_USER,
+      llmKeyConfigurable: db.llmKeyConfigurable,
+      llmKeyPolicy: db.llmKeyPolicy,
+      llmKey: db.llmKey,
+    });
+  }),
+
+  http.delete('*/api/v1/auth/me/llm-key', () => {
+    db.llmKey = null;
+    return new HttpResponse(null, { status: 204 });
+  }),
 
   http.post('*/api/v1/auth/logout', () => new HttpResponse(null, { status: 204 })),
 ];
@@ -776,6 +844,8 @@ const outlineHandlers = [
       if (!project || !node || node.projectId !== projectId) {
         return notFound('Project or node', new URL(request.url).pathname);
       }
+      const keyRequired = llmKeyRequiredProblem(request);
+      if (keyRequired) return keyRequired;
       if (!project.lastRunId || !db.runs.get(project.lastRunId)?.resumable) {
         return problemResponse(
           409,
@@ -869,6 +939,8 @@ const runHandlers = [
   http.post('*/api/v1/projects/:projectId/runs', async ({ params, request }) => {
     const projectId = params.projectId as string;
     if (!db.projects.has(projectId)) return notFound('Project', new URL(request.url).pathname);
+    const keyRequired = llmKeyRequiredProblem(request);
+    if (keyRequired) return keyRequired;
     const admissionBlocker = queueAdmissionBlocker(false, laneRunsFor(projectId));
     if (admissionBlocker) {
       return problemResponse(409, admissionBlocker, new URL(request.url).pathname);
@@ -1009,6 +1081,8 @@ const runHandlers = [
   http.post('*/api/v1/runs/:runId/exports', async ({ params, request }) => {
     const baseRun = db.runs.get(params.runId as string);
     if (!baseRun) return notFound('Run', new URL(request.url).pathname);
+    const keyRequired = llmKeyRequiredProblem(request);
+    if (keyRequired) return keyRequired;
     if (baseRun.status !== 'succeeded' || !baseRun.resumable) {
       return problemResponse(
         409,
@@ -1060,6 +1134,8 @@ const runHandlers = [
   http.post('*/api/v1/runs/:runId/retry', ({ params, request }) => {
     const baseRun = db.runs.get(params.runId as string);
     if (!baseRun) return notFound('Run', new URL(request.url).pathname);
+    const keyRequired = llmKeyRequiredProblem(request);
+    if (keyRequired) return keyRequired;
     if (baseRun.kind !== 'full') {
       return problemResponse(
         409,

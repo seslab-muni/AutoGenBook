@@ -3,8 +3,21 @@ import { HttpResponse } from 'msw';
 import type { Problem } from '@/api/types';
 
 /** Builds a `application/problem+json` response, matching `api/core/errors.py`. */
-export function problemResponse(status: number, title: string, instance: string, detail?: string) {
-  const body: Problem = { type: 'about:blank', title, status, detail: detail ?? null, instance };
+export function problemResponse(
+  status: number,
+  title: string,
+  instance: string,
+  detail?: string,
+  code?: string,
+) {
+  const body: Problem = {
+    type: 'about:blank',
+    title,
+    status,
+    detail: detail ?? null,
+    instance,
+    ...(code ? { code } : {}),
+  };
   return HttpResponse.json(body, {
     status,
     headers: { 'Content-Type': 'application/problem+json' },

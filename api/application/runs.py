@@ -35,6 +35,7 @@ from api.application.book_spec import (
 )
 from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.application.run_errors import describe_cli_failure
+from api.core.secrets import LlmKeyCipher, LlmKeyDecryptError
 from api.core.settings import Settings, default_llm_model
 from api.domain.models import (
     ArtifactKind,
@@ -60,6 +61,7 @@ from api.domain.ports import (
     RunQueue,
     RunRepository,
     SourceRepository,
+    UserRepository,
 )
 from api.infrastructure.cli import artifacts, book_command, subprocess_runner
 
@@ -83,9 +85,27 @@ _DRAIN_MAX_CONSECUTIVE_FAILURES = 5
 # segments after the leading `/`, so short, harmless things aren't flagged.
 _SENSITIVE_MESSAGE_RE = re.compile(r"https?://|/(?:[\w.\-]+/)+[\w.\-]*")
 
+# Per-user LLM key: shown verbatim to the user, both as the 409 on admission and (when the
+# policy changed after queueing) as the failed run's `error`. Contains no path/URL, so
+# `_sanitize_run_error` passes it through.
+LLM_KEY_REQUIRED_MESSAGE = (
+    "This deployment requires your own LLM API key to start runs; "
+    "set it in your account settings first"
+)
+LLM_KEY_REQUIRED_CODE = "llm_key_required"
+LLM_KEY_UNDECRYPTABLE_MESSAGE = (
+    "Your stored LLM API key could not be decrypted (the server's encryption key was "
+    "changed); set your key again in your account settings"
+)
+
 _GENERIC_RUN_FAILURE_MESSAGE = (
     "run failed due to an internal error; see the worker logs for details"
 )
+
+
+class _LlmKeyUnavailable(Exception):
+    """`GenerationService._resolve_user_llm_key`'s refusal; `str(exc)` is already a
+    user-facing message, safe to persist as `run.error`."""
 
 
 def _sanitize_run_error(message: str) -> str:
@@ -116,6 +136,7 @@ class RunService:
         file_repository: FileRepository,
         outline_repository: OutlineRepository,
         settings: Settings,
+        user_repository: UserRepository | None = None,
     ) -> None:
         self._runs = run_repository
         self._events = run_event_repository
@@ -124,6 +145,20 @@ class RunService:
         self._files = file_repository
         self._outline = outline_repository
         self._settings = settings
+        # Only consulted under `LLM_KEY_POLICY=required` (per-user LLM key), to tell
+        # whether the starting user has stored a key.
+        self._users = user_repository
+
+    async def _llm_key_missing(self, started_by: uuid.UUID | None) -> bool:
+        """True when the policy is `required` and `started_by` has no stored key - the
+        input `queue_admission_blocker` needs for its per-user-key rule."""
+        if self._settings.llm_key_policy != "required":
+            return False
+        if started_by is None or self._users is None:
+            return True
+        user = await self._users.get_by_id(started_by)
+        # A deactivated user counts as having no key (the worker applies the same rule).
+        return user is None or not user.is_active or user.llm_api_key_encrypted is None
 
     async def _get(self, run_id: uuid.UUID) -> Run:
         run = await self._runs.get(run_id)
@@ -170,10 +205,13 @@ class RunService:
         await self._runs.lock_project_for_admission(project_id)
         lane = await self._runs.list_active_for_project(project_id)
         blocker = queue_admission_blocker(
-            blocked_by_full_run=False, lane_runs=lane, cap=self._settings.max_queued_runs_per_project
+            blocked_by_full_run=False,
+            lane_runs=lane,
+            cap=self._settings.max_queued_runs_per_project,
+            llm_key_missing=await self._llm_key_missing(started_by),
         )
         if blocker is not None:
-            raise Conflict(blocker)
+            raise _admission_conflict(blocker)
 
         resolved_output_format = output_format or project.output_format.value
         # Both combinations "succeed" with no useful output instead of
@@ -462,10 +500,13 @@ class RunService:
 
         lane = await self._runs.list_active_for_project(project_id)
         blocker = queue_admission_blocker(
-            blocked_by_full_run=True, lane_runs=lane, cap=self._settings.max_queued_runs_per_project
+            blocked_by_full_run=True,
+            lane_runs=lane,
+            cap=self._settings.max_queued_runs_per_project,
+            llm_key_missing=await self._llm_key_missing(started_by),
         )
         if blocker is not None:
-            raise Conflict(blocker)
+            raise _admission_conflict(blocker)
 
         base_run = await self._resolvable_base_run(project_id, project.last_run_id)
 
@@ -572,9 +613,10 @@ class RunService:
             blocked_by_full_run=True,
             lane_runs=lane,
             cap=self._settings.max_queued_runs_per_project,
+            llm_key_missing=await self._llm_key_missing(started_by),
         )
         if blocker is not None:
-            raise Conflict(blocker)
+            raise _admission_conflict(blocker)
 
         project = await self._projects.get(base_run.project_id)
         fallback_llm_model = (
@@ -633,9 +675,10 @@ class RunService:
             blocked_by_full_run=True,
             lane_runs=lane,
             cap=self._settings.max_queued_runs_per_project,
+            llm_key_missing=await self._llm_key_missing(started_by),
         )
         if blocker is not None:
-            raise Conflict(blocker)
+            raise _admission_conflict(blocker)
 
         project = await self._projects.get(run.project_id)
         if project is None:
@@ -752,7 +795,11 @@ def retry_blocker(run: Run) -> str | None:
 
 
 def queue_admission_blocker(
-    *, blocked_by_full_run: bool, lane_runs: list[Run], cap: int
+    *,
+    blocked_by_full_run: bool,
+    lane_runs: list[Run],
+    cap: int,
+    llm_key_missing: bool = False,
 ) -> str | None:
     """The 409 reason a new run should be refused given its project's
     current lane (`lane_runs`: every queued-or-running run for the project,
@@ -779,7 +826,15 @@ def queue_admission_blocker(
     same directory (issue #134 review). A queued/running `full` run in the
     lane always blocks a `blocked_by_full_run=True` request regardless of
     that flag - `run.kind == RunKind.full` covers a queued `retry` here too,
-    the same way it covers a queued `create`."""
+    the same way it covers a queued `create`.
+
+    `llm_key_missing` (per-user LLM key) is the caller's answer to "is
+    `LLM_KEY_POLICY` `required` and the starting user without a stored key?" - checked
+    first, since no lane state makes such a request acceptable. Every entry point passes it,
+    `export` included: an export run is a `--resume` run and can still generate pending
+    sections, so it needs the user's key like any other run."""
+    if llm_key_missing:
+        return LLM_KEY_REQUIRED_MESSAGE
     if blocked_by_full_run and any(run.kind == RunKind.full for run in lane_runs):
         return (
             "a full run is queued or running for this project; wait for it to "
@@ -789,6 +844,15 @@ def queue_admission_blocker(
     if queued >= cap:
         return f"project's run queue is full ({cap} queued); wait for one to start or cancel one"
     return None
+
+
+def _admission_conflict(blocker: str) -> Conflict:
+    """The `Conflict` for a `queue_admission_blocker` reason - the per-user-key refusal
+    additionally carries a machine-readable `code` so the web UI can send the user to
+    their account settings instead of just showing text."""
+    if blocker == LLM_KEY_REQUIRED_MESSAGE:
+        return Conflict(blocker, code=LLM_KEY_REQUIRED_CODE)
+    return Conflict(blocker)
 
 
 def build_done_event(run: Run, seq: int) -> RunEvent:
@@ -946,6 +1010,7 @@ class GenerationService:
         *,
         drain_poll_interval_s: float = _DRAIN_POLL_INTERVAL_S,
         worker_id: str | None = None,
+        user_repository: UserRepository | None = None,
     ) -> None:
         self._runs = run_repository
         self._events = run_event_repository
@@ -971,6 +1036,46 @@ class GenerationService:
         # `_rollback_regenerate` (from `_fail`/`_finalize`) knows which
         # `regen_history/` backups are this attempt's own (issue #58).
         self._regenerate_cli_key: str | None = None
+        # Whether this attempt launched the CLI subprocess yet. `_fail` only uploads `out/`
+        # artifacts when it did: export/regenerate/retry runs share their base run's work_dir, so
+        # an early failure (e.g. no usable LLM key) would otherwise attach the *base* run's
+        # output to this failed run.
+        self._cli_started = False
+        # Resolves `run.started_by` to their stored per-user LLM key (per-user LLM key).
+        self._users = user_repository
+
+    async def _resolve_user_llm_key(self, run: Run) -> tuple[str, str, int] | None:
+        """`(plain key, last4, concurrency)` for the user who started `run`, or `None` when the
+        run should use the deployment key. Raises `_LlmKeyUnavailable` (a user-facing message)
+        when the run cannot proceed: policy `required` with no usable key (the policy may have
+        changed since queueing; a deactivated user counts as having none), or a stored key that
+        no longer decrypts - never a silent fallback to the shared key. Every run kind is
+        treated alike (an export run is a `--resume` run and can still generate sections). With
+        the feature disabled (no encryption key) stored keys are never looked at.
+
+        The gateway limits parallel requests per *key*, so `LLM_USER_KEY_CONCURRENCY` is split
+        across this user's other currently-`running` runs (any project): the budget is
+        `max(1, N // (others + 1))`. Runs already in flight keep the value they started with,
+        so over-subscription is possible: the earlier run keeps its full budget until it finishes, and
+        the engine's adaptive limiter backs off on 429 responses."""
+        cipher = LlmKeyCipher.from_settings(self._settings)
+        if cipher is None:
+            return None
+        user = None
+        if run.started_by is not None and self._users is not None:
+            user = await self._users.get_by_id(run.started_by)
+        encrypted = user.llm_api_key_encrypted if user is not None and user.is_active else None
+        if not encrypted:
+            if self._settings.llm_key_policy == "required":
+                raise _LlmKeyUnavailable(LLM_KEY_REQUIRED_MESSAGE)
+            return None
+        try:
+            plain = cipher.decrypt(encrypted)
+        except LlmKeyDecryptError as exc:
+            raise _LlmKeyUnavailable(LLM_KEY_UNDECRYPTABLE_MESSAGE) from exc
+        others = await self._runs.count_running_for_user(user.id, exclude_run_id=run.id)
+        concurrency = max(1, self._settings.llm_user_key_concurrency // (others + 1))
+        return plain, (user.llm_api_key_last4 or ""), concurrency
 
     async def execute(self, run: Run, *, shutdown_event: asyncio.Event | None = None) -> Run:
         project = await self._projects.get(run.project_id)
@@ -978,7 +1083,9 @@ class GenerationService:
             return await self._fail(run, "project no longer exists")
 
         self._lease_lost = False
+        self._cli_started = False
         try:
+            user_llm_key = await self._resolve_user_llm_key(run)
             if run.kind == RunKind.full:
                 if run.options.resume and run.base_run_id is not None:
                     # A retry (issue #124): closes the TOCTOU window
@@ -1026,8 +1133,16 @@ class GenerationService:
                 else dataclass_replace(run.options, llm_model=project.llm_model)
             )
             argv, env, cwd = book_command.build_command(
-                run.work_dir, effective_options, self._settings, author=", ".join(project.authors)
+                run.work_dir,
+                effective_options,
+                self._settings,
+                author=", ".join(project.authors),
+                llm_api_key=user_llm_key[0] if user_llm_key else None,
+                concurrency=user_llm_key[2] if user_llm_key else None,
             )
+            if user_llm_key is not None:
+                await self._emit_user_key_event(run, user_llm_key[1], user_llm_key[2])
+            self._cli_started = True
             exit_code, timed_out = await self._run_subprocess_and_drain(
                 run, argv, env, cwd, shutdown_event=shutdown_event
             )
@@ -1054,6 +1169,10 @@ class GenerationService:
                 return current if current is not None else run
 
             return await self._finalize(run, exit_code, project, timed_out=timed_out)
+        except _LlmKeyUnavailable as exc:
+            # A user-facing refusal, not a crash: no traceback, message stored as-is.
+            logger.warning("run %s: %s", run.id, exc)
+            return await self._fail(run, str(exc), project)
         except Exception as exc:  # noqa: BLE001 - any prep/run/finalize failure -> failed run
             logger.exception("run %s failed before/while executing the CLI", run.id)
             # A failed commit (e.g. `append_batch` hitting a duplicate
@@ -1067,6 +1186,34 @@ class GenerationService:
             # can actually persist a terminal status.
             await self._runs.rollback()
             return await self._fail(run, _sanitize_run_error(str(exc)), project)
+
+    async def _emit_user_key_event(self, run: Run, last4: str, concurrency: int) -> None:
+        """Records (event + log line) that this run executes with its user's own key -
+        only the last four characters, never the key. `env` itself is never logged
+        anywhere (`subprocess_runner.run` only passes it to `Popen`)."""
+        suffix = f" ending in {last4}" if last4 else ""
+        logger.info("run %s: using the starting user's own LLM API key%s", run.id, suffix)
+        next_seq = await self._events.max_seq(run.id) + 1
+        await self._events.append_batch(
+            run.id,
+            [
+                RunEvent(
+                    seq=next_seq,
+                    ts=datetime.now(timezone.utc),
+                    level="info",
+                    stage="setup",
+                    message=(
+                        f"Using the starting user's own LLM API key{suffix} "
+                        f"(concurrency {concurrency})"
+                    ),
+                    payload={
+                        "llmKeySource": "user",
+                        "llmKeyLast4": last4 or None,
+                        "concurrency": concurrency,
+                    },
+                )
+            ],
+        )
 
     async def _prepare_work_dir(
         self, run: Run, project: Project, outline_tree: list[OutlineTree]
@@ -1611,7 +1758,8 @@ class GenerationService:
         run.status = RunStatus.failed
         run.error = message
         run.finished_at = datetime.now(timezone.utc)
-        await self._upload_artifacts(run, project)
+        if self._cli_started:
+            await self._upload_artifacts(run, project)
         if run.kind == RunKind.regenerate_section:
             await self._rollback_regenerate(run)
             await self._revert_node_status(run)

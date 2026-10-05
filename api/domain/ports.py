@@ -49,6 +49,10 @@ class UserRepository(Protocol):
 
     async def set_active(self, user_id: uuid.UUID, is_active: bool) -> User: ...
 
+    async def set_llm_api_key(self, user_id: uuid.UUID, encrypted: str, last4: str) -> User: ...
+
+    async def clear_llm_api_key(self, user_id: uuid.UUID) -> User: ...
+
     async def list(self) -> list[User]: ...
 
 
@@ -165,6 +169,13 @@ class RunRepository(Protocol):
     # `queue_admission_blocker` (the caller passes its own about-to-create
     # run's `kind` plus this list) and `RunService.queue_position`.
     async def list_active_for_project(self, project_id: uuid.UUID) -> list[Run]: ...
+
+    # Per-user LLM key: how many runs *other than* `exclude_run_id` that `user_id` started are
+    # currently `running` (any project) - `GenerationService` splits `LLM_USER_KEY_CONCURRENCY`
+    # across them, since the gateway's parallel-request limit is per key, not per run.
+    async def count_running_for_user(
+        self, user_id: uuid.UUID, *, exclude_run_id: uuid.UUID
+    ) -> int: ...
 
     async def list(
         self,

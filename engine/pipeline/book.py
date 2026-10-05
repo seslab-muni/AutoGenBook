@@ -856,7 +856,7 @@ class BookRun:
             "additional_requirements": graph.attrs.get("additional_requirements", "") or "(none)",
             "equation_guidance": equation_guidance(graph.attrs.get("equation_frequency_level", 3)),
             "outline": self._outline_for(key),
-            "heading_rule": heading_rule(graph, key),
+            "heading_rule": heading_rule(graph, key, allow=self.cfg.body_headings),
             "retrieved_context": context,
         }
 
@@ -882,7 +882,7 @@ class BookRun:
         retrieved = await self._retrieve(key, self._queries(key))
         values = self.writer_values(key, retrieved.text or "(none)")
         draft = await self.agents["writer"].run(self.ctx.llm, values, node_key=key)
-        body = clean_body(draft.body_markdown, str(node.get("title", "")), graph, key, self.index)
+        body = clean_body(draft.body_markdown, str(node.get("title", "")), graph, key, self.index, allow_headings=self.cfg.body_headings)
         if not body.strip():
             raise EngineError(f"the writer returned an empty section for {key}")
         self.work.save(key, "draft", self._fp(key), {
@@ -910,13 +910,13 @@ class BookRun:
             values = {
                 **self._common(key),
                 "document_kind": self.doc_type,
-                "heading_rule": heading_rule(self.graph, key),
+                "heading_rule": heading_rule(self.graph, key, allow=self.cfg.body_headings),
                 "retrieved_context": context,
                 "review_json": dumps(review.model_dump()),
                 "section_body": body,
             }
             revision = await self.agents["reviser"].run(self.ctx.llm, values, node_key=key)
-            revised = clean_body(revision.body_markdown, self.graph.title(key), self.graph, key, self.index)
+            revised = clean_body(revision.body_markdown, self.graph.title(key), self.graph, key, self.index, allow_headings=self.cfg.body_headings)
             if revised.strip():
                 body = revised
                 summary = revision.summary or summary
@@ -949,7 +949,7 @@ class BookRun:
                 "section_body": body,
             }
             adjusted = await self.agents["length"].run(self.ctx.llm, values, node_key=key)
-            candidate = clean_body(adjusted.body_markdown, str(node.get("title", "")), self.graph, key, self.index)
+            candidate = clean_body(adjusted.body_markdown, str(node.get("title", "")), self.graph, key, self.index, allow_headings=self.cfg.body_headings)
             if candidate.strip() and abs(effective_lines(candidate) - target) < abs(actual - target):
                 body = candidate
             else:
@@ -1074,13 +1074,13 @@ class BookRun:
         values = {
             **self._common(key),
             "document_kind": self.doc_type,
-            "heading_rule": heading_rule(self.graph, key),
+            "heading_rule": heading_rule(self.graph, key, allow=self.cfg.body_headings),
             "retrieved_context": "(the section's citations stay valid; do not add new ones)",
             "review_json": dumps(review.model_dump()),
             "section_body": body,
         }
         revision = await self.agents["reviser"].run(self.ctx.llm, values, node_key=key)
-        revised = clean_body(revision.body_markdown, self.graph.title(key), self.graph, key, self.index)
+        revised = clean_body(revision.body_markdown, self.graph.title(key), self.graph, key, self.index, allow_headings=self.cfg.body_headings)
         if revised.strip():
             revised = self._drop_invalid_citations(key, revised)
             atomic_write_text(path, revised.rstrip() + "\n")

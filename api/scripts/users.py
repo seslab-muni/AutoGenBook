@@ -19,12 +19,16 @@ from datetime import datetime, timezone
 
 from api.application.auth import AuthService
 from api.core.db import get_sessionmaker
+from api.core.secrets import LlmKeyCipher
+from api.core.settings import get_settings
 from api.domain.models import User
 from api.infrastructure.db.user_repository import SqlAlchemyUserRepository
 
 # Never read from argv (issue #96): a CLI argument ends up verbatim in shell
 # history and in `ps`/`docker top` output for the process's whole lifetime.
 _PASSWORD_ENV_VAR = "AUTOGENBOOK_USER_PASSWORD"
+# Same rule for a user's personal LLM API key (per-user LLM key).
+_LLM_KEY_ENV_VAR = "AUTOGENBOOK_USER_LLM_KEY"
 
 
 def _read_password() -> str:
@@ -40,6 +44,22 @@ def _read_password() -> str:
         print("password must not be empty", file=sys.stderr)
         raise SystemExit(1)
     return password
+
+
+def _read_llm_key() -> str:
+    env_key = os.environ.get(_LLM_KEY_ENV_VAR)
+    if env_key and env_key.strip():
+        return env_key.strip()
+    if not sys.stdin.isatty():
+        # Piped in (`echo $KEY | python -m api.scripts.users set-llm-key ...`):
+        # `getpass` would try the controlling terminal instead.
+        key = sys.stdin.readline().strip()
+    else:
+        key = getpass.getpass("LLM API key: ").strip()
+    if not key:
+        print("LLM API key must not be empty", file=sys.stderr)
+        raise SystemExit(1)
+    return key
 
 
 async def _create(email: str, name: str) -> None:
@@ -93,6 +113,38 @@ async def _set_active(email: str, is_active: bool) -> None:
         print(f"{email} is now {'active' if is_active else 'inactive'}")
 
 
+async def _set_llm_key(email: str) -> None:
+    cipher = LlmKeyCipher.from_settings(get_settings())
+    if cipher is None:
+        print(
+            "LLM_KEY_ENCRYPTION_KEY is not set; per-user LLM keys are disabled",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    key = _read_llm_key()
+    session_factory = get_sessionmaker()
+    async with session_factory() as session:
+        repo = SqlAlchemyUserRepository(session)
+        user = await repo.get_by_email(email)
+        if user is None:
+            print(f"no user with email {email!r}", file=sys.stderr)
+            raise SystemExit(1)
+        await repo.set_llm_api_key(user.id, cipher.encrypt(key), key[-4:])
+        print(f"LLM API key set for {email} (ends in {key[-4:]})")
+
+
+async def _clear_llm_key(email: str) -> None:
+    session_factory = get_sessionmaker()
+    async with session_factory() as session:
+        repo = SqlAlchemyUserRepository(session)
+        user = await repo.get_by_email(email)
+        if user is None:
+            print(f"no user with email {email!r}", file=sys.stderr)
+            raise SystemExit(1)
+        await repo.clear_llm_api_key(user.id)
+        print(f"LLM API key cleared for {email}")
+
+
 async def _list_users() -> None:
     session_factory = get_sessionmaker()
     async with session_factory() as session:
@@ -102,7 +154,10 @@ async def _list_users() -> None:
             return
         for user in users:
             status = "active" if user.is_active else "inactive"
-            print(f"{user.email}\t{user.display_name}\t{status}\t{user.id}")
+            # Only whether a personal LLM key is set (and its last four characters) -
+            # never the ciphertext.
+            llm_key = f"llm-key:...{user.llm_api_key_last4}" if user.llm_api_key_encrypted else "llm-key:none"
+            print(f"{user.email}\t{user.display_name}\t{status}\t{user.id}\t{llm_key}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -125,6 +180,14 @@ def _build_parser() -> argparse.ArgumentParser:
     activate = subparsers.add_parser("activate", help="reactivate a deactivated user")
     activate.add_argument("--email", required=True)
 
+    set_llm_key = subparsers.add_parser(
+        "set-llm-key", help="store a user's own LLM API key (read from stdin/prompt)"
+    )
+    set_llm_key.add_argument("--email", required=True)
+
+    clear_llm_key = subparsers.add_parser("clear-llm-key", help="remove a user's own LLM API key")
+    clear_llm_key.add_argument("--email", required=True)
+
     subparsers.add_parser("list", help="list all users")
 
     return parser
@@ -140,6 +203,10 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_set_active(args.email, False))
     elif args.command == "activate":
         asyncio.run(_set_active(args.email, True))
+    elif args.command == "set-llm-key":
+        asyncio.run(_set_llm_key(args.email))
+    elif args.command == "clear-llm-key":
+        asyncio.run(_clear_llm_key(args.email))
     elif args.command == "list":
         asyncio.run(_list_users())
     return 0

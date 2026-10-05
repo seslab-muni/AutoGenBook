@@ -31,6 +31,7 @@ import { useFileText } from '@/features/exports/hooks/use-file-text';
 import { LazyMarkdownView } from '@/features/editor/components/markdown-view-lazy';
 import { useRunStream } from '@/features/runs/hooks/use-run-stream';
 import { RUN_KIND_LABELS } from '@/features/runs/lib/run-format';
+import { handleLlmKeyRequired } from '@/features/account/lib/llm-key-error';
 import { useUiStore } from '@/stores/ui-store';
 
 /** First N KB of the Markdown artifact shown inline before the "download for the rest" hint. */
@@ -145,6 +146,7 @@ export function ExportDialog({ project }: ExportDialogProps) {
           toast.success(`${BUILD_LABEL[format]} started`);
         },
         onError: (error) => {
+          if (handleLlmKeyRequired(error)) return;
           if (error instanceof ApiError && error.status === 409) {
             setConflict(error.problem?.detail ?? error.problem?.title ?? 'A run is already active');
             return;

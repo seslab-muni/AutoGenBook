@@ -4,6 +4,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { AlertTriangle, ArrowLeft, PlayCircle, RotateCw, Square } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { handleLlmKeyRequired } from '@/features/account/lib/llm-key-error';
 import { ApiError } from '@/api/client';
 import { outline as outlineQueries } from '@/api/queries/outline';
 import { runs as runQueries, useCancelRunMutation, useRetryRunMutation } from '@/api/queries/runs';
@@ -146,9 +147,10 @@ function RunPage() {
         });
       },
       onError: (error) => {
+        setConfirmResumeOpen(false);
+        if (handleLlmKeyRequired(error)) return;
         const problem = error instanceof ApiError ? error.problem : undefined;
         toast.error(problem?.detail ?? problem?.title ?? 'Could not resume the run');
-        setConfirmResumeOpen(false);
       },
     });
   }

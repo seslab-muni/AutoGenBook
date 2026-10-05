@@ -37,6 +37,7 @@ import {
   formatTokens,
   RUN_STATUS_LABELS,
 } from '@/features/runs/lib/run-format';
+import { handleLlmKeyRequired } from '@/features/account/lib/llm-key-error';
 import { useUiStore } from '@/stores/ui-store';
 
 const QUICK_ACTIONS = [
@@ -175,6 +176,7 @@ export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPane
         toast.success(`Regenerating §${node.sectionNumber}`);
       },
       onError: (error) => {
+        if (handleLlmKeyRequired(error)) return;
         if (error instanceof ApiError && error.status === 409) {
           setConflict({
             title: error.problem?.title ?? 'Cannot regenerate right now',

@@ -85,6 +85,10 @@ class User:
     password_changed_at: datetime
     created_at: datetime
     updated_at: datetime
+    # Per-user LLM key (see `UserRecord`): ciphertext only, never the plain key.
+    llm_api_key_encrypted: str | None = None
+    llm_api_key_last4: str | None = None
+    llm_api_key_updated_at: datetime | None = None
 
 
 class SourceType(str, enum.Enum):

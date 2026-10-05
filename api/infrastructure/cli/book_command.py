@@ -56,6 +56,13 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "AUTOGENBOOK_KB_OCR",
     "AUTOGENBOOK_KB_OCR_LANG",
     "TAVILY_API_KEY",
+    # Engine tuning set deployment-wide (`k8s/stages/*.toml`, ConfigMap): without these in
+    # the allowlist the values never reached the `run_engine.py` subprocess, so the
+    # per-replica parallelism/reasoning-effort settings were silently ignored.
+    "AUTOGENBOOK_CONCURRENCY",
+    "AUTOGENBOOK_LLM_REASONING_EFFORT",
+    # Engine (engine/) setting: sub-headings inside section bodies, off by default.
+    "AUTOGENBOOK_BODY_HEADINGS",
     # OpenRouter client tuning (openrouter_llm.py) - not overridden by
     # `main.py`'s import-time env writes, so a parent-set value reaches the
     # client unlike OPENROUTER_INPUT_COST_PER_M/OPENROUTER_OUTPUT_COST_PER_M.
@@ -112,6 +119,8 @@ def build_command(
     settings: "Settings",
     *,
     author: str = "",
+    llm_api_key: str | None = None,
+    concurrency: int | None = None,
 ) -> tuple[list[str], dict[str, str], str]:
     """Build `(argv, env, cwd)` for one book-mode CLI subprocess run.
 
@@ -121,6 +130,12 @@ def build_command(
     its prompt pack and audit `project_root` relative to the process's
     current directory (`autogenbook/pipelines/book_pipeline.py:550`), so all
     run-specific paths handed to the CLI must be absolute.
+
+    `llm_api_key` (per-user LLM key) is the already-decrypted key of the user who started
+    the run; when given it replaces whatever deployment key the allowlist copied from the
+    parent environment. `concurrency` overrides `AUTOGENBOOK_CONCURRENCY` (a per-user key
+    has its own parallel-request budget at the gateway). Both stay `None` for a run on the
+    shared deployment key, which keeps the deployment's own values.
     """
 
     work_dir = Path(work_dir)
@@ -218,5 +233,16 @@ def build_command(
         # unlike writing straight into `book_structure.json`, which only the
         # `--use-json` path would ever read).
         env["AUTOGENBOOK_BOOK_AUTHOR"] = author.strip()
+
+    if llm_api_key:
+        # Both names, because both CLI generations read them (`openrouter_llm.py` and
+        # `engine/config.py`, `OPENROUTER_API_KEY` taking precedence) - setting only one
+        # would let the deployment key in the other win. `OPENAI_API_KEY` is dropped so a
+        # fallback to it can never resurrect a shared key.
+        env["OPENROUTER_API_KEY"] = llm_api_key
+        env["AUTOGENBOOK_LLM_API_KEY"] = llm_api_key
+        env.pop("OPENAI_API_KEY", None)
+    if concurrency is not None:
+        env["AUTOGENBOOK_CONCURRENCY"] = str(concurrency)
 
     return argv, env, str(settings.repo_root)

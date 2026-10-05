@@ -209,7 +209,7 @@ class PaperRun(BookRun):
             "section_title": common["section_title"],
             "section_summary": common["section_summary"],
             "target_words": common["target_words"],
-            "heading_rule": heading_rule(graph, key),
+            "heading_rule": heading_rule(graph, key, allow=self.cfg.body_headings),
             "retrieved_context": context,
         }
 

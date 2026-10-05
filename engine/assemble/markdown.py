@@ -62,9 +62,35 @@ def _norm(text: str) -> str:
     return re.sub(r"\W+", " ", text).strip().casefold()
 
 
-def normalize_body(body: str, title: str, level: int) -> str:
-    """Drop a leading heading that repeats the node title and shift the
-    body's own headings below the node heading (`level`)."""
+def _flatten_headings(lines: list[str]) -> list[str]:
+    """Body headings become bold lead-in lines (the slide builder's rule, see
+    `deck.slide_body`): the outline is the document's structure, a body may
+    not add levels of its own. Fenced code is left alone."""
+    out: list[str] = []
+    in_fence = False
+    for line in lines:
+        if line.strip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        match = None if in_fence else _HEADING_LINE_RE.match(line)
+        if not match:
+            out.append(line)
+            continue
+        text = match.group(2).strip().strip("*").strip()
+        if not text:
+            continue
+        if out and out[-1].strip():
+            out.append("")
+        out += [f"**{text}**", ""]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+    return text.split("\n")
+
+
+def normalize_body(body: str, title: str, level: int, *, allow_headings: bool = False) -> str:
+    """Drop a leading heading that repeats the node title. The body's own
+    headings are turned into bold lead-ins unless `allow_headings`, in which
+    case they are shifted below the node heading (`level`)."""
     lines = body.split("\n")
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -72,6 +98,8 @@ def normalize_body(body: str, title: str, level: int) -> str:
         first = _HEADING_LINE_RE.match(lines[0])
         if first and _norm(first.group(2)) == _norm(title):
             lines.pop(0)
+    if not allow_headings:
+        return "\n".join(_flatten_headings(lines)).strip()
     in_fence = False
     levels: list[int] = []
     for line in lines:
@@ -132,6 +160,7 @@ def assemble_document(
     numbering: Numbering | None = None,
     resolve: "Callable[[str, Numbering, str], str]" = resolve_numeric,
     bibliography: "Callable[[Numbering, str], list[str]] | None" = bibliography_lines,
+    body_headings: bool = False,
 ) -> AssembledDocument:
     """`resolve` renders a section's citation markers (numbered by default),
     `bibliography` the closing reference list (None: no list, e.g. footnotes
@@ -156,7 +185,7 @@ def assemble_document(
             continue
         if path.suffix.lower() == ".tex":
             doc.legacy_tex = True
-        body = normalize_body(read_section(path), node_title, level)
+        body = normalize_body(read_section(path), node_title, level, allow_headings=body_headings)
         doc.sections.append((key, body))
         if body:
             parts.append(resolve(body, numbering, key))

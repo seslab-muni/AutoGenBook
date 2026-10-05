@@ -11,6 +11,7 @@ import {
   Plus,
   Settings,
   UserRound,
+  KeyRound,
 } from 'lucide-react';
 
 import { auth } from '@/api/queries/auth';
@@ -176,6 +177,10 @@ export function AppHeader({ project, runningRun, queuedCount }: AppHeaderProps) 
                 <span className="font-normal text-muted-foreground">{currentUser.email}</span>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => openModal('account')}>
+                <KeyRound />
+                Account settings
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => signOut()}>
                 <LogOut />
                 Sign out

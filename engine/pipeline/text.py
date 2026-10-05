@@ -101,9 +101,20 @@ def glossary_text(glossary: Glossary | None, max_chars: int = 4000) -> str:
     return text if len(text) <= max_chars else text[: max_chars - 3] + "..."
 
 
-def heading_rule(graph: DocGraph, key: str) -> str:
-    # The node's own heading is level depth+1 in the assembled document, so
-    # body sub-headings start one level below it; past `######` there is none.
+NO_BODY_HEADINGS = (
+    "Do not use headings inside the body: the outline is the document's only structure. "
+    "Where a topic shift needs a signpost, open the paragraph with a short bold lead-in phrase instead."
+)
+
+
+def heading_rule(graph: DocGraph, key: str, *, allow: bool = False) -> str:
+    # Default: no body headings (`RunConfig.body_headings`), so the outline the
+    # user authored is the whole hierarchy of the Markdown and the PDF. When
+    # allowed, the node's own heading is level depth+1 in the assembled
+    # document, so body sub-headings start one level below it; past `######`
+    # there is none.
+    if not allow:
+        return NO_BODY_HEADINGS
     level = graph.depth(key) + 2
     if level > 6:
         return "Do not use headings inside the body."
@@ -113,10 +124,11 @@ def heading_rule(graph: DocGraph, key: str) -> str:
 _FENCE_WRAP_RE = re.compile(r"^\s*```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL | re.IGNORECASE)
 
 
-def clean_body(body: str, title: str, graph: DocGraph, key: str, index: CitationIndex) -> str:
+def clean_body(body: str, title: str, graph: DocGraph, key: str, index: CitationIndex, *, allow_headings: bool = False) -> str:
     """Normalise a model-written body: unwrap a whole-body code fence, drop a
-    repeated title heading, fix heading levels, and rewrite `\\cite{}` and
-    `\\footnote{Source: RID:...}` into `[cite_key]` markers."""
+    repeated title heading, flatten (or, with `allow_headings`, re-level) body
+    headings, and rewrite `\\cite{}` and `\\footnote{Source: RID:...}` into
+    `[cite_key]` markers."""
     text = (body or "").replace("\r\n", "\n").strip()
     match = _FENCE_WRAP_RE.match(text)
     if match:
@@ -124,7 +136,7 @@ def clean_body(body: str, title: str, graph: DocGraph, key: str, index: Citation
 
     text = single_key_citations(text, index)
     level = min(6, graph.depth(key) + 1)
-    return normalize_body(text, title, level)
+    return normalize_body(text, title, level, allow_headings=allow_headings)
 
 
 def single_key_citations(text: str, index: CitationIndex) -> str:

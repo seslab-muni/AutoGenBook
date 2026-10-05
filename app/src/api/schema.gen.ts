@@ -89,6 +89,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/me/llm-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Llm Key */
+        put: operations["auth-set_llm_key"];
+        post?: never;
+        /** Clear Llm Key */
+        delete: operations["auth-clear_llm_key"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files": {
         parameters: {
             query?: never;
@@ -604,6 +622,16 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** LlmKeyOut */
+        LlmKeyOut: {
+            /** Last4 */
+            last4: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -1360,6 +1388,11 @@ export interface components {
          * @enum {string}
          */
         RunStatus: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+        /** SetLlmKeyRequest */
+        SetLlmKeyRequest: {
+            /** Apikey */
+            apiKey: string;
+        };
         /** Source */
         Source: {
             /**
@@ -1461,6 +1494,18 @@ export interface components {
             email: string;
             /** Displayname */
             displayName: string;
+            /**
+             * Llmkeyconfigurable
+             * @default false
+             */
+            llmKeyConfigurable?: boolean;
+            /**
+             * Llmkeypolicy
+             * @default optional
+             * @enum {string}
+             */
+            llmKeyPolicy?: "optional" | "required";
+            llmKey?: components["schemas"]["LlmKeyOut"] | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1596,6 +1641,57 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UserOut"];
                 };
+            };
+        };
+    };
+    "auth-set_llm_key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetLlmKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "auth-clear_llm_key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

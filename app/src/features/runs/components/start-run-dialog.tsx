@@ -4,6 +4,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
 import { ApiError } from '@/api/client';
+import { auth } from '@/api/queries/auth';
 import { outline } from '@/api/queries/outline';
 import { useCreateRunMutation } from '@/api/queries/runs';
 import type { AuditMode, OutputFormat, Project, RunOptionsIn } from '@/api/types';
@@ -25,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { handleLlmKeyRequired } from '@/features/account/lib/llm-key-error';
 import { lockedNodes } from '@/features/outline/content-lock';
 import { isLeaf } from '@/features/outline/model';
 import { scopedNodes } from '@/features/outline/source-scope';
@@ -79,6 +81,18 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
 
   const createMutation = useCreateRunMutation(project.id);
 
+  // Per-user LLM key: under policy `required` a run without the user's own key is refused by the
+  // API (409 `llm_key_required`), so block it here and point at the account dialog; under
+  // `optional` just hint that the shared key will be used.
+  const { data: currentUser } = useQuery({ ...auth.me(), enabled: open });
+  const hasUserKey = Boolean(currentUser?.llmKey);
+  const keyRequiredMissing = currentUser?.llmKeyPolicy === 'required' && !hasUserKey;
+  const keyOptionalHint =
+    currentUser !== undefined &&
+    currentUser.llmKeyPolicy !== 'required' &&
+    currentUser.llmKeyConfigurable === true &&
+    !hasUserKey;
+
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
@@ -117,6 +131,8 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
         });
       },
       onError: (error) => {
+        // The cached `auth.me()` may be stale (e.g. the policy changed) - surface the same gate.
+        if (handleLlmKeyRequired(error)) return;
         if (error instanceof ApiError && error.status === 409) {
           toast.error(error.problem?.title ?? 'Could not queue this run', {
             description: error.problem?.detail ?? undefined,
@@ -148,6 +164,40 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
         </DialogHeader>
 
         <div className="space-y-4">
+          {keyRequiredMissing ? (
+            <div
+              role="alert"
+              data-testid="start-run-llm-key-required"
+              className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-foreground"
+            >
+              <p>
+                <span className="block font-medium">Your own LLM API key is required.</span>
+                This deployment only runs generation with a personal key. Set yours in your account
+                settings, then start the run.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => openModal('account')}
+              >
+                Open account settings
+              </Button>
+            </div>
+          ) : null}
+          {keyOptionalHint ? (
+            <p className="text-xs text-muted-foreground" data-testid="start-run-llm-key-hint">
+              This run will use the shared LLM key. Add your own key in{' '}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => openModal('account')}
+              >
+                account settings
+              </button>{' '}
+              to get your own parallel-request budget.
+            </p>
+          ) : null}
           <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
             <p>
               <span className="font-medium text-foreground">Estimated size:</span> {nodeCount}{' '}
@@ -174,7 +224,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={createMutation.isPending}
+                  disabled={createMutation.isPending || keyRequiredMissing}
                   onClick={() => handleSubmit({ unlockAll: true })}
                 >
                   Unlock all and regenerate everything
@@ -266,7 +316,11 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
           <Button type="button" variant="outline" onClick={closeModal}>
             Cancel
           </Button>
-          <Button type="button" onClick={() => handleSubmit()} disabled={createMutation.isPending}>
+          <Button
+            type="button"
+            onClick={() => handleSubmit()}
+            disabled={createMutation.isPending || keyRequiredMissing}
+          >
             {createMutation.isPending ? 'Starting…' : 'Start run'}
           </Button>
         </DialogFooter>

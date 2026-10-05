@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,57 @@ def test_llm_model_from_options_overrides_parent_env(
     )
     _argv, env, _cwd = build_command(work_dir, options, settings)
     assert env["AUTOGENBOOK_LLM_MODEL"] == "anthropic/claude-3.5-sonnet"
+
+
+# Engine tuning set deployment-wide (`k8s/stages/*.toml`) used to be dropped here because
+# these two were missing from the allowlist.
+@pytest.mark.parametrize("key", ["AUTOGENBOOK_CONCURRENCY", "AUTOGENBOOK_LLM_REASONING_EFFORT"])
+def test_engine_tuning_vars_are_forwarded(settings: Settings, work_dir: Path, monkeypatch, key):
+    assert key in ENV_ALLOWLIST
+    monkeypatch.setenv(key, "3" if key.endswith("CONCURRENCY") else "low")
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env[key] == os.environ[key]
+
+
+# Per-user LLM key.
+def test_llm_api_key_overrides_deployment_key_under_both_names(
+    settings: Settings, work_dir: Path, monkeypatch
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-shared")
+    monkeypatch.setenv("AUTOGENBOOK_LLM_API_KEY", "sk-shared-2")
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings, llm_api_key="sk-user")
+    assert env["OPENROUTER_API_KEY"] == "sk-user"
+    assert env["AUTOGENBOOK_LLM_API_KEY"] == "sk-user"
+    assert "OPENAI_API_KEY" not in env
+
+
+def test_llm_api_key_is_never_forwarded_from_openai_api_key(
+    settings: Settings, work_dir: Path, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings, llm_api_key="sk-user")
+    assert "OPENAI_API_KEY" not in env
+
+
+def test_no_llm_api_key_keeps_deployment_key_and_concurrency(
+    settings: Settings, work_dir: Path, monkeypatch
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-shared")
+    monkeypatch.setenv("AUTOGENBOOK_CONCURRENCY", "2")
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env["OPENROUTER_API_KEY"] == "sk-shared"
+    assert "AUTOGENBOOK_LLM_API_KEY" not in env
+    assert env["AUTOGENBOOK_CONCURRENCY"] == "2"
+
+
+def test_concurrency_parameter_overrides_parent_env(
+    settings: Settings, work_dir: Path, monkeypatch
+):
+    monkeypatch.setenv("AUTOGENBOOK_CONCURRENCY", "2")
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings, concurrency=4)
+    assert env["AUTOGENBOOK_CONCURRENCY"] == "4"
