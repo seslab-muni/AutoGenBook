@@ -5,6 +5,10 @@ x-cli-env: &cli-env
   AUTOGENBOOK_LLM_MODEL: ${AUTOGENBOOK_LLM_MODEL:-}
   AUTOGENBOOK_LLM_MINI_MODEL: ${AUTOGENBOOK_LLM_MINI_MODEL:-}
   AUTOGENBOOK_FORCE_MINI_MODEL: ${AUTOGENBOOK_FORCE_MINI_MODEL:-}
+  # Engine tuning (forwarded to the CLI subprocess by `book_command.py`'s ENV_ALLOWLIST);
+  # empty = the engine's own default.
+  AUTOGENBOOK_CONCURRENCY: ${AUTOGENBOOK_CONCURRENCY:-}
+  AUTOGENBOOK_LLM_REASONING_EFFORT: ${AUTOGENBOOK_LLM_REASONING_EFFORT:-}
   TAVILY_API_KEY: ${TAVILY_API_KEY:-}
   AUTOGENBOOK_KB_OCR: ${AUTOGENBOOK_KB_OCR:-1}
   AUTOGENBOOK_KB_OCR_LANG: ${AUTOGENBOOK_KB_OCR_LANG:-eng}
@@ -36,6 +40,11 @@ x-app-env: &app-env
   RUNS_DIR: /app/runs
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
   KB_EXTRACT_CACHE_DIR: /app/kb_cache
+  # Per-user LLM keys (api/core/secrets.py): the API reads the encryption key to store/report
+  # keys, the worker to decrypt them into the CLI subprocess's env. Empty/unset disables the feature.
+  LLM_KEY_ENCRYPTION_KEY: ${LLM_KEY_ENCRYPTION_KEY:-}
+  LLM_KEY_POLICY: ${LLM_KEY_POLICY:-optional}
+  LLM_USER_KEY_CONCURRENCY: ${LLM_USER_KEY_CONCURRENCY:-4}
 
 services:
   web:

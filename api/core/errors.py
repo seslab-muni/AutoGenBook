@@ -27,6 +27,18 @@ def _cap_echoed_input(value: Any) -> Any:
     return value
 
 
+# Routes whose request body carries a secret: their 422 bodies must never echo `input` (nor
+# `ctx`), whatever field the client got wrong - e.g. a wrong field name makes pydantic report
+# the whole secret value as the offending input of an `extra_forbidden` error.
+# Any new route whose request body carries a secret (password, API key, token, ...) MUST be
+# registered here, or a wrong field name will echo the secret back in its 422.
+_SECRET_BODY_PATH_SUFFIXES = ("/auth/me/llm-key", "/auth/login")
+
+
+def _strip_inputs(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{k: v for k, v in error.items() if k not in ("input", "ctx")} for error in errors]
+
+
 def _cap_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     capped = []
     for error in errors:
@@ -45,8 +57,12 @@ class ApiError(Exception):
     # body - only `Unauthorized` uses this (`WWW-Authenticate: Cookie`).
     headers: dict[str, str] | None = None
 
-    def __init__(self, detail: str | None = None) -> None:
+    def __init__(self, detail: str | None = None, *, code: str | None = None) -> None:
         self.detail = detail
+        # Optional machine-readable discriminator (e.g. `llm_key_required`), emitted as
+        # the problem body's `code` extension member so a client can branch on it
+        # instead of string-matching `detail`.
+        self.code = code
         super().__init__(detail)
 
 
@@ -89,7 +105,12 @@ class PayloadTooLarge(ApiError):
 
 
 def _problem_response(
-    status_code: int, title: str, detail: Any, instance: str, headers: dict[str, str] | None = None
+    status_code: int,
+    title: str,
+    detail: Any,
+    instance: str,
+    headers: dict[str, str] | None = None,
+    code: str | None = None,
 ) -> JSONResponse:
     body: dict[str, Any] = {
         "type": "about:blank",
@@ -99,6 +120,8 @@ def _problem_response(
     }
     if detail is not None:
         body["detail"] = detail
+    if code is not None:
+        body["code"] = code
     return JSONResponse(
         status_code=status_code, content=body, media_type=PROBLEM_JSON, headers=headers
     )
@@ -108,17 +131,22 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         return _problem_response(
-            exc.status_code, exc.title, exc.detail, request.url.path, exc.headers
+            exc.status_code, exc.title, exc.detail, request.url.path, exc.headers, exc.code
         )
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        errors = (
+            _strip_inputs(exc.errors())
+            if request.url.path.endswith(_SECRET_BODY_PATH_SUFFIXES)
+            else _cap_validation_errors(exc.errors())
+        )
         return _problem_response(
             422,
             "Validation Failed",
-            jsonable_encoder(_cap_validation_errors(exc.errors())),
+            jsonable_encoder(errors),
             request.url.path,
         )
 

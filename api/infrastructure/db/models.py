@@ -44,6 +44,15 @@ class UserRecord(Base):
     password_changed_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
+    # Per-user LLM key: Fernet ciphertext (`api/core/secrets.py`), never the plain key.
+    # `last4` is the only part ever shown back to the user; all three are NULL when no
+    # key is stored (the user's runs then use the deployment key, subject to
+    # `LLM_KEY_POLICY`).
+    llm_api_key_encrypted: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    llm_api_key_last4: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    llm_api_key_updated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )

@@ -236,4 +236,43 @@ describe('StartRunDialog', () => {
     // ...and the run was actually started.
     expect(await screen.findByText('Full run')).toBeInTheDocument();
   });
+
+  // Per-user LLM key gating.
+  it('blocks starting a run under policy "required" without a key and opens account settings', async () => {
+    db.llmKeyPolicy = 'required';
+    const user = userEvent.setup();
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    useUiStore.setState({ activeModal: 'start-run' });
+    const alert = await screen.findByTestId('start-run-llm-key-required');
+    expect(alert).toHaveTextContent('Your own LLM API key is required');
+    expect(screen.getByRole('button', { name: 'Start run' })).toBeDisabled();
+
+    await user.click(within(alert).getByRole('button', { name: 'Open account settings' }));
+    expect(await screen.findByRole('heading', { name: 'Account' })).toBeInTheDocument();
+  });
+
+  it('enables the start button under policy "required" once the user has a key', async () => {
+    db.llmKeyPolicy = 'required';
+    db.llmKey = { last4: '1234', updatedAt: '2026-10-01T00:00:00Z' };
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    useUiStore.setState({ activeModal: 'start-run' });
+    await screen.findByRole('heading', { name: 'Start a run' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start run' })).toBeEnabled());
+    expect(screen.queryByTestId('start-run-llm-key-required')).toBeNull();
+    expect(screen.queryByTestId('start-run-llm-key-hint')).toBeNull();
+  });
+
+  it('shows a soft hint, not a block, under policy "optional" without a key', async () => {
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    useUiStore.setState({ activeModal: 'start-run' });
+    expect(await screen.findByTestId('start-run-llm-key-hint')).toHaveTextContent('shared LLM key');
+    expect(screen.queryByTestId('start-run-llm-key-required')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  });
 });

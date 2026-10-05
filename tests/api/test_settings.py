@@ -7,6 +7,8 @@ credentials doesn't fail silently.
 from __future__ import annotations
 
 import pytest
+from cryptography.fernet import Fernet
+from pydantic import ValidationError
 
 from api.core.settings import (
     DEFAULT_S3_SECRET_KEY,
@@ -14,6 +16,7 @@ from api.core.settings import (
     Settings,
     default_credentials_warning,
     default_llm_model,
+    llm_key_feature_enabled,
     resolved_llm_api_key,
     resolved_llm_base_url,
 )
@@ -107,3 +110,47 @@ def test_resolved_llm_api_key_falls_back_to_autogenbook_llm_api_key() -> None:
 def test_resolved_llm_api_key_none_when_neither_is_set() -> None:
     settings = _settings(autogenbook_llm_api_key=None, openrouter_api_key=None)
     assert resolved_llm_api_key(settings) is None
+
+
+# Per-user LLM key: `LLM_KEY_ENCRYPTION_KEY` unset means the feature is disabled; a malformed
+# one must fail fast at boot.
+def test_llm_key_feature_disabled_by_default() -> None:
+    settings = _settings()
+    assert settings.llm_key_encryption_key is None
+    assert settings.llm_key_policy == "optional"
+    assert settings.llm_user_key_concurrency == 4
+    assert llm_key_feature_enabled(settings) is False
+
+
+def test_blank_encryption_key_means_disabled() -> None:
+    assert _settings(llm_key_encryption_key="   ").llm_key_encryption_key is None
+    assert _settings(LLM_KEY_ENCRYPTION_KEY="").llm_key_encryption_key is None
+
+
+def test_valid_fernet_key_enables_the_feature() -> None:
+    key = Fernet.generate_key().decode()
+    settings = _settings(llm_key_encryption_key=key)
+    assert settings.llm_key_encryption_key == key
+    assert llm_key_feature_enabled(settings) is True
+
+
+@pytest.mark.parametrize("bad", ["not-a-fernet-key", "short", "a" * 44])
+def test_malformed_fernet_key_fails_at_boot(bad: str) -> None:
+    with pytest.raises(ValidationError, match="LLM_KEY_ENCRYPTION_KEY") as excinfo:
+        _settings(llm_key_encryption_key=bad)
+    # `hide_input_in_errors`: the malformed value is never printed in the boot error.
+    assert bad not in str(excinfo.value)
+
+
+def test_required_policy_needs_an_encryption_key() -> None:
+    with pytest.raises(ValidationError, match="LLM_KEY_POLICY=required"):
+        _settings(llm_key_policy="required")
+    key = Fernet.generate_key().decode()
+    assert _settings(llm_key_policy="required", llm_key_encryption_key=key).llm_key_policy == "required"
+
+
+def test_unknown_policy_and_non_positive_concurrency_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _settings(llm_key_policy="sometimes")
+    with pytest.raises(ValidationError):
+        _settings(llm_user_key_concurrency=0)

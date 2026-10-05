@@ -161,6 +161,20 @@ class SqlAlchemyRunRepository:
         )
         return [run_to_domain(record) for record in result.scalars().all()]
 
+    async def count_running_for_user(
+        self, user_id: uuid.UUID, *, exclude_run_id: uuid.UUID
+    ) -> int:
+        count = await self._session.scalar(
+            select(func.count())
+            .select_from(RunRecord)
+            .where(
+                RunRecord.started_by == user_id,
+                RunRecord.status == RunStatus.running,
+                RunRecord.id != exclude_run_id,
+            )
+        )
+        return int(count or 0)
+
     async def list(
         self,
         project_id: uuid.UUID,

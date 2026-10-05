@@ -27,6 +27,13 @@ def _to_domain(record: UserRecord) -> User:
         password_changed_at=_as_aware_utc(record.password_changed_at),
         created_at=_as_aware_utc(record.created_at),
         updated_at=_as_aware_utc(record.updated_at),
+        llm_api_key_encrypted=record.llm_api_key_encrypted,
+        llm_api_key_last4=record.llm_api_key_last4,
+        llm_api_key_updated_at=(
+            _as_aware_utc(record.llm_api_key_updated_at)
+            if record.llm_api_key_updated_at is not None
+            else None
+        ),
     )
 
 
@@ -79,6 +86,31 @@ class SqlAlchemyUserRepository:
         if record is None:
             raise NotFound(f"user {user_id} does not exist")
         record.is_active = is_active
+        record.updated_at = datetime.now(timezone.utc)
+        await self._session.commit()
+        await self._session.refresh(record)
+        return _to_domain(record)
+
+    async def set_llm_api_key(self, user_id: uuid.UUID, encrypted: str, last4: str) -> User:
+        record = await self._session.get(UserRecord, user_id)
+        if record is None:
+            raise NotFound(f"user {user_id} does not exist")
+        now = datetime.now(timezone.utc)
+        record.llm_api_key_encrypted = encrypted
+        record.llm_api_key_last4 = last4
+        record.llm_api_key_updated_at = now
+        record.updated_at = now
+        await self._session.commit()
+        await self._session.refresh(record)
+        return _to_domain(record)
+
+    async def clear_llm_api_key(self, user_id: uuid.UUID) -> User:
+        record = await self._session.get(UserRecord, user_id)
+        if record is None:
+            raise NotFound(f"user {user_id} does not exist")
+        record.llm_api_key_encrypted = None
+        record.llm_api_key_last4 = None
+        record.llm_api_key_updated_at = None
         record.updated_at = datetime.now(timezone.utc)
         await self._session.commit()
         await self._session.refresh(record)

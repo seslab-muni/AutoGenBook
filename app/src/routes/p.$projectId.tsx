@@ -12,6 +12,7 @@ import { ProjectSettingsDialog } from '@/features/projects/components/project-se
 import { ExportDialog } from '@/features/exports/components/export-dialog';
 import { useProjectRuns } from '@/features/runs/hooks/use-project-runs';
 import { RunsPanel } from '@/features/runs/components/runs-panel';
+import { AccountDialog } from '@/features/account/components/account-dialog';
 import { StartRunDialog } from '@/features/runs/components/start-run-dialog';
 import { SourcesDialog } from '@/features/sources/components/sources-dialog';
 
@@ -81,6 +82,7 @@ function ProjectLayout() {
       <ProjectSettingsDialog project={current} />
       <SourcesDialog projectId={projectId} />
       <StartRunDialog project={current} />
+      <AccountDialog />
       <ExportDialog project={current} />
       <RunsPanel projectId={projectId} />
     </div>

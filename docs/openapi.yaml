@@ -94,6 +94,43 @@ paths:
                 $ref: '#/components/schemas/UserOut'
       security:
       - cookieAuth: []
+  /api/v1/auth/me/llm-key:
+    put:
+      tags:
+      - auth
+      summary: Set Llm Key
+      operationId: auth-set_llm_key
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLlmKeyRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - cookieAuth: []
+    delete:
+      tags:
+      - auth
+      summary: Clear Llm Key
+      operationId: auth-clear_llm_key
+      responses:
+        '204':
+          description: Successful Response
+      security:
+      - cookieAuth: []
   /api/v1/files:
     post:
       tags:
@@ -1565,6 +1602,20 @@ components:
           title: Detail
       type: object
       title: HTTPValidationError
+    LlmKeyOut:
+      properties:
+        last4:
+          type: string
+          title: Last4
+        updatedAt:
+          type: string
+          format: date-time
+          title: Updatedat
+      type: object
+      required:
+      - last4
+      - updatedAt
+      title: LlmKeyOut
     LoginRequest:
       properties:
         email:
@@ -3011,6 +3062,16 @@ components:
       - failed
       - cancelled
       title: RunStatus
+    SetLlmKeyRequest:
+      properties:
+        apiKey:
+          type: string
+          title: Apikey
+      additionalProperties: false
+      type: object
+      required:
+      - apiKey
+      title: SetLlmKeyRequest
     Source:
       properties:
         id:
@@ -3201,6 +3262,21 @@ components:
         displayName:
           type: string
           title: Displayname
+        llmKeyConfigurable:
+          type: boolean
+          title: Llmkeyconfigurable
+          default: false
+        llmKeyPolicy:
+          type: string
+          enum:
+          - optional
+          - required
+          title: Llmkeypolicy
+          default: optional
+        llmKey:
+          anyOf:
+          - $ref: '#/components/schemas/LlmKeyOut'
+          - type: 'null'
       type: object
       required:
       - id

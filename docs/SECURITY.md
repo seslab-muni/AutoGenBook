@@ -3,6 +3,7 @@
 ## Secrets and credentials
 
 - LLM API keys are read from environment variables (e.g., `OPENROUTER_API_KEY`, `AUTOGENBOOK_LLM_API_KEY`, `OPENAI_API_KEY`) and never from files. (`openrouter_llm.py:OpenRouterLLM.__init__`)
+- Per-user LLM keys are stored encrypted at rest (Fernet, keyed by `LLM_KEY_ENCRYPTION_KEY`; `users.llm_api_key_encrypted`). The API only ever returns the last four characters (`UserOut.llmKey`), the admin `list` command prints the same, and a malformed or rotated encryption key fails loudly (boot error / failed run) rather than falling back to the shared key. The plain key exists only in the `PUT /auth/me/llm-key` request body, in the worker's memory and in the CLI subprocess's environment (`OPENROUTER_API_KEY`/`AUTOGENBOOK_LLM_API_KEY`). It is not logged: request logging records method/path/status only, validation errors never echo it, the subprocess environment is never logged, and neither `run_meta.json`/`llm_usage.jsonl` nor run events contain it (a run using a user key records only its last four characters). (`api/core/secrets.py`, `api/application/auth.py:AuthService.set_llm_key`, `api/application/runs.py:GenerationService._resolve_user_llm_key`)
 - MCP gateway credentials are read from environment variables. (`mcp_gateway.py:MCPGatewayClient.__init__`)
 - Tavily API key is read from `TAVILY_API_KEY`. (`autogenbook/retrieval/tavily.py:search_web`)
 

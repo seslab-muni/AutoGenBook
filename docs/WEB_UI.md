@@ -16,6 +16,17 @@ Playwright e2e/a11y suite).
 | `/p/$projectId` | `routes/p.$projectId.index.tsx` | The studio: outline pane (left), editor pane (center), copilot/citations/review tabs (right). Dialogs for sources, export, settings, and starting a run are mounted here, each gated by `useUiStore`'s `activeModal`. |
 | `/p/$projectId/runs/$runId` | `routes/p.$projectId.runs.$runId.tsx` → `features/runs` | Run detail: live status, event log, artifacts, cost summary. Header actions include Cancel (while active), Regenerate again (for a `regenerate_section` run), and Resume (issue #124 — only when `run.retryable`; the only place this action appears). |
 
+**Account dialog (per-user LLM key).** The header's account menu has an
+“Account settings” item opening `features/account/components/account-dialog.tsx`:
+a status line (“No key set” / “Key set, ends in ••••1234, updated <date>”), a
+password-type input to set or replace the key, Save and Remove. When
+`GET /auth/me` reports `llmKeyConfigurable: false` the dialog explains why and
+disables the input. The start-run dialog reads the same `auth.me()` data: under
+policy `required` with no key it shows an alert (with a shortcut to the account
+dialog) and disables the Start buttons; under `optional` it shows a soft hint
+that the shared key will be used. The key is only ever held in the input until
+submitted - the API never returns it.
+
 **Content locks (issue #113).** In the studio's outline pane a drafted leaf
 section can be *content-locked* from its row's hover action or context menu
 (“Lock content — keep as-is on the next run”), from the properties sheet's

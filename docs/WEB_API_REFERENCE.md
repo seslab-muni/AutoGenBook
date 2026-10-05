@@ -56,12 +56,29 @@ No path/query/body. Returns the caller's own account.
 | `id` | `uuid` | |
 | `email` | `string` | |
 | `displayName` | `string` | |
+| `llmKeyConfigurable` | `boolean` | Per-user LLM key: whether the deployment can store personal keys (`LLM_KEY_ENCRYPTION_KEY` set). |
+| `llmKeyPolicy` | `"optional" \| "required"` | `LLM_KEY_POLICY`: whether a run needs the user's own key. |
+| `llmKey` | `{last4, updatedAt} \| null` | The user's stored key as the API reveals it: its last four characters and when it was set. The key and its ciphertext are never returned. |
 
 Status codes:
 - `200` — body is the user above.
 - `401` — missing, expired, or invalidated (post `set-password`) session; header `WWW-Authenticate: Cookie`.
 
 Source: `api/presentation/routers/auth.py:me`
+
+#### `PUT /api/v1/auth/me/llm-key`
+
+Body (`SetLlmKeyRequest`, `extra="forbid"`): `apiKey` (string; trimmed, must be non-blank, at most 512 characters). Stores it Fernet-encrypted as the caller's own LLM key (replacing any previous one); their runs then use it instead of the shared key.
+
+Status codes: `200` — the updated user (as `GET /auth/me`); `401`; `409` code `llm_key_disabled` if the deployment has no `LLM_KEY_ENCRYPTION_KEY`; `422` for a blank/too-long key (the error never echoes the value). The body is never logged (`RequestIdMiddleware` logs only method, path and status).
+
+Source: `api/presentation/routers/auth.py:set_llm_key`, `api/application/auth.py:AuthService.set_llm_key`
+
+#### `DELETE /api/v1/auth/me/llm-key`
+
+Clears the caller's stored key (works even when the feature is disabled, so leftovers can be removed). Status codes: `204`; `401`.
+
+Source: `api/presentation/routers/auth.py:clear_llm_key`
 
 ## System endpoints
 
@@ -342,7 +359,7 @@ Body (`RunOptionsIn`, `extra="forbid"`): `outline` (`project` default — use th
 
 `legacyTex` is also rejected when `outline` is `project` and any outline node is `contentLocked` (issue #113) unless `unlockAll` is set: the legacy path generates LaTeX, and a locked section's text is Markdown. Locked sections otherwise always apply to a `project`-outline full run — their text is written to `out/locked_sections/<nodeId>.md` in the run's own work dir (so locks keep working after older work dirs are swept) and referenced from `book_structure.json`; `generate` sends no outline, so locks are inapplicable there.
 
-Status codes: `202`; `404` if the project doesn't exist; `409` if the project's queue is full (`MAX_QUEUED_RUNS_PER_PROJECT` queued runs already); `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format, or `legacyTex` with a content-locked node.
+Status codes: `202`; `404` if the project doesn't exist; `409` if the project's queue is full (`MAX_QUEUED_RUNS_PER_PROJECT` queued runs already) or, under `LLM_KEY_POLICY=required`, if the starting user has no stored LLM key (problem body carries `code: "llm_key_required"`; `regenerate`, `retry` and `export` apply the same rule - `queue_admission_blocker`'s `llm_key_missing`); `422` if `legacyTex` or `auditBook` is combined with a `markdown` output format, or `legacyTex` with a content-locked node.
 
 Source: `api/application/runs.py:RunService.create`
 

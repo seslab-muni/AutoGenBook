@@ -21,6 +21,7 @@ from api.infrastructure.db.run_repository import (
     SqlAlchemyRunRepository,
 )
 from api.infrastructure.db.source_repository import SqlAlchemySourceRepository
+from api.infrastructure.db.user_repository import SqlAlchemyUserRepository
 from api.infrastructure.queue.postgres import SqlAlchemyRunQueue
 from api.infrastructure.storage.s3 import S3FileStorage
 
@@ -73,6 +74,7 @@ async def _claim_and_execute(
             run_artifact_repository=SqlAlchemyRunArtifactRepository(session),
             settings=settings,
             worker_id=worker_id,
+            user_repository=SqlAlchemyUserRepository(session),
         )
         try:
             finished = await service.execute(run, shutdown_event=stop_event)

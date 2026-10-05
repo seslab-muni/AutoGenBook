@@ -196,12 +196,27 @@ kubectl create secret generic autogenbook-secrets \
   --from-literal=AUTH_JWT_SECRET="$(openssl rand -hex 32)"
 ```
 
+**Optional - per-user LLM keys.** Add `--from-literal=LLM_KEY_ENCRYPTION_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"`
+to turn on "bring your own LLM key" (each user stores their own key in Account settings; it is
+Fernet-encrypted at rest with this value, and their runs then get their own per-key parallel-request
+budget at the gateway, `LLM_USER_KEY_CONCURRENCY` in `k8s/configmap.yaml`). Leave it out and the
+feature is disabled - everyone keeps using `OPENROUTER_API_KEY`. `LLM_KEY_POLICY` (ConfigMap,
+`optional` default) set to `required` refuses runs from users without a key, and needs the
+encryption key. **Back this value up**: if it is lost or changed, every stored user key becomes
+undecryptable and those users' runs fail with a clear error until they re-enter their key.
+
 **Rotating any of these later**: put the same keys in a `.env.production` file at the repo root
 (plain `KEY=VALUE` lines - gitignored by `/.env*` in `.gitignore`, and `scripts/deploy.py`
 refuses to read it if it somehow isn't) and run `python scripts/deploy.py --stage prod --sync-secrets`
 to see which keys would change, or add `--apply` to actually write them - it's idempotent, unlike
 the `create` command above, and never prints any secret value, only which keys are new/changed/
-unchanged. The dev stage reads `.env.dev` instead (section 18).
+unchanged. The dev stage reads `.env.dev` instead (section 18). `LLM_KEY_ENCRYPTION_KEY` is the
+one optional key (`OPTIONAL_SECRET_KEYS` in `scripts/deploy.py`): existing env files without it
+keep validating. If the env file sets a non-empty value it is written to the Secret; if it
+doesn't, the value currently in the live Secret is **carried over unchanged** (the plan prints
+`KEPT from the cluster`) - a sync never removes it by omission, since that would make every
+stored user key undecryptable (or crash-loop api/worker under `LLM_KEY_POLICY=required`). To
+remove it deliberately, pass `--drop-optional-secret LLM_KEY_ENCRYPTION_KEY` (the plan prints `REMOVED`).
 
 ## 5. Storage
 

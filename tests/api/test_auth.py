@@ -94,6 +94,10 @@ async def test_login_success_returns_user_and_sets_cookie(
         "id": str(seeded_user.id),
         "email": TEST_USER_EMAIL,
         "displayName": TEST_USER_NAME,
+        # Per-user LLM key fields: feature disabled by default (no encryption key).
+        "llmKeyConfigurable": False,
+        "llmKeyPolicy": "optional",
+        "llmKey": None,
     }
 
     set_cookie = response.headers.get("set-cookie", "")
@@ -185,6 +189,9 @@ async def test_me_returns_current_user(authed_client: AsyncClient, seeded_user: 
         "id": str(seeded_user.id),
         "email": TEST_USER_EMAIL,
         "displayName": TEST_USER_NAME,
+        "llmKeyConfigurable": False,
+        "llmKeyPolicy": "optional",
+        "llmKey": None,
     }
 
 

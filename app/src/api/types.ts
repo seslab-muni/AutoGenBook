@@ -18,11 +18,15 @@ export interface Problem {
   status: number;
   instance: string;
   detail?: string | null;
+  /** Optional machine-readable discriminator (`api/core/errors.py`'s `ApiError.code`), e.g. `llm_key_required`. */
+  code?: string | null;
 }
 
 /** Neither `/health` nor `/ready` declares a `response_model`, so these come from the untyped operation response rather than a named component — still codegen-backed, just not via `components['schemas']`. */
-export type HealthStatus = operations['system-health']['responses'][200]['content']['application/json'];
-export type ReadyStatus = operations['system-ready']['responses'][200]['content']['application/json'];
+export type HealthStatus =
+  operations['system-health']['responses'][200]['content']['application/json'];
+export type ReadyStatus =
+  operations['system-ready']['responses'][200]['content']['application/json'];
 
 /**
  * Common page envelope (`{ items, total, limit, offset }`). The API used to
@@ -91,3 +95,5 @@ export type ExportRequest = components['schemas']['ExportRequestIn'];
 /** The signed-in user, as returned by `POST /auth/login` and `GET /auth/me`. */
 export type AuthUser = components['schemas']['UserOut'];
 export type LoginRequest = components['schemas']['LoginRequest'];
+/** The user's own LLM API key as the API reveals it: last four characters + when it was set, never the key. */
+export type LlmKeyInfo = components['schemas']['LlmKeyOut'];

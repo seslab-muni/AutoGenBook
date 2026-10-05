@@ -6,3 +6,4 @@ sse-starlette>=2.1
 boto3>=1.34
 pyjwt>=2.8
 argon2-cffi>=23
+cryptography>=42

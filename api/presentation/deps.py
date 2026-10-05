@@ -125,4 +125,5 @@ def get_run_service(
         file_repository=SqlAlchemyFileRepository(session),
         outline_repository=SqlAlchemyOutlineRepository(session),
         settings=settings,
+        user_repository=SqlAlchemyUserRepository(session),
     )

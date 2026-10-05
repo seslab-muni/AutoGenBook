@@ -3,8 +3,9 @@ from __future__ import annotations
 import sys
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # HS256 with a secret shorter than this is trivially brute-forceable; PyJWT
@@ -25,7 +26,11 @@ class Settings(BaseSettings):
     variables compose explicitly passes through.
     """
 
-    model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
+    # `hide_input_in_errors`: a malformed secret (LLM_KEY_ENCRYPTION_KEY, AUTH_JWT_SECRET) must never be
+    # echoed back in the boot-time ValidationError traceback.
+    model_config = SettingsConfigDict(
+        extra="ignore", case_sensitive=False, hide_input_in_errors=True
+    )
 
     # No default: a hardcoded default bakes a guessable password into every
     # checkout. It's never actually relied on - `docker-compose.yml`'s
@@ -110,6 +115,49 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     autogenbook_llm_model: str | None = Field(default=None, alias="AUTOGENBOOK_LLM_MODEL")
 
+    # Per-user LLM key: each user may store their own key (encrypted at rest with
+    # this Fernet key) so their runs get their own parallel-request budget at the
+    # gateway instead of sharing the deployment key's. Unset (the default) disables
+    # the feature entirely - `/auth/me` reports `llm_key_configurable: false`, the
+    # PUT route answers 409 and the worker never looks at stored keys. Generate one
+    # with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+    llm_key_encryption_key: str | None = Field(default=None, alias="LLM_KEY_ENCRYPTION_KEY")
+    # `optional`: a user without a stored key runs on the deployment key (as before).
+    # `required`: starting a run without one is refused (409 `llm_key_required`).
+    llm_key_policy: Literal["optional", "required"] = Field(
+        default="optional", alias="LLM_KEY_POLICY"
+    )
+    # `AUTOGENBOOK_CONCURRENCY` for a run executing with a per-user key (the e-infra
+    # gateway allows ~4 parallel requests per key). Runs on the shared key keep
+    # whatever the deployment sets.
+    llm_user_key_concurrency: int = Field(default=4, ge=1, alias="LLM_USER_KEY_CONCURRENCY")
+
+    @field_validator("llm_key_encryption_key", mode="before")
+    @classmethod
+    def _validate_llm_key_encryption_key(cls, value: object) -> str | None:
+        # Blank means "unset": compose/k8s pass `LLM_KEY_ENCRYPTION_KEY=` through
+        # as an empty string when the operator hasn't configured the feature.
+        if value is None or not str(value).strip():
+            return None
+        key = str(value).strip()
+        # Imported lazily: `api.core.secrets` is where "is this a valid Fernet key"
+        # lives, and a malformed key must fail fast at boot rather than at the
+        # first PUT /auth/me/llm-key (the same fail-fast stance as AUTH_JWT_SECRET).
+        from api.core.secrets import validate_fernet_key
+
+        validate_fernet_key(key)
+        return key
+
+    @model_validator(mode="after")
+    def _validate_policy_needs_encryption_key(self) -> "Settings":
+        # `required` without the means to store a key would lock every user out.
+        if self.llm_key_policy == "required" and self.llm_key_encryption_key is None:
+            raise ValueError(
+                "LLM_KEY_POLICY=required needs LLM_KEY_ENCRYPTION_KEY to be set "
+                "(users could not store a key otherwise)"
+            )
+        return self
+
     @field_validator("auth_jwt_secret")
     @classmethod
     def _validate_jwt_secret_length(cls, value: str) -> str:
@@ -119,6 +167,12 @@ class Settings(BaseSettings):
                 f"(got {len(value.encode('utf-8'))}); generate one with `openssl rand -hex 32`"
             )
         return value
+
+
+def llm_key_feature_enabled(settings: Settings) -> bool:
+    """Whether per-user LLM keys are available on this deployment (a valid
+    `LLM_KEY_ENCRYPTION_KEY` is configured)."""
+    return settings.llm_key_encryption_key is not None
 
 
 @lru_cache

@@ -134,3 +134,12 @@ def test_reasoning_effort_env(tmp_path: Path) -> None:
     assert _cfg(base, {"AUTOGENBOOK_LLM_REASONING_EFFORT": " Low "}).llm.reasoning_effort == "low"
     with pytest.raises(ConfigError, match="AUTOGENBOOK_LLM_REASONING_EFFORT"):
         _cfg(base, {"AUTOGENBOOK_LLM_REASONING_EFFORT": "tiny"})
+
+
+def test_empty_concurrency_and_reasoning_effort_mean_default(tmp_path: Path) -> None:
+    # docker-compose passes `AUTOGENBOOK_CONCURRENCY=${AUTOGENBOOK_CONCURRENCY:-}` etc., so an
+    # unset deployment variable reaches the engine as an empty string, not as an absent one.
+    base = ["-i", "x.txt", "-o", str(tmp_path / "out")]
+    cfg = _cfg(base, {"AUTOGENBOOK_CONCURRENCY": "", "AUTOGENBOOK_LLM_REASONING_EFFORT": "  "})
+    assert cfg.concurrency == 4
+    assert cfg.llm.reasoning_effort is None

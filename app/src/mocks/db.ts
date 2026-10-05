@@ -32,6 +32,10 @@ class MockDatabase {
   runs = new Map<string, Run>();
   runEvents = new Map<string, RunEvent[]>();
   runArtifacts = new Map<string, RunArtifact[]>();
+  /** Per-user LLM key state behind `GET /auth/me` / `PUT|DELETE /auth/me/llm-key` (never the key itself, like the real API). */
+  llmKey: { last4: string; updatedAt: string } | null = null;
+  llmKeyConfigurable = true;
+  llmKeyPolicy: 'optional' | 'required' = 'optional';
   private runListeners = new Map<string, Set<RunEventListener>>();
 
   reset(): void {
@@ -43,6 +47,9 @@ class MockDatabase {
     this.runEvents.clear();
     this.runArtifacts.clear();
     this.runListeners.clear();
+    this.llmKey = null;
+    this.llmKeyConfigurable = true;
+    this.llmKeyPolicy = 'optional';
   }
 
   nextId(): string {

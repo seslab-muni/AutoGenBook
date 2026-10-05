@@ -7,7 +7,8 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
-from api.core.errors import Unauthorized
+from api.core.errors import Conflict, Unauthorized, ValidationFailed
+from api.core.secrets import LlmKeyCipher
 from api.core.settings import Settings
 from api.domain.models import User
 from api.domain.ports import UserRepository
@@ -17,6 +18,10 @@ _JWT_ALGORITHM = "HS256"
 # #96) - a distinct message for either would let a caller enumerate which of
 # the 4 lab emails are registered.
 _GENERIC_LOGIN_ERROR = "Invalid email or password"
+
+# Generous for any real provider key (OpenRouter's are ~73 chars) while still
+# bounding what a client can make us encrypt and store.
+_MAX_LLM_KEY_LENGTH = 512
 
 _password_hasher = PasswordHasher()
 # A verify against a hash nobody's real password could have produced, run
@@ -93,3 +98,26 @@ class AuthService:
             # #96 needs: "rotate password" == "log everyone out".
             raise Unauthorized("invalid or expired session")
         return user
+
+    async def set_llm_key(self, user: User, api_key: str) -> User:
+        """Store `api_key` (encrypted) as `user`'s own LLM key (per-user LLM key). Raises
+        `Conflict` when the deployment has no `LLM_KEY_ENCRYPTION_KEY`. Validation errors
+        deliberately never quote the value: it is a secret."""
+        cipher = LlmKeyCipher.from_settings(self._settings)
+        if cipher is None:
+            raise Conflict(
+                "per-user LLM keys are not enabled on this deployment "
+                "(LLM_KEY_ENCRYPTION_KEY is not set)",
+                code="llm_key_disabled",
+            )
+        key = api_key.strip()
+        if not key:
+            raise ValidationFailed("apiKey must not be empty or blank")
+        if len(key) > _MAX_LLM_KEY_LENGTH:
+            raise ValidationFailed(f"apiKey must be at most {_MAX_LLM_KEY_LENGTH} characters")
+        return await self._users.set_llm_api_key(user.id, cipher.encrypt(key), key[-4:])
+
+    async def clear_llm_key(self, user: User) -> User:
+        # Allowed even when the feature is disabled: removing a leftover key (the
+        # operator unset `LLM_KEY_ENCRYPTION_KEY` after users stored some) must work.
+        return await self._users.clear_llm_api_key(user.id)

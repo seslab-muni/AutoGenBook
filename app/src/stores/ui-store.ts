@@ -11,7 +11,7 @@ import { persist } from 'zustand/middleware';
  * already persists it and drives the `sonner` toaster's theme.
  */
 export type ModalKind =
-  'new-project' | 'settings' | 'sources' | 'export' | 'start-run' | 'run-history';
+  'new-project' | 'settings' | 'sources' | 'export' | 'start-run' | 'run-history' | 'account';
 
 /** Default width (px) of the outline pane — matches the old fixed `lg:w-80`. */
 export const DEFAULT_OUTLINE_WIDTH = 320;
