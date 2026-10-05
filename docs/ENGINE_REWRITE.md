@@ -323,11 +323,17 @@ Decided design, all behind a `Retriever` protocol:
 - The audit (unknown citations, missing figures, unsupported numeric claims) runs on the Markdown
   and writes `audit_report.json`; strict mode blocks PDF emission exactly as today.
 - **The outline is the only structure.** Section bodies carry no headings of their own: the
-  writer, reviser and consistency prompts say so, and `normalize_body` turns any heading a model
-  still emits into a bold lead-in line (the same rule the slide builder applies), both when the
-  draft is cleaned and again at assembly, so the app's outline, the Markdown and the PDF table of
+  writer and reviser prompts say so, and `normalize_body` rewrites whatever a model
+  still emits (`#` headings, standalone `**Title**` / `***Title***` lines, setext headings,
+  `---` rules) into one canonical form: a run-in bold lead-in ending with a period at the start
+  of the paragraph it introduces (`**Resource integration.** Value emerges ...`; `.:!?` already
+  present is kept, a period is added otherwise; before a list, equation, table or code block the
+  lead-in stays a paragraph of its own; rules are dropped). It runs both when the draft is
+  cleaned and again at assembly, so the app's outline, the Markdown and the PDF table of
   contents always show the same hierarchy. `--body-headings` (env `AUTOGENBOOK_BODY_HEADINGS=1`)
   restores sub-headings, shifted one level below the node heading and capped at `######`.
+  Slides keep the older ATX-only rule (`lead_ins=False`): headings become standalone `**label**`
+  lines and `slide_body` drops rules.
 
 ### 4.7 Events
 

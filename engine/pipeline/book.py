@@ -946,6 +946,7 @@ class BookRun:
                 "min_words": lines_to_words(low),
                 "max_words": lines_to_words(high),
                 "current_words": word_count(body),
+                "heading_rule": heading_rule(self.graph, key, allow=self.cfg.body_headings),
                 "section_body": body,
             }
             adjusted = await self.agents["length"].run(self.ctx.llm, values, node_key=key)
