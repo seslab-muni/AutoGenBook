@@ -16,8 +16,18 @@ data:
   WORKER_POLL_INTERVAL_S: "2"
   WORKER_STALE_S: "300"
   RUNS_RETENTION_DAYS: "30"
-  CLI_RUN_TIMEOUT_S: "21600"
+  # Wall-clock budget per CLI run (SIGKILL after). 12 h: a 350-page book is ~77 leaf sections
+  # at ~6 min each on glm-5.3 (e-INFRA); the previous 6 h killed such runs at section ~58
+  # and discarded the work (October 2026 incident).
+  CLI_RUN_TIMEOUT_S: "43200"
   CLI_CANCEL_GRACE_S: "15"
+  # Per-request LLM timeout and app-level retries, read by both engines. Non-streaming
+  # completions of 8-9k tokens take 250-300 s on glm-5.3 (~35 tok/s), so 300 s timed out on
+  # every long section and the retries (x3 SDK-internal in the old engine) replayed the same
+  # request for an hour before the run failed. 900 s fits those calls; 1 retry bounds a true
+  # stall to 2x the timeout (new engine) or 6x (old engine) instead of 4x / 12x.
+  OPENROUTER_REQUEST_TIMEOUT_S: "900"
+  OPENROUTER_MAX_RETRIES: "1"
   AUTOGENBOOK_KB_OCR: "1"
   AUTOGENBOOK_KB_OCR_LANG: "eng"
   MCP_GATEWAY_ENABLE: "0"
