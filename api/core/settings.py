@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # gateway instead of sharing the deployment key's. Unset (the default) disables
     # the feature entirely - `/auth/me` reports `llm_key_configurable: false`, the
     # PUT route answers 409 and the worker never looks at stored keys. Generate one
-    # with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+    # with `python -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`.
     llm_key_encryption_key: str | None = Field(default=None, alias="LLM_KEY_ENCRYPTION_KEY")
     # `optional`: a user without a stored key runs on the deployment key (as before).
     # `required`: starting a run without one is refused (409 `llm_key_required`).

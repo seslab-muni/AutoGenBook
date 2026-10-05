@@ -31,9 +31,9 @@ def validate_fernet_key(key: str) -> None:
         Fernet(key.encode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - cryptography raises ValueError/binascii.Error
         raise ValueError(
-            "LLM_KEY_ENCRYPTION_KEY is not a valid Fernet key; generate one with "
-            "`python -c \"from cryptography.fernet import Fernet; "
-            "print(Fernet.generate_key().decode())\"`"
+            "LLM_KEY_ENCRYPTION_KEY is not a valid Fernet key (32 random bytes, url-safe "
+            "base64); generate one with `python -c \"import base64, os; "
+            "print(base64.urlsafe_b64encode(os.urandom(32)).decode())\"`"
         ) from exc
 
 

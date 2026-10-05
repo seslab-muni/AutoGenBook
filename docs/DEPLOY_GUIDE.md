@@ -196,7 +196,7 @@ kubectl create secret generic autogenbook-secrets \
   --from-literal=AUTH_JWT_SECRET="$(openssl rand -hex 32)"
 ```
 
-**Optional - per-user LLM keys.** Add `--from-literal=LLM_KEY_ENCRYPTION_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"`
+**Optional - per-user LLM keys.** Add `--from-literal=LLM_KEY_ENCRYPTION_KEY="$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"`
 to turn on "bring your own LLM key" (each user stores their own key in Account settings; it is
 Fernet-encrypted at rest with this value, and their runs then get their own per-key parallel-request
 budget at the gateway, `LLM_USER_KEY_CONCURRENCY` in `k8s/configmap.yaml`). Leave it out and the
