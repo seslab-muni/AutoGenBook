@@ -13,7 +13,7 @@ from pathlib import Path
 from engine.assemble.citations import CitationIndex
 from engine.graph import DocGraph
 from engine.pipeline.scheduler import Scheduler, Task
-from engine.pipeline.text import heading_rule, strip_citations
+from engine.pipeline.text import NO_BODY_HEADINGS, heading_rule, strip_citations
 from engine.spec.models import graph_from_structure, normalize_structure
 from engine.util.fs import sha256_file
 from fake_llm import FakeLLM
@@ -157,9 +157,13 @@ def test_heading_rule_depth_limits() -> None:
         key = "-".join(["1"] * depth)
         graph.add_node(key, parent, {"title": f"d{depth}"})
         parent = key
-    assert "level ###" in heading_rule(graph, "1")
-    assert "level ######" in heading_rule(graph, "1-1-1-1")
-    assert heading_rule(graph, "1-1-1-1-1") == "Do not use headings inside the body."
+    # Default: the outline is the only structure, at every depth.
+    assert heading_rule(graph, "1") == NO_BODY_HEADINGS
+    assert heading_rule(graph, "1-1-1-1-1") == NO_BODY_HEADINGS
+    # Opt-in (`--body-headings`): one level below the node heading, capped at ######.
+    assert "level ###" in heading_rule(graph, "1", allow=True)
+    assert "level ######" in heading_rule(graph, "1-1-1-1", allow=True)
+    assert heading_rule(graph, "1-1-1-1-1", allow=True) == "Do not use headings inside the body."
 
 
 def test_strip_citations_leaves_code_alone() -> None:

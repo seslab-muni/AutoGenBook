@@ -56,6 +56,8 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "AUTOGENBOOK_KB_OCR",
     "AUTOGENBOOK_KB_OCR_LANG",
     "TAVILY_API_KEY",
+    # Engine (engine/) setting: sub-headings inside section bodies, off by default.
+    "AUTOGENBOOK_BODY_HEADINGS",
     # OpenRouter client tuning (openrouter_llm.py) - not overridden by
     # `main.py`'s import-time env writes, so a parent-set value reaches the
     # client unlike OPENROUTER_INPUT_COST_PER_M/OPENROUTER_OUTPUT_COST_PER_M.

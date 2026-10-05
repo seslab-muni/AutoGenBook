@@ -132,10 +132,22 @@ def test_find_citations_matches_the_api_token_regex() -> None:
 
 def test_body_normalisation() -> None:
     body = "## Intro\n\nText.\n\n# Sub\n\nMore.\n\n```\n# not a heading\n```"
+    # Default: body headings are flattened to bold lead-ins; the outline is the structure.
     out = normalize_body(body, "Intro", level=3)
     assert out.startswith("Text.")
+    assert "#" not in out.split("```")[0]
+    assert "\n\n**Sub**\n\nMore." in out and "# not a heading" in out
+    # Opt-in: headings are kept and shifted below the node heading.
+    out = normalize_body(body, "Intro", level=3, allow_headings=True)
+    assert out.startswith("Text.")
     assert "#### Sub" in out and "# not a heading" in out
-    assert strip_writing_instructions("Real summary.\n\nWriting instructions: Math level: rigorous.") == "Real summary."
+
+
+def test_body_headings_flattened_once_and_level_capped() -> None:
+    body = "### A ###\n#### **B**\ntext\n\n\n\n##### C\n\n```md\n## keep\n```\n## "
+    out = normalize_body(body, "T", level=2)
+    assert out == "**A**\n\n**B**\n\ntext\n\n**C**\n\n```md\n## keep\n```"
+    assert normalize_body("## Deep", "T", level=6, allow_headings=True) == "###### Deep"
 
 
 def test_assemble_document_and_audit(tmp_path: Path) -> None:
