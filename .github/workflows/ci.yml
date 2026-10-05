@@ -58,7 +58,9 @@ jobs:
           alembic -c api/alembic.ini check
 
       - name: Run api/ test suite (pytest, against Postgres)
-        run: pytest tests/api
+        # `--timeout` (pytest-timeout) turns a hung test into a failure with a traceback instead
+        # of the whole job being cancelled at the 15-minute limit with no log.
+        run: pytest tests/api --timeout=300
 
       - name: Install pandoc (engine LaTeX export tests)
         # `tests/engine` skips its pandoc/LuaLaTeX tests when the binaries are missing; pandoc
@@ -67,8 +69,9 @@ jobs:
 
       - name: Run engine test suite (pytest, fake LLM, no network)
         # The rewritten engine (`engine/`, epic #158): unit, contract and golden tests against the
-        # in-process fake LLM (`tests/engine/fake_llm.py`).
-        run: pytest tests/engine
+        # in-process fake LLM (`tests/engine/fake_llm.py`). Tests marked `bench` (the benchmark
+        # harness and retrieval evals) are deselected here; bench.yml runs them on demand.
+        run: pytest tests/engine --timeout=300
 
       - name: Run CLI unit test suite
         # `tests/` isn't a package (no `__init__.py`), so bare `python -m

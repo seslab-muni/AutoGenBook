@@ -7,6 +7,12 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
+# Benchmark harness checks: deselected by default, run with `pytest tests/engine --bench`
+# (see conftest.py) or on demand from .github/workflows/bench.yml.
+pytestmark = pytest.mark.bench
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

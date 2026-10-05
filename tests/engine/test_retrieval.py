@@ -342,10 +342,12 @@ def test_lemma_tokens_keep_cross_lingual_bridge_words() -> None:
     assert lemma_tokens("učitel učitele učitelům", "cs").count("ucitel") == 3  # inflection still collapses
 
 
+@pytest.mark.bench
 def test_lexical_retrieval_is_not_worse_than_the_old_kb(tmp_path: Path) -> None:
     """Recall@6 of the new BM25 (lemma) retriever >= the old engine's KB on
     every benchmark question set, English and cross-lingual (Czech questions,
-    English sources). No model involved."""
+    English sources). No model involved. A retrieval eval, so `bench`-marked:
+    runs with `pytest tests/engine --bench`."""
     import importlib.util
     import sys
 

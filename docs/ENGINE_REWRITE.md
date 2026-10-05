@@ -482,6 +482,7 @@ Optional Python extras are imported only when used (`pip install '.[local-embedd
 
 ```bash
 pytest tests/engine                              # engine: contract, golden, unit tests; fake LLM, no network
+pytest tests/engine --bench -m bench             # benchmark harness checks and retrieval evals only (off by default)
 python -m unittest discover -s tests -p "test_*.py"   # the old CLI's suite (unchanged)
 AUTH_JWT_SECRET="$(openssl rand -hex 32)" pytest tests/api   # the API's suite (uses tests/api/fake_cli.py)
 python -m autogenbook.smoke_prompts              # old prompt packs
@@ -492,6 +493,13 @@ python -m autogenbook.smoke_prompts              # old prompt packs
 The golden runs (`test_golden_{book,paper,presentation}.py`) replay recorded LLM replies. After an intentional prompt or assembly change, re-record them with `ENGINE_UPDATE_GOLDEN=1 pytest tests/engine/test_golden_*.py`.
 
 `ENGINE_TEST_COQUI=1` enables the single test that loads a real Coqui model. It is off by default because loading a model may download it.
+
+Tests marked `bench` (`test_bench_scripts.py`, the "new BM25 is not worse than the old KB" eval in
+`test_retrieval.py`) are measurement, not regression checks: `pytest tests/engine` deselects them
+so the always-on CI job stays inside its 15-minute limit. `--bench` includes them, `--bench -m bench`
+runs only them. On GitHub they run on demand from `.github/workflows/bench.yml` ("Run workflow",
+or `gh workflow run bench.yml`), which can also run `scripts/bench_engines.py` against the real
+endpoint when the LLM secrets are configured and uploads the reports as an artifact.
 
 ### A.3 Retrieval benchmark: old KB vs new hybrid (e-INFRA)
 

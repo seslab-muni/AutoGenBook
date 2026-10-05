@@ -21,6 +21,35 @@ if str(REPO_ROOT) not in sys.path:
 from fake_llm import FakeLLM  # noqa: E402
 
 
+BENCH_HELP = "also run the tests marked `bench` (benchmark harness checks and retrieval evals; off by default)"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--bench", action="store_true", default=False, help=BENCH_HELP)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "bench: benchmark harness and evaluation tests. Deselected unless `--bench` is given "
+        "(`pytest tests/engine --bench -m bench` runs only them); CI runs them on demand "
+        "from .github/workflows/bench.yml, not on every push.",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """`bench` tests are measurement, not regression checks: without `--bench` they are
+    deselected so `pytest tests/engine` stays the quick, always-on suite."""
+    if config.getoption("--bench"):
+        return
+    kept, dropped = [], []
+    for item in items:
+        (dropped if item.get_closest_marker("bench") else kept).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept
+
+
 @pytest.fixture
 def repo_root() -> Path:
     return REPO_ROOT
