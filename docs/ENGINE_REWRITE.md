@@ -322,6 +322,12 @@ Decided design, all behind a `Retriever` protocol:
   LuaLaTeX. `pylatex` and `latex2markdown` are not used.
 - The audit (unknown citations, missing figures, unsupported numeric claims) runs on the Markdown
   and writes `audit_report.json`; strict mode blocks PDF emission exactly as today.
+- **The outline is the only structure.** Section bodies carry no headings of their own: the
+  writer, reviser and consistency prompts say so, and `normalize_body` turns any heading a model
+  still emits into a bold lead-in line (the same rule the slide builder applies), both when the
+  draft is cleaned and again at assembly, so the app's outline, the Markdown and the PDF table of
+  contents always show the same hierarchy. `--body-headings` (env `AUTOGENBOOK_BODY_HEADINGS=1`)
+  restores sub-headings, shifted one level below the node heading and capped at `######`.
 
 ### 4.7 Events
 

@@ -101,6 +101,7 @@ async def assemble_outputs(
     doc = assemble_document(
         graph, cfg.out_dir, index=index, language=language, author=author, front_matter=style.front_matter,
         numbering=numbering(), resolve=style.md_resolve, bibliography=style.md_bibliography,
+        body_headings=cfg.body_headings,
     )
     outcome.document = doc
     for key in doc.missing:
@@ -135,6 +136,7 @@ async def assemble_outputs(
             graph, cfg.out_dir, index=index, language=language, author=author,
             front_matter=style.front_matter if style.tex_front_matter is None else style.tex_front_matter,
             numbering=numbering(), resolve=style.tex_resolve or style.md_resolve, bibliography=style.tex_bibliography,
+            body_headings=cfg.body_headings,
         )
     t0 = time.perf_counter()
     tex_dir = cfg.out_dir if cfg.tex_output else Path(tempfile.mkdtemp(prefix="engine_tex_"))

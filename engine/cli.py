@@ -60,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--concurrency", type=int, default=None, help="max parallel LLM requests (env AUTOGENBOOK_CONCURRENCY, default 4)")
     p.add_argument("--context-mode", choices=["parallel", "chained"], default="parallel",
                    help="parallel: leaves drafted independently; chained: leaf N sees leaf N-1 (old behaviour)")
+    p.add_argument("--body-headings", action="store_true", default=False,
+                   help="allow sub-headings inside section bodies (default off: the outline is the only structure; "
+                        "env AUTOGENBOOK_BODY_HEADINGS)")
     p.add_argument("--language", default=None, help="output language code (default: detected from the spec)")
     # Paper.
     p.add_argument("--paper-input", default="paper_input.txt")

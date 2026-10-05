@@ -175,6 +175,10 @@ class RunConfig:
     fail_fast_schema: bool = False
     concurrency: int = DEFAULT_CONCURRENCY
     context_mode: str = "parallel"
+    # Sub-headings inside section bodies. Off by default: the outline (the
+    # graph) is the document's only structure, so the app's outline, the
+    # Markdown and the PDF table of contents agree.
+    body_headings: bool = False
     language: str | None = None
     author: str | None = None
     max_consistency_patches: int = 3
@@ -352,6 +356,7 @@ class RunConfig:
             fail_fast_schema=bool(args.fail_fast_schema),
             concurrency=int(concurrency),
             context_mode=args.context_mode,
+            body_headings=bool(getattr(args, "body_headings", False)) or _env_bool(env, "AUTOGENBOOK_BODY_HEADINGS", False),
             language=language,
             author=author,
             max_consistency_patches=max(0, _env_int(env, "AUTOGENBOOK_CONSISTENCY_MAX_PATCHES", 3)),

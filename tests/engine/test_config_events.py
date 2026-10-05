@@ -143,3 +143,12 @@ def test_empty_concurrency_and_reasoning_effort_mean_default(tmp_path: Path) -> 
     cfg = _cfg(base, {"AUTOGENBOOK_CONCURRENCY": "", "AUTOGENBOOK_LLM_REASONING_EFFORT": "  "})
     assert cfg.concurrency == 4
     assert cfg.llm.reasoning_effort is None
+
+
+def test_body_headings_flag_and_env(tmp_path: Path) -> None:
+    base = ["-i", "x", "-o", str(tmp_path)]
+    assert _cfg(base, {}).body_headings is False
+    assert _cfg(base + ["--body-headings"], {}).body_headings is True
+    assert _cfg(base, {"AUTOGENBOOK_BODY_HEADINGS": "1"}).body_headings is True
+    assert _cfg(base, {"AUTOGENBOOK_BODY_HEADINGS": "off"}).body_headings is False
+    assert _cfg(base, {}).describe()["body_headings"] is False
