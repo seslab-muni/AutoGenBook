@@ -7,6 +7,7 @@ import re
 import shutil
 from pathlib import Path
 
+import asyncio
 import numpy as np
 import pytest
 
@@ -387,4 +388,158 @@ async def test_qwen_reranker_gets_its_instruction_template() -> None:
     await other.rerank("EDSAC first program", ["EDSAC ran its first program in 1949"])
     assert fake.calls[-1].body["query"] == "EDSAC first program"
     assert fake.calls[-1].body["documents"] == ["EDSAC ran its first program in 1949"]
+    await llm.aclose()
+
+
+def _spy_embeddings(monkeypatch) -> list:
+    import engine.retrieval.service as svc
+
+    seen: list = []
+    real = svc.RemoteEmbeddings
+
+    def spy(*a, **kw):
+        seen.append(real(*a, **kw))
+        return seen[-1]
+
+    monkeypatch.setattr(svc, "RemoteEmbeddings", spy)
+    return seen
+
+
+async def test_dedicated_retrieval_key_bypasses_the_limiter_and_is_announced(tmp_path: Path, monkeypatch) -> None:
+    service, llm, sink = _service(tmp_path, FakeLLM(), embed_dedicated=True, embed_key_dedicated=True, embed_concurrency=5,
+                                  embed_api_key="secret-abcd", rerank_dedicated=True, rerank_key_dedicated=True,
+                                  rerank_api_key="secret-wxyz")
+    assert service._rerankers()[0].limited is False
+    seen = _spy_embeddings(monkeypatch)
+    (tmp_path / "out").mkdir()
+    await service.build_kb()
+    await service.prepare_dense()
+    assert seen and (seen[0].limited, seen[0].parallel) == (False, 5)
+    messages = [e["message"] for e in sink.events]
+    assert any("Reranking uses a dedicated key (...wxyz)" in m for m in messages)
+    assert any("Embeddings use a dedicated key (...abcd)" in m and "5 at a time" in m for m in messages)
+    assert not any("secret" in m for m in messages)
+    await llm.aclose()
+
+
+async def test_endpoint_only_dedicated_and_short_keys_are_not_leaked(tmp_path: Path, monkeypatch) -> None:
+    service, llm, sink = _service(tmp_path, FakeLLM(), embed_dedicated=True, embed_key_dedicated=False, embed_api_key="k")
+    _spy_embeddings(monkeypatch)
+    (tmp_path / "out").mkdir()
+    await service.build_kb()
+    await service.prepare_dense()
+    assert any("Embeddings use a dedicated endpoint at" in e["message"] for e in sink.events)
+    service2, llm2, sink2 = _service(tmp_path, FakeLLM(), rerank_dedicated=True, rerank_key_dedicated=True, rerank_api_key="short")
+    service2._rerankers()
+    assert any("(...****)" in e["message"] for e in sink2.events)
+    await llm.aclose()
+    await llm2.aclose()
+
+
+async def test_shared_key_retrieval_stays_limited_and_silent(tmp_path: Path, monkeypatch) -> None:
+    service, llm, sink = _service(tmp_path, FakeLLM())
+    assert service._rerankers()[0].limited is True
+    seen = _spy_embeddings(monkeypatch)
+    (tmp_path / "out").mkdir()
+    await service.build_kb()
+    await service.prepare_dense()
+    assert (seen[0].limited, seen[0].parallel) == (True, 1)
+    assert not any("dedicated" in e["message"] for e in sink.events)
+    await llm.aclose()
+
+
+class _StubBackend:
+    def __init__(self, parallel: int, delays: list[float]) -> None:
+        self.model, self.parallel, self.delays = "stub", parallel, delays
+        self.now = self.peak = 0
+        self._gate = asyncio.Semaphore(parallel)  # the real backend's shared gate bounds requests
+        self.order: list[str] = []
+
+    async def embed(self, texts, *, kind):
+        async with self._gate:
+            self.now += 1
+            self.peak = max(self.peak, self.now)
+            self.order.append(texts[0])
+            await asyncio.sleep(self.delays[int(texts[0])])
+            self.now -= 1
+        return np.array([[float(texts[0]), 1.0] for _ in texts], dtype=np.float32)
+
+
+@pytest.mark.parametrize("parallel,peak", [(3, 3), (1, 1)])
+async def test_embed_documents_parallel_keeps_document_order_and_caches(tmp_path: Path, parallel: int, peak: int) -> None:
+    from engine.retrieval.dense import VectorCache, embed_documents
+
+    docs = [[str(i)] for i in range(6)]
+    backend = _StubBackend(parallel, [(6 - i) * 0.01 for i in range(6)])
+    cache = VectorCache(tmp_path / "vc")
+    out = await embed_documents(backend, docs, cache)
+    assert out[:, 0].tolist() == [float(i) for i in range(6)]
+    assert backend.peak == peak
+    if parallel == 1:
+        assert backend.order == [str(i) for i in range(6)]
+    assert all(cache.load("stub", d) is not None for d in docs)
+    again = _StubBackend(parallel, [0.0] * 6)
+    await embed_documents(again, docs, cache)
+    assert again.order == []
+
+
+def _fake_openai_llm(peaks: list[int], fail_on: str | None = None):
+    import asyncio
+    from types import SimpleNamespace
+
+    from engine.llm.client import LLMClient
+
+    state = {"now": 0}
+
+    async def create(*, model, input):  # noqa: A002
+        state["now"] += 1
+        peaks.append(state["now"])
+        try:
+            await asyncio.sleep(0.02 if input[0] != fail_on else 0.005)
+            if input[0] == fail_on:
+                raise RuntimeError("401 bad dedicated key")
+        finally:
+            state["now"] -= 1
+        return SimpleNamespace(data=[SimpleNamespace(index=i, embedding=[float(input[0].split("-")[0]), 1.0]) for i, _ in enumerate(input)], usage=None)
+
+    llm = LLMClient(LLMSettings(base_url="http://fake.local/v1", api_key="k", model="m", mini_model="mini", max_retries=0),
+                    ledger=UsageLedger(None), sink=MemorySink(), concurrency=4, transport=FakeLLM().transport())
+    llm.openai_for = lambda *_a, **_k: SimpleNamespace(embeddings=SimpleNamespace(create=create))  # type: ignore[method-assign]
+    return llm
+
+
+@pytest.mark.parametrize("shape", ["mixed", "20x2"])
+async def test_real_remote_embeddings_never_exceed_the_concurrency_cap(tmp_path: Path, shape: str) -> None:
+    from engine.retrieval.dense import RemoteEmbeddings, VectorCache, embed_documents
+
+    peaks: list[int] = []
+    llm = _fake_openai_llm(peaks)
+    docs = [[f"{i}-0"] for i in range(7)] + [[f"7-{j}" for j in range(16)]] if shape == "mixed" else \
+        [[f"{i}-{j}" for j in range(2)] for i in range(20)]
+    backend = RemoteEmbeddings(llm, model="e", base_url="http://fake.local/v1", api_key="k", parallel=8)
+    # batch_size is 64 by default: shrink it so the 16-chunk document spans 16 batches.
+    real = llm.embed
+
+    async def small_batches(*a, **kw):
+        return await real(*a, batch_size=1, **kw)
+
+    llm.embed = small_batches  # type: ignore[method-assign]
+    out = await embed_documents(backend, docs, VectorCache(tmp_path / "vc"))
+    assert out.shape[0] == sum(len(d) for d in docs)
+    assert np.round(out[:, 0] / out[:, 1]).tolist() == [float(i) for i, d in enumerate(docs) for _ in d]
+    assert 1 < max(peaks) <= 8
+    await llm.aclose()
+
+
+async def test_failing_document_raises_the_real_error_and_keeps_finished_cache(tmp_path: Path) -> None:
+    from engine.retrieval.dense import RemoteEmbeddings, VectorCache, embed_documents
+
+    peaks: list[int] = []
+    llm = _fake_openai_llm(peaks, fail_on="1-0")
+    docs = [["0-0"], ["1-0"], ["2-0"]]
+    cache = VectorCache(tmp_path / "vc")
+    backend = RemoteEmbeddings(llm, model="e", base_url="http://fake.local/v1", api_key="k", parallel=3)
+    with pytest.raises(RuntimeError, match="401 bad dedicated key"):
+        await embed_documents(backend, docs, cache)
+    assert cache.load("e", docs[1]) is None
     await llm.aclose()

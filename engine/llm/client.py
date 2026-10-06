@@ -428,22 +428,67 @@ class LLMClient:
         api_key: str | None = None,
         label: str = "embed",
         batch_size: int = 64,
+        limited: bool = True,
+        parallel: int = 1,
+        gate: asyncio.Semaphore | None = None,
     ) -> list[list[float]]:
+        """`limited=False` keeps the requests off the chat limiter (a dedicated
+        embedding key); `parallel > 1` keeps that many batches in flight. The
+        vectors always come back in the order of `texts`."""
         client = self.openai_for(base_url, api_key)
-        vectors: list[list[float]] = []
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
+        batches = [texts[start : start + batch_size] for start in range(0, len(texts), batch_size)]
+
+        async def one(batch: list[str]) -> list[list[float]]:
             resp = await self._call(
-                lambda batch=batch: client.embeddings.create(model=model, input=batch),
-                label=label, kind="embeddings", model=model,
+                lambda: client.embeddings.create(model=model, input=batch),
+                label=label, kind="embeddings", model=model, limited=limited,
                 usage_of=lambda r: _usage_numbers(getattr(r, "usage", None)),
             )
             ordered = sorted(resp.data, key=lambda d: d.index)
-            vectors.extend([list(map(float, d.embedding)) for d in ordered])
+            return [list(map(float, d.embedding)) for d in ordered]
+
+        vectors: list[list[float]] = []
+        if gate is not None or (parallel > 1 and len(batches) > 1):
+            # A shared gate bounds requests across concurrent embed() calls, single-batch calls included.
+            gate = gate or asyncio.Semaphore(parallel)
+            results: list[list[list[float]]] = [[] for _ in batches]
+
+            failed = False
+            first_error: BaseException | None = None
+
+            async def gated(index: int, batch: list[str]) -> None:
+                nonlocal failed, first_error
+                async with gate:
+                    if failed:  # a sibling failed while this one waited for the gate: never start it
+                        return
+                    try:
+                        results[index] = await one(batch)
+                    except asyncio.CancelledError:
+                        raise
+                    except BaseException as exc:
+                        failed = True
+                        first_error = first_error or exc
+                        raise
+
+            # TaskGroup: the first failure (or a cancel of the caller) cancels every other batch.
+            try:
+                async with asyncio.TaskGroup() as group:
+                    for index, batch in enumerate(batches):
+                        group.create_task(gated(index, batch))
+            except BaseExceptionGroup:
+                if first_error is not None:
+                    raise first_error from None  # the real cause, not "unhandled errors in a TaskGroup"
+                raise
+            for part in results:
+                vectors.extend(part)
+        else:
+            for batch in batches:
+                vectors.extend(await one(batch))
         return vectors
 
     async def post_json(
-        self, url: str, payload: dict[str, Any], *, label: str, kind: str, model: str, api_key: str | None = None
+        self, url: str, payload: dict[str, Any], *, label: str, kind: str, model: str, api_key: str | None = None,
+        limited: bool = True,
     ) -> Any:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
@@ -456,7 +501,7 @@ class LLMClient:
             usage = (data or {}).get("usage") if isinstance(data, dict) else None
             return _usage_numbers(usage) if isinstance(usage, dict) else (0, 0, 0, None)
 
-        return await self._call(fn, label=label, kind=kind, model=model, usage_of=usage_of)
+        return await self._call(fn, label=label, kind=kind, model=model, usage_of=usage_of, limited=limited)
 
     async def post_bytes(
         self, url: str, payload: dict[str, Any], *, label: str, kind: str, model: str, api_key: str | None = None,

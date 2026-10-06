@@ -152,3 +152,38 @@ def test_body_headings_flag_and_env(tmp_path: Path) -> None:
     assert _cfg(base, {"AUTOGENBOOK_BODY_HEADINGS": "1"}).body_headings is True
     assert _cfg(base, {"AUTOGENBOOK_BODY_HEADINGS": "off"}).body_headings is False
     assert _cfg(base, {}).describe()["body_headings"] is False
+
+
+def test_dedicated_retrieval_key_and_embed_concurrency(tmp_path: Path) -> None:
+    base = ["-i", "x.txt", "-o", str(tmp_path / "out")]
+    main = {"AUTOGENBOOK_LLM_API_KEY": "main-key", "AUTOGENBOOK_LLM_BASE_URL": "http://gw/v1"}
+    r = _cfg(base, main).retrieval
+    assert (r.embed_dedicated, r.rerank_dedicated, r.embed_concurrency) == (False, False, 8)
+    r = _cfg(base, {**main, "AUTOGENBOOK_EMBED_API_KEY": "main-key"}).retrieval
+    assert not r.embed_dedicated
+    r = _cfg(base, {**main, "AUTOGENBOOK_EMBED_API_KEY": "other", "AUTOGENBOOK_RERANK_API_KEY": "other"}).retrieval
+    assert r.embed_dedicated and r.rerank_dedicated
+    r = _cfg(base, {**main, "AUTOGENBOOK_RERANK_BASE_URL": "http://other/v1"}).retrieval
+    assert r.rerank_dedicated and not r.embed_dedicated
+    assert _cfg(base, {"AUTOGENBOOK_EMBED_CONCURRENCY": "0"}).retrieval.embed_concurrency == 1
+    assert _cfg(base, {"AUTOGENBOOK_EMBED_CONCURRENCY": "3"}).retrieval.embed_concurrency == 3
+    with pytest.raises(ConfigError, match="AUTOGENBOOK_EMBED_CONCURRENCY"):
+        _cfg(base, {"AUTOGENBOOK_EMBED_CONCURRENCY": "many"})
+    described = json.dumps(_cfg(base, {**main, "AUTOGENBOOK_EMBED_API_KEY": "other"}).describe())
+    assert "other" not in described and "embed_dedicated" in described
+
+
+def test_dedicated_detection_normalises_the_base_url(tmp_path: Path) -> None:
+    base = ["-i", "x.txt", "-o", str(tmp_path / "out")]
+    main = {"AUTOGENBOOK_LLM_API_KEY": "main-key", "AUTOGENBOOK_LLM_BASE_URL": "https://gw.example/v1"}
+
+    def embed(**extra: str):
+        return _cfg(base, {**main, **extra}).retrieval
+
+    assert not embed(AUTOGENBOOK_EMBED_BASE_URL="https://gw.example/v1/").embed_dedicated
+    assert not embed(AUTOGENBOOK_EMBED_BASE_URL="HTTPS://GW.Example/v1").embed_dedicated
+    assert not embed(AUTOGENBOOK_RERANK_BASE_URL="https://GW.example/v1//").rerank_dedicated
+    r = embed(AUTOGENBOOK_EMBED_BASE_URL="https://other.example/v1")
+    assert r.embed_dedicated and not r.embed_key_dedicated
+    r = embed(AUTOGENBOOK_EMBED_API_KEY="other-key", AUTOGENBOOK_EMBED_BASE_URL="https://gw.example/v1/")
+    assert r.embed_dedicated and r.embed_key_dedicated

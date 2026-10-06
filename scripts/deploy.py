@@ -120,7 +120,9 @@ OPTIONAL_EMPTY_SECRET_KEYS = frozenset({"TAVILY_API_KEY"})
 # Secret's current value is carried over (never silently removed - `plan_secret_values`), and
 # only `--drop-optional-secret KEY` removes it. Losing/rotating it makes every
 # stored user key undecryptable (their runs then fail with a clear error until re-entered).
-OPTIONAL_SECRET_KEYS = ("LLM_KEY_ENCRYPTION_KEY",)
+# AUTOGENBOOK_EMBED_API_KEY / AUTOGENBOOK_RERANK_API_KEY (a dedicated embedding/rerank gateway key)
+# are optional the same way: carried over from the live Secret unless dropped or set in the env file.
+OPTIONAL_SECRET_KEYS = ("LLM_KEY_ENCRYPTION_KEY", "AUTOGENBOOK_EMBED_API_KEY", "AUTOGENBOOK_RERANK_API_KEY")
 
 # Anything under app/ only ever affects the web image.
 WEB_PREFIX = "app/"
@@ -1684,8 +1686,8 @@ def plan_secret_values(
     return to_write, notes
 
 
-# Wide enough for the longest secret key name (LLM_KEY_ENCRYPTION_KEY is 22 characters).
-KEY_COL_WIDTH = 26
+# Wide enough for the longest secret key name (AUTOGENBOOK_RERANK_API_KEY is 26 characters).
+KEY_COL_WIDTH = 30
 
 
 def dropped_keys_still_present(current: dict[str, str] | None, drop: tuple[str, ...]) -> list[str]:
@@ -1792,7 +1794,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
             + """
             (plus, optionally, """
             + ", ".join(OPTIONAL_SECRET_KEYS)
-            + """ - enables per-user LLM keys; synced only when set)
+            + """ - per-user LLM keys / a dedicated embedding+rerank key; written when set in the env file,
+            otherwise carried over from the live Secret, dropped only with --drop-optional-secret)
 
             See docs/DEPLOY_GUIDE.md (section 18 for stages) for the runbook this automates."""
         ),

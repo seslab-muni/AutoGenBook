@@ -304,3 +304,140 @@ async def test_reasoning_effort_rejection_is_remembered_per_model(tmp_path: Path
     await client.complete_text(MESSAGES, label="c")
     assert seen == [("m-mini", True), ("m-mini", False), ("m-mini", False), ("m-main", True)]
     await client.aclose()
+
+
+class _SpyLimiter:
+    def __init__(self) -> None:
+        self.slots = 0
+        self.throttles = 0
+        self.successes = 0
+
+    def slot(self):
+        import contextlib
+
+        @contextlib.asynccontextmanager
+        async def cm():
+            self.slots += 1
+            yield
+
+        return cm()
+
+    def on_throttle(self) -> None:
+        self.throttles += 1
+
+    def on_success(self) -> None:
+        self.successes += 1
+
+
+def _stub_embedding_client(client: LLMClient, delays: dict[str, float] | None = None, in_flight: list[int] | None = None):
+    from types import SimpleNamespace
+
+    state = {"now": 0}
+
+    async def create(*, model, input):  # noqa: A002
+        state["now"] += 1
+        if in_flight is not None:
+            in_flight.append(state["now"])
+        await asyncio.sleep((delays or {}).get(input[0], 0.0))
+        state["now"] -= 1
+        data = [SimpleNamespace(index=i, embedding=[float(t)]) for i, t in enumerate(input)]
+        return SimpleNamespace(data=list(reversed(data)), usage=None)
+
+    stub = SimpleNamespace(embeddings=SimpleNamespace(create=create))
+    client.openai_for = lambda *_a, **_k: stub  # type: ignore[method-assign]
+
+
+async def test_parallel_embed_keeps_input_order_and_bounds_concurrency(tmp_path: Path) -> None:
+    client = _client(FakeLLM(), tmp_path)
+    texts = [str(i) for i in range(10)]
+    # Earlier batches finish later.
+    delays = {str(i): (10 - i) * 0.01 for i in range(10)}
+    peaks: list[int] = []
+    _stub_embedding_client(client, delays, peaks)
+    out = await client.embed(texts, model="e", batch_size=1, parallel=4)
+    assert [v[0] for v in out] == [float(i) for i in range(10)]
+    assert max(peaks) == 4
+    await client.aclose()
+
+
+async def test_sequential_embed_is_unchanged(tmp_path: Path) -> None:
+    client = _client(FakeLLM(), tmp_path)
+    peaks: list[int] = []
+    _stub_embedding_client(client, None, peaks)
+    out = await client.embed([str(i) for i in range(5)], model="e", batch_size=2)
+    assert [v[0] for v in out] == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert max(peaks) == 1
+    await client.aclose()
+
+
+@pytest.mark.parametrize("limited", [True, False])
+async def test_unlimited_embed_never_touches_the_limiter(tmp_path: Path, limited: bool) -> None:
+    client = _client(FakeLLM(), tmp_path)
+    spy = _SpyLimiter()
+    client.limiter = spy  # type: ignore[assignment]
+    _stub_embedding_client(client)
+    await client.embed(["1", "2", "3"], model="e", batch_size=1, limited=limited, parallel=2)
+    assert (spy.slots, spy.successes) == ((3, 3) if limited else (0, 0))
+    await client.aclose()
+
+
+@pytest.mark.parametrize("limited", [True, False])
+async def test_throttle_on_unlimited_call_leaves_the_limiter_alone(tmp_path: Path, limited: bool) -> None:
+    fake = FakeLLM(faults=[Fault(status=429, match=lambda c: c.path.endswith("/embeddings"), times=1, retry_after=0)])
+    client = _client(fake, tmp_path)
+    spy = _SpyLimiter()
+    client.limiter = spy  # type: ignore[assignment]
+    out = await client.embed(["hello"], model="e", limited=limited)
+    assert len(out) == 1
+    assert spy.throttles == (1 if limited else 0)
+    await client.aclose()
+
+
+async def test_parallel_embed_failure_cancels_the_rest(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    client = _client(FakeLLM(), tmp_path, max_retries=0)
+    started: list[str] = []
+
+    async def create(*, model, input):  # noqa: A002
+        started.append(input[0])
+        if input[0] == "0":
+            await asyncio.sleep(0.01)
+            raise RuntimeError("boom")
+        await asyncio.sleep(0.5)
+        return SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[1.0])], usage=None)
+
+    client.openai_for = lambda *_a, **_k: SimpleNamespace(embeddings=SimpleNamespace(create=create))  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="boom"):
+        await client.embed([str(i) for i in range(6)], model="e", batch_size=1, parallel=3)
+    assert sorted(started) == ["0", "1", "2"]  # batches 3..5 never started
+    await asyncio.sleep(0.6)
+    assert sorted(started) == ["0", "1", "2"]
+    assert [t for t in asyncio.all_tasks() if t is not asyncio.current_task()] == []
+    await client.aclose()
+
+
+async def test_parallel_embed_cancellation_cancels_every_batch(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    client = _client(FakeLLM(), tmp_path)
+    started: list[str] = []
+    cancelled: list[str] = []
+
+    async def create(*, model, input):  # noqa: A002
+        started.append(input[0])
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled.append(input[0])
+            raise
+
+    client.openai_for = lambda *_a, **_k: SimpleNamespace(embeddings=SimpleNamespace(create=create))  # type: ignore[method-assign]
+    task = asyncio.ensure_future(client.embed([str(i) for i in range(6)], model="e", batch_size=1, parallel=3))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sorted(cancelled) == sorted(started) == ["0", "1", "2"]
+    assert [t for t in asyncio.all_tasks() if t is not asyncio.current_task()] == []
+    await client.aclose()
