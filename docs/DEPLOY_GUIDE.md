@@ -173,9 +173,13 @@ data:
   AUTOGENBOOK_KB_OCR: "1"
   AUTOGENBOOK_KB_OCR_LANG: "eng"
   MCP_GATEWAY_ENABLE: "0"
-  AUTOGENBOOK_LLM_MODEL: "glm-5.3"
+  CLI_ENTRYPOINT: "run_engine.py"
+  AUTOGENBOOK_LLM_BASE_URL: "https://llm.ai.e-infra.cz/v1/"
+  AUTOGENBOOK_LLM_MODEL: "qwen3.8-flash-next"
   AUTOGENBOOK_LLM_MINI_MODEL: "deepseek-v4.1-flash"
+  AUTOGENBOOK_LLM_REASONING_EFFORT: "none"
   AUTOGENBOOK_FORCE_MINI_MODEL: "0"
+  AUTOGENBOOK_CONCURRENCY: "1"
 ```
 
 `DATABASE_URL`'s `$(POSTGRES_PASSWORD)` shell-style interpolation doesn't work inside a plain
@@ -1011,16 +1015,15 @@ promotion until dev has it.
 | `base = true` | prod only: `k8s/*.yaml` are its manifests exactly as they are, and deploys write image tags into them |
 | `promote_from` | the stage `--promote` takes its release from (prod: `dev`) |
 | `[replicas]` | replica counts that differ from `k8s/<name>.yaml` (dev: 2 workers instead of 5) |
-| `[config]` | ConfigMap entries added to or overriding `k8s/configmap.yaml` (dev: `CLI_ENTRYPOINT = "run_engine.py"`, the rewritten engine) |
+| `[config]` | ConfigMap entries added to or overriding `k8s/configmap.yaml` (dev: its own `AUTOGENBOOK_LLM_MODEL`, `AUTOGENBOOK_CONCURRENCY`, ...) |
 
 `[config]` and `k8s/configmap.yaml` reach a stage with `--bootstrap`, which applies the
 ConfigMap and restarts api and worker if it changed; a plain deploy only notes that the live
 ConfigMap differs. A promotion moves images, not config - its plan says when dev's config
 differs from prod's. `deploy.py` also refuses any deploy or promotion whose core image would not
-contain the stage's `CLI_ENTRYPOINT`, so dev can only run commits that have `run_engine.py`
-(the engine rewrite branch, until it is merged). When that engine is promoted to prod for good,
-move `CLI_ENTRYPOINT: "run_engine.py"` into `k8s/configmap.yaml`, delete it from `dev.toml`, and
-run `deploy.py --stage prod --bootstrap --apply`.
+contain the stage's `CLI_ENTRYPOINT` (`run_engine.py` in `k8s/configmap.yaml` for both stages
+since October 2026 - the rewritten engine), so neither stage can run a commit from before the
+engine rewrite.
 
 Resources: with dev's two workers the dev stack is 7.5 CPU / 12.25 GiB at its limits, peaking at
 8.5 CPU / 14.25 GiB while api rolls out (`maxSurge`); prod with five workers is 13.5 CPU /

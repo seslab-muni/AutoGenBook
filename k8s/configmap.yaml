@@ -35,6 +35,21 @@ data:
   AUTOGENBOOK_KB_OCR: "1"
   AUTOGENBOOK_KB_OCR_LANG: "eng"
   MCP_GATEWAY_ENABLE: "0"
-  AUTOGENBOOK_LLM_MODEL: "glm-5.3"
+  # The rewritten engine (engine/, epic #158): run_engine.py instead of the old main.py.
+  CLI_ENTRYPOINT: "run_engine.py"
+  # e-INFRA gateway. The base URL also lives in the Secret (AUTOGENBOOK_LLM_BASE_URL, same
+  # value); the key is the Secret's AUTOGENBOOK_LLM_API_KEY.
+  AUTOGENBOOK_LLM_BASE_URL: "https://llm.ai.e-infra.cz/v1/"
+  # qwen3.8-flash-next replaced glm-5.3 (October 2026): glm ran at ~35 tok/s, which made a
+  # 350-page book a 12 h run. qwen3.8-flash-next is a thinking model - at its default effort
+  # it spends ~2000 hidden reasoning tokens per call (35 s for a 300-word answer); with
+  # reasoning_effort "none" it answers the same prompt in 9 s with no reasoning tokens, and
+  # "low" sits in between (~130 reasoning tokens, 15 s). The engine accepts "none".
+  AUTOGENBOOK_LLM_MODEL: "qwen3.8-flash-next"
   AUTOGENBOOK_LLM_MINI_MODEL: "deepseek-v4.1-flash"
+  AUTOGENBOOK_LLM_REASONING_EFFORT: "none"
   AUTOGENBOOK_FORCE_MINI_MODEL: "0"
+  # Parallel LLM requests per run (engine default 4). Prod's five workers share one gateway
+  # key with a ~4 parallel-request limit (LLM_USER_KEY_CONCURRENCY above), so one per run;
+  # users who store their own key get LLM_USER_KEY_CONCURRENCY instead.
+  AUTOGENBOOK_CONCURRENCY: "1"
