@@ -200,6 +200,16 @@ kubectl create secret generic autogenbook-secrets \
   --from-literal=AUTH_JWT_SECRET="$(openssl rand -hex 32)"
 ```
 
+**LLM endpoint credentials - exactly one API key.** The command above authenticates to OpenRouter.
+To use another OpenAI-compatible endpoint instead (prod runs on e-INFRA this way), replace the
+`OPENROUTER_API_KEY` line with `AUTOGENBOOK_LLM_API_KEY='<key>'` and
+`AUTOGENBOOK_LLM_BASE_URL='https://llm.ai.e-infra.cz/v1/'` - and do **not** also set
+`OPENROUTER_API_KEY`: both engines read it *before* `AUTOGENBOOK_LLM_API_KEY`, so a leftover
+OpenRouter key silently wins. `scripts/deploy.py --sync-secrets` enforces this (`LLM_SECRET_KEYS`):
+the env file must set exactly one of the two keys, the three LLM keys are written exactly as the env
+file sets them, and one the env file leaves unset is removed from the live Secret with a visible
+`REMOVED` line in the plan (issue #163).
+
 **Optional - per-user LLM keys.** Add `--from-literal=LLM_KEY_ENCRYPTION_KEY="$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"`
 to turn on "bring your own LLM key" (each user stores their own key in Account settings; it is
 Fernet-encrypted at rest with this value, and their runs then get their own per-key parallel-request
@@ -233,9 +243,10 @@ over from the live Secret (or writes them from the env file when set there) and
 refuses to read it if it somehow isn't) and run `python scripts/deploy.py --stage prod --sync-secrets`
 to see which keys would change, or add `--apply` to actually write them - it's idempotent, unlike
 the `create` command above, and never prints any secret value, only which keys are new/changed/
-unchanged. The dev stage reads `.env.dev` instead (section 18). `LLM_KEY_ENCRYPTION_KEY` is the
-one optional key (`OPTIONAL_SECRET_KEYS` in `scripts/deploy.py`): existing env files without it
-keep validating. If the env file sets a non-empty value it is written to the Secret; if it
+unchanged. The dev stage reads `.env.dev` instead (section 18). Env file keys that are not Secret
+keys (Compose-only settings such as `WEB_PORT`) are listed as `ignored` in the plan, so a misspelt
+key is noticed. `LLM_KEY_ENCRYPTION_KEY` is one of the optional keys (`OPTIONAL_SECRET_KEYS` in
+`scripts/deploy.py`): existing env files without it keep validating. If the env file sets a non-empty value it is written to the Secret; if it
 doesn't, the value currently in the live Secret is **carried over unchanged** (the plan prints
 `KEPT from the cluster`) - a sync never removes it by omission, since that would make every
 stored user key undecryptable (or crash-loop api/worker under `LLM_KEY_POLICY=required`). To
@@ -1068,7 +1079,9 @@ stage.
 1. Create `.env.dev` at the repo root with the same keys as `.env.production` (step 4) but dev's
    own values: a new `POSTGRES_PASSWORD`, `S3_SECRET_KEY` and `AUTH_JWT_SECRET`, and a
    `DATABASE_URL` using that password (the host stays `db` - it resolves inside dev's own
-   namespace). The API keys may be shared with prod or separate.
+   namespace). The API keys may be shared with prod or separate; dev may use `OPENROUTER_API_KEY`
+   while prod uses `AUTOGENBOOK_LLM_API_KEY`/`AUTOGENBOOK_LLM_BASE_URL` (step 4), each env file
+   setting exactly one of the two API keys.
 2. `python scripts/deploy.py --stage dev --sync-secrets --apply` creates dev's Secret.
 3. Check out a commit that has `run_engine.py`, then run
    `python scripts/deploy.py --stage dev --bootstrap` to review the plan, and the same with
