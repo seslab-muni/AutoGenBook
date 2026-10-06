@@ -58,8 +58,9 @@ class Reranker(Protocol):
 class RemoteReranker:
     name = "remote"
 
-    def __init__(self, llm: Any, *, model: str, base_url: str, api_key: str | None) -> None:
+    def __init__(self, llm: Any, *, model: str, base_url: str, api_key: str | None, limited: bool = True) -> None:
         self.llm = llm
+        self.limited = limited
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -109,6 +110,7 @@ class RemoteReranker:
             f"{self.base_url}/rerank",
             {"model": self.model, "query": query, "documents": list(docs), "top_n": len(docs)},
             label="rerank", kind="rerank", model=self.model, api_key=self.api_key,
+            limited=self.limited,
         )
         scores = [0.0] * len(docs)
         for result in data["results"]:
@@ -120,6 +122,7 @@ class RemoteReranker:
             f"{self.base_url}/score",
             {"model": self.model, "text_1": query, "text_2": list(docs)},
             label="rerank.score", kind="score", model=self.model, api_key=self.api_key,
+            limited=self.limited,
         )
         scores = [0.0] * len(docs)
         for result in data["data"]:

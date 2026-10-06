@@ -209,6 +209,25 @@ feature is disabled - everyone keeps using `OPENROUTER_API_KEY`. `LLM_KEY_POLICY
 encryption key. **Back this value up**: if it is lost or changed, every stored user key becomes
 undecryptable and those users' runs fail with a clear error until they re-enter their key.
 
+**Optional - dedicated embedding/rerank key.** The e-INFRA gateway can issue a second API key that
+is valid only for the embedding and reranking models and has no parallel-request limit (the main
+chat key allows ~4 requests in flight). Put it in `AUTOGENBOOK_EMBED_API_KEY` and
+`AUTOGENBOOK_RERANK_API_KEY` (usually both hold the same key). When either differs from the chat
+key (or its `*_BASE_URL` differs from the chat base URL), the engine sends those requests outside the
+chat concurrency limiter, and embeds documents and batches `AUTOGENBOOK_EMBED_CONCURRENCY` (default 8) at a
+time; a per-user chat key is never used for the backend whose key is set here. Without them embeddings and
+reranking use the main key (a user's own key for their runs). On a live Secret:
+
+```bash
+kubectl -n <ns> patch secret autogenbook-secrets --type merge \
+  -p '{"stringData":{"AUTOGENBOOK_EMBED_API_KEY":"…","AUTOGENBOOK_RERANK_API_KEY":"…"}}'
+kubectl -n <ns> rollout restart deploy/api deploy/worker
+```
+
+Both keys are in `OPTIONAL_SECRET_KEYS` in `scripts/deploy.py`, so `--sync-secrets` carries them
+over from the live Secret (or writes them from the env file when set there) and
+`--drop-optional-secret AUTOGENBOOK_EMBED_API_KEY` (or `..._RERANK_API_KEY`) removes one.
+
 **Rotating any of these later**: put the same keys in a `.env.production` file at the repo root
 (plain `KEY=VALUE` lines - gitignored by `/.env*` in `.gitignore`, and `scripts/deploy.py`
 refuses to read it if it somehow isn't) and run `python scripts/deploy.py --stage prod --sync-secrets`

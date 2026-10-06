@@ -78,6 +78,18 @@ def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer") from exc
 
 
+def _normalize_base_url(url: str | None) -> str:
+    """Lower-case scheme and host, no trailing slash: what `LLMClient.openai_for` treats as one endpoint."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit((url or "").strip())
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, "")).rstrip("/")
+
+
+def _dedicated(key: str | None, url: str | None, main_key: str | None, main_url: str | None) -> bool:
+    return key != main_key or _normalize_base_url(url) != _normalize_base_url(main_url)
+
+
 def is_openrouter(url: str) -> bool:
     return "openrouter.ai" in (url or "").lower()
 
@@ -130,10 +142,15 @@ class RetrievalSettings:
     embed_model: str = DEFAULT_EMBED_MODEL
     embed_base_url: str = DEFAULT_OPENROUTER_BASE_URL
     embed_api_key: str | None = None
+    embed_dedicated: bool = False  # key differs, or the (normalised) base URL does, from the main chat endpoint
+    embed_key_dedicated: bool = False  # ... specifically the key
+    embed_concurrency: int = 8  # batches in flight when the key is dedicated
     rerank: str = "remote"  # none | remote | llm
     rerank_model: str = DEFAULT_RERANK_MODEL
     rerank_base_url: str = DEFAULT_OPENROUTER_BASE_URL
     rerank_api_key: str | None = None
+    rerank_dedicated: bool = False
+    rerank_key_dedicated: bool = False
     enable_web: bool = False
     tavily_api_key: str | None = None
     web_k: int = 5
@@ -262,6 +279,10 @@ class RunConfig:
         rerank = _env_str(env, "AUTOGENBOOK_RERANK", "remote").lower()
         if rerank not in {"none", "remote", "llm"}:
             raise ConfigError("AUTOGENBOOK_RERANK must be one of none, remote, llm")
+        embed_base_url = _env_str(env, "AUTOGENBOOK_EMBED_BASE_URL", base_url)
+        embed_api_key = _env_str(env, "AUTOGENBOOK_EMBED_API_KEY") or api_key
+        rerank_base_url = _env_str(env, "AUTOGENBOOK_RERANK_BASE_URL", base_url)
+        rerank_api_key = _env_str(env, "AUTOGENBOOK_RERANK_API_KEY") or api_key
         retrieval = RetrievalSettings(
             kb_dir=kb_dir,
             rebuild_kb=bool(args.rebuild_kb),
@@ -271,12 +292,17 @@ class RunConfig:
             chunk_tokens=max(50, _env_int(env, "AUTOGENBOOK_CHUNK_TOKENS", 400)),
             dense=dense,
             embed_model=_env_str(env, "AUTOGENBOOK_EMBED_MODEL", DEFAULT_EMBED_MODEL),
-            embed_base_url=_env_str(env, "AUTOGENBOOK_EMBED_BASE_URL", base_url),
-            embed_api_key=_env_str(env, "AUTOGENBOOK_EMBED_API_KEY") or api_key,
+            embed_base_url=embed_base_url,
+            embed_api_key=embed_api_key,
+            embed_dedicated=_dedicated(embed_api_key, embed_base_url, api_key, base_url),
+            embed_key_dedicated=embed_api_key != api_key,
+            embed_concurrency=max(1, _env_int(env, "AUTOGENBOOK_EMBED_CONCURRENCY", 8)),
             rerank=rerank,
             rerank_model=_env_str(env, "AUTOGENBOOK_RERANK_MODEL", DEFAULT_RERANK_MODEL),
-            rerank_base_url=_env_str(env, "AUTOGENBOOK_RERANK_BASE_URL", base_url),
-            rerank_api_key=_env_str(env, "AUTOGENBOOK_RERANK_API_KEY") or api_key,
+            rerank_base_url=rerank_base_url,
+            rerank_api_key=rerank_api_key,
+            rerank_dedicated=_dedicated(rerank_api_key, rerank_base_url, api_key, base_url),
+            rerank_key_dedicated=rerank_api_key != api_key,
             enable_web=bool(args.enable_web_rag),
             tavily_api_key=_env_str(env, "TAVILY_API_KEY") or None,
             web_k=max(1, int(args.web_rag_k)),

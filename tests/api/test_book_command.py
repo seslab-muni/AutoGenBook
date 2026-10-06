@@ -323,3 +323,28 @@ def test_concurrency_parameter_overrides_parent_env(
     options = RunOptions(outline="generate", output_format="markdown")
     _argv, env, _cwd = build_command(work_dir, options, settings, concurrency=4)
     assert env["AUTOGENBOOK_CONCURRENCY"] == "4"
+
+
+# A dedicated embedding/rerank key must reach the engine untouched, even with a per-user chat key.
+@pytest.mark.parametrize("key", ["AUTOGENBOOK_EMBED_API_KEY", "AUTOGENBOOK_RERANK_API_KEY"])
+def test_dedicated_retrieval_key_survives_per_user_key(settings: Settings, work_dir: Path, monkeypatch, key):
+    assert key in ENV_ALLOWLIST
+    monkeypatch.setenv(key, "x")
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings, llm_api_key="sk-user")
+    assert env[key] == "x"
+    assert env["AUTOGENBOOK_LLM_API_KEY"] == "sk-user"
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env[key] == "x"
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["AUTOGENBOOK_EMBED_MODEL", "AUTOGENBOOK_EMBED_BASE_URL", "AUTOGENBOOK_EMBED_CONCURRENCY", "AUTOGENBOOK_RERANK",
+     "AUTOGENBOOK_RERANK_MODEL", "AUTOGENBOOK_RERANK_BASE_URL", "AUTOGENBOOK_DENSE"],
+)
+def test_retrieval_settings_are_forwarded(settings: Settings, work_dir: Path, monkeypatch, key):
+    monkeypatch.setenv(key, "v")
+    options = RunOptions(outline="generate", output_format="markdown")
+    _argv, env, _cwd = build_command(work_dir, options, settings)
+    assert env[key] == "v"

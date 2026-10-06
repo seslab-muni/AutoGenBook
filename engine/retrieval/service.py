@@ -98,7 +98,10 @@ class RetrievalService:
         llm = self._llm_factory()
         chain: list[Reranker] = []
         if s.rerank == "remote":
-            chain.append(RemoteReranker(llm, model=s.rerank_model, base_url=s.rerank_base_url, api_key=s.rerank_api_key))
+            if s.rerank_dedicated:
+                self.sink.emit("kb", f"Reranking uses {_dedicated_what(s.rerank_key_dedicated, s.rerank_api_key)} at {s.rerank_base_url}, outside the LLM limiter")
+            chain.append(RemoteReranker(llm, model=s.rerank_model, base_url=s.rerank_base_url, api_key=s.rerank_api_key,
+                                        limited=not s.rerank_dedicated))
         chain.append(LLMListwiseReranker(llm))
         return chain
 
@@ -115,8 +118,16 @@ class RetrievalService:
             for kind in attempts:
                 if kind == "local" and not LocalEmbeddings.available():
                     continue
+                if kind == "remote" and s.embed_dedicated:
+                    self.sink.emit(
+                        "kb", f"Embeddings use {_dedicated_what(s.embed_key_dedicated, s.embed_api_key)} at {s.embed_base_url}, "
+                        f"{s.embed_concurrency} at a time, outside the LLM limiter",
+                    )
                 backend = (
-                    RemoteEmbeddings(self._llm_factory(), model=s.embed_model, base_url=s.embed_base_url, api_key=s.embed_api_key)
+                    RemoteEmbeddings(
+                        self._llm_factory(), model=s.embed_model, base_url=s.embed_base_url, api_key=s.embed_api_key,
+                        limited=not s.embed_dedicated, parallel=s.embed_concurrency if s.embed_dedicated else 1,
+                    )
                     if kind == "remote"
                     else LocalEmbeddings()
                 )
@@ -166,3 +177,11 @@ class RetrievalService:
             items += await self.web.search(queries, k=self.settings.web_k)
         text = format_context(items, max_chars_total=self.settings.max_chars_total, item_chars=self.settings.item_chars)
         return RetrievedContext(items, text)
+
+
+def _key_tail(key: str | None) -> str:
+    return key[-4:] if key and len(key) >= 9 else "****"
+
+
+def _dedicated_what(key_dedicated: bool, key: str | None) -> str:
+    return f"a dedicated key (...{_key_tail(key)})" if key_dedicated else "a dedicated endpoint"

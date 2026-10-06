@@ -63,6 +63,19 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "AUTOGENBOOK_LLM_REASONING_EFFORT",
     # Engine (engine/) setting: sub-headings inside section bodies, off by default.
     "AUTOGENBOOK_BODY_HEADINGS",
+    # Engine (engine/) retrieval settings. A dedicated embedding/rerank key (valid only for
+    # those models, no parallel-request limit) is carried here and never overwritten by a
+    # per-user chat key (see `build_command`): without it the engine falls back to the main
+    # key, which is then the user's own.
+    "AUTOGENBOOK_EMBED_MODEL",
+    "AUTOGENBOOK_EMBED_BASE_URL",
+    "AUTOGENBOOK_EMBED_API_KEY",
+    "AUTOGENBOOK_EMBED_CONCURRENCY",
+    "AUTOGENBOOK_RERANK",
+    "AUTOGENBOOK_RERANK_MODEL",
+    "AUTOGENBOOK_RERANK_BASE_URL",
+    "AUTOGENBOOK_RERANK_API_KEY",
+    "AUTOGENBOOK_DENSE",
     # OpenRouter client tuning (openrouter_llm.py) - not overridden by
     # `main.py`'s import-time env writes, so a parent-set value reaches the
     # client unlike OPENROUTER_INPUT_COST_PER_M/OPENROUTER_OUTPUT_COST_PER_M.
@@ -235,6 +248,9 @@ def build_command(
         env["AUTOGENBOOK_BOOK_AUTHOR"] = author.strip()
 
     if llm_api_key:
+        # Deliberately NOT touched here: AUTOGENBOOK_EMBED_API_KEY / AUTOGENBOOK_RERANK_API_KEY.
+        # A configured dedicated retrieval key stays in force; when none is set the engine
+        # falls back to the main key, i.e. the user key injected below.
         # Both names, because both CLI generations read them (`openrouter_llm.py` and
         # `engine/config.py`, `OPENROUTER_API_KEY` taking precedence) - setting only one
         # would let the deployment key in the other win. `OPENAI_API_KEY` is dropped so a
