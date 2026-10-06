@@ -37,7 +37,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
       - name: worker
-        image: cerit.io/conerzyo/autogenbook:78b48bb
+        image: cerit.io/conerzyo/autogenbook:45d8a4c
         command: ["python", "-m", "api.worker"]
         securityContext:
           runAsUser: 1000
