@@ -106,13 +106,22 @@ REQUIRED_SECRET_KEYS = (
     "POSTGRES_PASSWORD",
     "S3_SECRET_KEY",
     "DATABASE_URL",
-    "OPENROUTER_API_KEY",
     "TAVILY_API_KEY",
     "AUTH_JWT_SECRET",
 )
 # TAVILY_API_KEY is the one key docs/DEPLOY_GUIDE.md documents as allowed to be blank (web
 # retrieval is optional) - every other key must actually have a value, not just be present.
 OPTIONAL_EMPTY_SECRET_KEYS = frozenset({"TAVILY_API_KEY"})
+# The LLM endpoint's credentials (issue #163). A stage uses either OpenRouter (`OPENROUTER_API_KEY`)
+# or another OpenAI-compatible endpoint (`AUTOGENBOOK_LLM_API_KEY`, usually with
+# `AUTOGENBOOK_LLM_BASE_URL`; prod runs on e-INFRA this way and has no `OPENROUTER_API_KEY` at
+# all). Both engines read `OPENROUTER_API_KEY` *before* `AUTOGENBOOK_LLM_API_KEY`, so a stale
+# OpenRouter key left in the Secret would silently win over the e-INFRA key - which is why this
+# group is NOT carried over like OPTIONAL_SECRET_KEYS: the env file alone decides which of these
+# keys exist (exactly one of the two API keys must be set), and a key it doesn't set is removed
+# from the live Secret, visibly (`REMOVED` in the plan), never by accident.
+LLM_SECRET_KEYS = ("OPENROUTER_API_KEY", "AUTOGENBOOK_LLM_API_KEY", "AUTOGENBOOK_LLM_BASE_URL")
+LLM_API_KEYS = ("OPENROUTER_API_KEY", "AUTOGENBOOK_LLM_API_KEY")
 # Per-user LLM key: the Fernet key that encrypts users' stored LLM API keys. Unlike the keys above
 # it may be absent from the env file altogether (the feature is then simply disabled), so adding
 # it to REQUIRED_SECRET_KEYS would make every existing env file fail validation. It is written
@@ -1657,6 +1666,24 @@ def validate_secret_values(values: dict[str, str]) -> None:
     ]
     if empty:
         raise DeployError("required key(s) present but empty: " + ", ".join(empty))
+    llm_keys_set = [k for k in LLM_API_KEYS if values.get(k)]
+    if not llm_keys_set:
+        raise DeployError(
+            "no LLM API key: set exactly one of " + " or ".join(LLM_API_KEYS)
+            + " (the latter usually together with AUTOGENBOOK_LLM_BASE_URL)"
+        )
+    if len(llm_keys_set) > 1:
+        raise DeployError(
+            "both " + " and ".join(LLM_API_KEYS) + " are set - set exactly one: OPENROUTER_API_KEY "
+            "takes precedence in both engines, so the other key would never be used"
+        )
+
+
+def unknown_env_keys(values: dict[str, str]) -> list[str]:
+    """Env file keys `--sync-secrets` does not write (Compose-only settings such as WEB_PORT, or a
+    typo of a Secret key). Reported in the plan so a misspelt key is not silently ignored."""
+    known = set(REQUIRED_SECRET_KEYS) | set(LLM_SECRET_KEYS) | set(OPTIONAL_SECRET_KEYS)
+    return [k for k in values if k not in known]
 
 
 def plan_secret_values(
@@ -1665,13 +1692,21 @@ def plan_secret_values(
     drop: tuple[str, ...] = (),
 ) -> tuple[dict[str, str], dict[str, str]]:
     """`(key -> value to write, key -> plan note)` for the Secret: the required keys from the
-    env file, plus each OPTIONAL_SECRET_KEYS entry resolved as: the env file's non-empty value if
-    it has one; else removed *only* if explicitly named in `drop` (--drop-optional-secret); else
-    the live Secret's current value carried over untouched. Never removing by omission matters:
-    `kubectl apply` of the regenerated manifest would otherwise delete a key (e.g. the encryption
-    key) the env file simply didn't mention, breaking every user's stored LLM key."""
+    env file; the LLM_SECRET_KEYS exactly as the env file sets them (a key it leaves unset is
+    removed from the live Secret, with a `REMOVED` note - see LLM_SECRET_KEYS for why this group
+    is never carried over); plus each OPTIONAL_SECRET_KEYS entry resolved as: the env file's
+    non-empty value if it has one; else removed *only* if explicitly named in `drop`
+    (--drop-optional-secret); else the live Secret's current value carried over untouched. Never
+    removing those by omission matters: `kubectl apply` of the regenerated manifest would
+    otherwise delete a key (e.g. the encryption key) the env file simply didn't mention, breaking
+    every user's stored LLM key."""
     to_write = {key: values[key] for key in REQUIRED_SECRET_KEYS}
     notes: dict[str, str] = {}
+    for key in LLM_SECRET_KEYS:
+        if values.get(key):
+            to_write[key] = values[key]
+        elif key in (current or {}):
+            notes[key] = "REMOVED (not set in the env file, which decides the LLM endpoint credentials)"
     for key in OPTIONAL_SECRET_KEYS:
         live_b64 = (current or {}).get(key)
         if key in drop:
@@ -1691,8 +1726,9 @@ KEY_COL_WIDTH = 30
 
 
 def dropped_keys_still_present(current: dict[str, str] | None, drop: tuple[str, ...]) -> list[str]:
-    """Keys passed to --drop-optional-secret that are still in the live Secret. `kubectl apply`
-    only prunes keys recorded in the last-applied annotation, so a hand-created key survives it."""
+    """Keys the plan removed (--drop-optional-secret, or an LLM key the env file no longer sets)
+    that are still in the live Secret. `kubectl apply` only prunes keys recorded in the
+    last-applied annotation, so a hand-created key survives it."""
     return [key for key in drop if key in (current or {})]
 
 
@@ -1704,6 +1740,7 @@ def sync_secrets(args: argparse.Namespace, stage: Stage) -> int:
     current = kubectl_get_secret_data(SECRET_NAME, stage.namespace)
     to_write, notes = plan_secret_values(values, current, tuple(args.drop_optional_secret or ()))
     secret_keys = tuple(to_write)
+    removed = tuple(key for key, note in notes.items() if note.startswith("REMOVED"))
     print(f"Secret sync plan for secret/{SECRET_NAME} in namespace {stage.namespace} (values never shown):\n")
     for key in secret_keys:
         new_b64 = base64.b64encode(to_write[key].encode()).decode()
@@ -1721,6 +1758,9 @@ def sync_secrets(args: argparse.Namespace, stage: Stage) -> int:
     for key, note in notes.items():
         if key not in to_write:
             print(f"  {key:<{KEY_COL_WIDTH}} {note}")
+    ignored = unknown_env_keys(values)
+    if ignored:
+        print(f"\n  ignored (not Secret keys): {', '.join(ignored)}")
 
     if not args.apply:
         print("\nDry run - pass --apply to write this to the cluster.")
@@ -1742,9 +1782,7 @@ def sync_secrets(args: argparse.Namespace, stage: Stage) -> int:
     manifest = subprocess.run(create_cmd, stdout=subprocess.PIPE, text=True, check=True).stdout
     subprocess.run(["kubectl", "apply", "-n", stage.namespace, "-f", "-"], input=manifest, text=True, check=True)
     print(f"\nsecret/{SECRET_NAME} synced.")
-    leftover = dropped_keys_still_present(
-        kubectl_get_secret_data(SECRET_NAME, stage.namespace), tuple(args.drop_optional_secret or ())
-    )
+    leftover = dropped_keys_still_present(kubectl_get_secret_data(SECRET_NAME, stage.namespace), removed)
     if leftover:
         print(
             f"warning: {', '.join(leftover)} is still present in secret/{SECRET_NAME} (kubectl apply only "
@@ -1792,6 +1830,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
               """
             + ", ".join(REQUIRED_SECRET_KEYS)
             + """
+            plus exactly one LLM API key: OPENROUTER_API_KEY, or AUTOGENBOOK_LLM_API_KEY (usually with
+            AUTOGENBOOK_LLM_BASE_URL) for another OpenAI-compatible endpoint such as e-INFRA. These three
+            are written exactly as the env file sets them - one it leaves unset is removed from the Secret
+            (the plan prints REMOVED), since a leftover OPENROUTER_API_KEY would take precedence.
             (plus, optionally, """
             + ", ".join(OPTIONAL_SECRET_KEYS)
             + """ - per-user LLM keys / a dedicated embedding+rerank key; written when set in the env file,

@@ -175,6 +175,7 @@ class OptionalSecretKeysTests(unittest.TestCase):
     def _base(self):
         values = {key: "x" for key in deploy.REQUIRED_SECRET_KEYS}
         values["TAVILY_API_KEY"] = ""
+        values["OPENROUTER_API_KEY"] = "x"
         return values
 
     @staticmethod
@@ -236,7 +237,9 @@ class DropOptionalSecretTests(unittest.TestCase):
         self.assertEqual(deploy.dropped_keys_still_present(None, ("LLM_KEY_ENCRYPTION_KEY",)), [])
 
     def test_key_column_fits_the_longest_secret_name(self):
-        longest = max(len(k) for k in deploy.REQUIRED_SECRET_KEYS + deploy.OPTIONAL_SECRET_KEYS)
+        longest = max(
+            len(k) for k in deploy.REQUIRED_SECRET_KEYS + deploy.LLM_SECRET_KEYS + deploy.OPTIONAL_SECRET_KEYS
+        )
         self.assertGreater(deploy.KEY_COL_WIDTH, longest)
 
 
@@ -244,6 +247,7 @@ class ValidateSecretValuesTests(unittest.TestCase):
     def _complete_values(self, **overrides):
         values = {key: "x" for key in deploy.REQUIRED_SECRET_KEYS}
         values["TAVILY_API_KEY"] = ""  # allowed to be blank
+        values["OPENROUTER_API_KEY"] = "x"
         values.update(overrides)
         return values
 
@@ -263,6 +267,83 @@ class ValidateSecretValuesTests(unittest.TestCase):
 
     def test_empty_tavily_key_is_allowed(self):
         deploy.validate_secret_values(self._complete_values(TAVILY_API_KEY=""))  # must not raise
+
+
+class LlmSecretKeysTests(unittest.TestCase):
+    """Issue #163: prod authenticates to e-INFRA with AUTOGENBOOK_LLM_API_KEY/_BASE_URL and has no
+    OPENROUTER_API_KEY; a sync must be able to express that, and must never leave a stale
+    OPENROUTER_API_KEY behind (both engines prefer it over AUTOGENBOOK_LLM_API_KEY)."""
+
+    @staticmethod
+    def _values(**llm):
+        values = {key: "x" for key in deploy.REQUIRED_SECRET_KEYS}
+        values["TAVILY_API_KEY"] = ""
+        values.update(llm)
+        return values
+
+    @staticmethod
+    def _live(**kv):
+        import base64
+
+        return {k: base64.b64encode(v.encode()).decode() for k, v in kv.items()}
+
+    def test_e_infra_key_without_openrouter_validates(self):
+        deploy.validate_secret_values(
+            self._values(AUTOGENBOOK_LLM_API_KEY="k", AUTOGENBOOK_LLM_BASE_URL="https://llm.example/v1/")
+        )  # must not raise
+
+    def test_openrouter_key_alone_validates(self):
+        deploy.validate_secret_values(self._values(OPENROUTER_API_KEY="k"))  # must not raise
+
+    def test_no_llm_key_at_all_raises(self):
+        with self.assertRaises(deploy.DeployError) as ctx:
+            deploy.validate_secret_values(self._values())
+        self.assertIn("AUTOGENBOOK_LLM_API_KEY", str(ctx.exception))
+
+    def test_empty_openrouter_key_counts_as_unset(self):
+        with self.assertRaises(deploy.DeployError):
+            deploy.validate_secret_values(self._values(OPENROUTER_API_KEY=""))
+        deploy.validate_secret_values(self._values(OPENROUTER_API_KEY="", AUTOGENBOOK_LLM_API_KEY="k"))
+
+    def test_both_api_keys_set_raises(self):
+        with self.assertRaises(deploy.DeployError) as ctx:
+            deploy.validate_secret_values(self._values(OPENROUTER_API_KEY="a", AUTOGENBOOK_LLM_API_KEY="b"))
+        self.assertIn("precedence", str(ctx.exception))
+
+    def test_e_infra_keys_are_written_and_kept_on_resync(self):
+        values = self._values(AUTOGENBOOK_LLM_API_KEY="k", AUTOGENBOOK_LLM_BASE_URL="https://llm.example/v1/")
+        live = self._live(AUTOGENBOOK_LLM_API_KEY="k", AUTOGENBOOK_LLM_BASE_URL="https://llm.example/v1/")
+        to_write, notes = deploy.plan_secret_values(values, live)
+        self.assertEqual(to_write["AUTOGENBOOK_LLM_API_KEY"], "k")
+        self.assertEqual(to_write["AUTOGENBOOK_LLM_BASE_URL"], "https://llm.example/v1/")
+        self.assertNotIn("OPENROUTER_API_KEY", to_write)
+        self.assertEqual(notes, {})
+
+    def test_switching_to_e_infra_removes_the_live_openrouter_key_visibly(self):
+        values = self._values(AUTOGENBOOK_LLM_API_KEY="k", AUTOGENBOOK_LLM_BASE_URL="https://llm.example/v1/")
+        to_write, notes = deploy.plan_secret_values(values, self._live(OPENROUTER_API_KEY="old"))
+        self.assertNotIn("OPENROUTER_API_KEY", to_write)
+        self.assertTrue(notes["OPENROUTER_API_KEY"].startswith("REMOVED"))
+
+    def test_switching_to_openrouter_removes_the_live_e_infra_keys_visibly(self):
+        live = self._live(AUTOGENBOOK_LLM_API_KEY="k", AUTOGENBOOK_LLM_BASE_URL="https://llm.example/v1/")
+        to_write, notes = deploy.plan_secret_values(self._values(OPENROUTER_API_KEY="o"), live)
+        self.assertEqual(to_write["OPENROUTER_API_KEY"], "o")
+        self.assertNotIn("AUTOGENBOOK_LLM_API_KEY", to_write)
+        self.assertNotIn("AUTOGENBOOK_LLM_BASE_URL", to_write)
+        self.assertTrue(notes["AUTOGENBOOK_LLM_API_KEY"].startswith("REMOVED"))
+        self.assertTrue(notes["AUTOGENBOOK_LLM_BASE_URL"].startswith("REMOVED"))
+
+    def test_llm_key_absent_everywhere_gets_no_note(self):
+        _, notes = deploy.plan_secret_values(self._values(OPENROUTER_API_KEY="o"), None)
+        self.assertEqual(notes, {})
+
+    def test_unknown_env_keys_are_reported_not_written(self):
+        values = self._values(OPENROUTER_API_KEY="o", WEB_PORT="8080", LLM_KEY_POLICY="optional")
+        self.assertEqual(deploy.unknown_env_keys(values), ["WEB_PORT", "LLM_KEY_POLICY"])
+        to_write, _ = deploy.plan_secret_values(values, None)
+        self.assertNotIn("WEB_PORT", to_write)
+        self.assertNotIn("LLM_KEY_POLICY", to_write)
 
 
 def _fake_plan(tmp_dir: Path, *, api_manifest: Path, worker_manifest: Path, web_manifest: Path) -> "deploy.Plan":
