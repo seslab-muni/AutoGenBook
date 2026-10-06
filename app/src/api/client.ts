@@ -127,6 +127,16 @@ const responseMiddleware: Middleware = {
 
 export const apiClient = createClient<paths>({
   baseUrl: apiBaseUrl,
+  // Never answer an API request from the browser's HTTP cache. API responses are per-user,
+  // per-moment JSON; what the browser may have stored under an API URL - a response that
+  // happened to carry freshness headers, a cached redirect, an error page a proxy served while
+  // the backend was rolling over - is at best stale and at worst not JSON at all. That last
+  // case is what every prod deploy used to leave behind: a tab whose `GET /projects/{id}` and
+  // outline requests were satisfied from cache with an HTML body (`SyntaxError: Unexpected
+  // token '<'`, surfaced here as an `ApiError` with status 0) until the user hard-reloaded.
+  // The API sends `Cache-Control: no-store` as well (`api/core/cache_headers.py`); this is the
+  // client-side half, which also bypasses anything cached before that header existed.
+  cache: 'no-store',
   // openapi-fetch resolves its default `fetch` once, at client-construction time — this wraps
   // it so every call reads `globalThis.fetch` fresh, which MSW (patched in via `server.listen()`
   // after this module has already been imported) needs to be able to intercept requests.

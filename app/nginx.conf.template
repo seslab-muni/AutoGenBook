@@ -89,7 +89,29 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Vite emits every asset under /assets/ with a content hash in its name
+    # (`index-D8XrdFA3.js`), so an asset URL is immutable: cache it for as
+    # long as browsers allow. `=404` instead of the SPA fallback below: after
+    # a deploy, a tab still running the previous build asks for chunks that
+    # no longer exist, and answering those with `index.html` (200, text/html)
+    # turns a clear "module not found" - which TanStack Router recovers from
+    # by reloading the page once - into an HTML document fed to the module
+    # loader, which only fails later and more confusingly.
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
+        # `index.html` (also what every SPA route URL resolves to) carries
+        # no hash, so it must never be served from a browser cache without
+        # revalidation: with no Cache-Control at all, browsers apply the
+        # heuristic "fresh for 10% of its age", i.e. for hours after a
+        # deploy a plain reload could still get the previous build's
+        # `index.html` - whose asset URLs are gone - until a hard reload.
+        # `no-cache` means "always revalidate", and revalidation is a cheap
+        # 304 via the ETag nginx already sends.
+        add_header Cache-Control "no-cache";
     }
 }

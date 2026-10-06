@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { AppProviders } from '@/app/providers';
+import { installStaleBuildRecovery } from '@/lib/stale-build';
 
 import '@/index.css';
 
@@ -16,6 +17,7 @@ async function enableMocksIfRequested(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  installStaleBuildRecovery();
   await enableMocksIfRequested();
 
   const rootElement = document.getElementById('root');
