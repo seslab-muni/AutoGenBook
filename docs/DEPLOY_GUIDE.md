@@ -454,6 +454,8 @@ metadata:
 spec:
   backoffLimit: 3
   template:
+    metadata:
+      labels: {app: minio-init}   # admitted by minio's NetworkPolicy (section 13)
     spec:
       restartPolicy: OnFailure
       securityContext:
@@ -466,6 +468,9 @@ spec:
           runAsUser: 1000
           allowPrivilegeEscalation: false
           capabilities: {drop: [ALL]}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 250m, memory: 128Mi}
         envFrom:
         - configMapRef: {name: autogenbook-config}
         - secretRef: {name: autogenbook-secrets}
@@ -506,6 +511,14 @@ needed).
 
 Run `kubectl apply -f k8s/minio-init-job.yaml` once after MinIO is `Ready`, or re-run the Job
 (`kubectl delete job minio-init && kubectl apply -f ...`) any time you rotate the bucket.
+
+The container's `resources` are explicit and small on purpose. The namespace's LimitRange
+defaults a container without them to a 4-CPU limit, and once api and the five workers are
+running the ResourceQuota (16 CPU of limits) has no room for that: the Job then never gets a
+pod (`kubectl describe job minio-init` shows `exceeded quota`) and every `--bootstrap` re-run
+times out waiting for it (October 2026 incident). The `app: minio-init` label is what the minio
+NetworkPolicy (section 13) admits, for the same reason: a re-run happens with the policies in
+place.
 
 ## 8. API
 
@@ -820,6 +833,7 @@ spec:
   - from:
     - podSelector: {matchLabels: {app: api}}
     - podSelector: {matchLabels: {app: worker}}
+    - podSelector: {matchLabels: {app: minio-init}}   # the bucket-creating Job (section 7)
 ```
 
 `api` itself doesn't strictly need to reach `db`/`minio` if it only ever proxies through
@@ -836,13 +850,13 @@ for a stage (section 18) - the commands below are what it runs, for reference.
 kubectl apply -f k8s/configmap.yaml
 kubectl create secret generic autogenbook-secrets --from-literal=...   # from step 4, if not already applied
 kubectl apply -f k8s/pvc.yaml
+kubectl apply -f k8s/networkpolicy.yaml   # first: selects pods by label, and minio-init needs it
 kubectl apply -f k8s/db.yaml -f k8s/minio.yaml
 kubectl wait --for=condition=ready pod -l app=db --timeout=120s
 kubectl wait --for=condition=ready pod -l app=minio --timeout=120s
 kubectl apply -f k8s/minio-init-job.yaml
 kubectl wait --for=condition=complete job/minio-init --timeout=60s
 kubectl apply -f k8s/api.yaml -f k8s/worker.yaml -f k8s/web.yaml
-kubectl apply -f k8s/networkpolicy.yaml
 kubectl apply -f k8s/ingress.yaml   # safe as-is - see step 12 on app-level auth
 ```
 

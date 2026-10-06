@@ -1363,6 +1363,7 @@ class BootstrapStepsTests(unittest.TestCase):
             [
                 "apply k8s/configmap.yaml",
                 "apply k8s/pvc.yaml",
+                "apply k8s/networkpolicy.yaml",
                 "apply k8s/db.yaml",
                 "apply k8s/minio.yaml",
                 "wait db",
@@ -1370,7 +1371,6 @@ class BootstrapStepsTests(unittest.TestCase):
                 "kubectl delete job",
                 "apply k8s/minio-init-job.yaml",
                 "kubectl wait --for=condition=complete",
-                "apply k8s/networkpolicy.yaml",
                 "apply k8s/ingress.yaml",
             ],
         )
