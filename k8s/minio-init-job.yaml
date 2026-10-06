@@ -6,6 +6,8 @@ metadata:
 spec:
   backoffLimit: 3
   template:
+    metadata:
+      labels: {app: minio-init}   # admitted by minio's NetworkPolicy (k8s/networkpolicy.yaml)
     spec:
       restartPolicy: OnFailure
       securityContext:
@@ -19,6 +21,12 @@ spec:
           runAsUser: 1000
           allowPrivilegeEscalation: false
           capabilities: {drop: [ALL]}
+        # Explicit and small: without these the namespace LimitRange defaults the container to
+        # a 4-CPU limit, which the ResourceQuota refuses once api and the workers are running
+        # (the Job then sits with no pod until `kubectl wait` times out).
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 250m, memory: 128Mi}
         envFrom:
         - configMapRef: {name: autogenbook-config}
         - secretRef: {name: autogenbook-secrets}

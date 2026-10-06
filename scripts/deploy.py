@@ -195,10 +195,13 @@ DEPLOYMENT_ORDER = ("api", "worker", "web")
 # `--bootstrap`'s supporting resources, by k8s/<name>.yaml, in the order docs/DEPLOY_GUIDE.md
 # section 14 applies them: these before the Deployments (db and minio then waited for, and the
 # minio-init Job run to completion), the ones in BOOTSTRAP_AFTER once the Deployments are up.
-BOOTSTRAP_BEFORE = ("configmap", "pvc", "db", "minio")
+# The network policies go first: they select pods by label, so applying them before anything
+# runs is harmless, and the minio policy must already admit the Job's pod when the Job re-runs
+# on a live stage (every bootstrap re-runs it).
+BOOTSTRAP_BEFORE = ("configmap", "pvc", "networkpolicy", "db", "minio")
 BOOTSTRAP_WAIT = ("db", "minio")
 BOOTSTRAP_JOB_MANIFEST, BOOTSTRAP_JOB_NAME = "minio-init-job", "minio-init"
-BOOTSTRAP_AFTER = ("networkpolicy", "ingress")
+BOOTSTRAP_AFTER = ("ingress",)
 BOOTSTRAP_TIMEOUT = "300s"  # db/minio: a fresh PVC is provisioned and attached on first start
 # The deployments that read autogenbook-config (envFrom) and so need a restart when it changes.
 CONFIG_CONSUMERS = ("api", "worker")
@@ -1498,8 +1501,8 @@ def bootstrap_before(stage: Stage) -> None:
 
 
 def bootstrap_after(stage: Stage) -> None:
-    """--bootstrap's second half, once the Deployments are up: network policies, then the Ingress."""
-    print(f"\n==> Network policies and Ingress of stage {stage.name} (https://{stage.host})")
+    """--bootstrap's second half, once the Deployments are up: the Ingress."""
+    print(f"\n==> Ingress of stage {stage.name} (https://{stage.host})")
     for name in BOOTSTRAP_AFTER:
         _apply_text(rendered(stage, name), stage.namespace, f"k8s/{name}.yaml")
 

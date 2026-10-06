@@ -44,3 +44,4 @@ spec:
   - from:
     - podSelector: {matchLabels: {app: api}}
     - podSelector: {matchLabels: {app: worker}}
+    - podSelector: {matchLabels: {app: minio-init}}   # the bucket-creating Job
