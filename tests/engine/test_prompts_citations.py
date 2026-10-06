@@ -136,7 +136,7 @@ def test_body_normalisation() -> None:
     out = normalize_body(body, "Intro", level=3)
     assert out.startswith("Text.")
     assert "#" not in out.split("```")[0]
-    assert "\n\n**Sub**\n\nMore." in out and "# not a heading" in out
+    assert "\n\n**Sub.** More." in out and "# not a heading" in out
     # Opt-in: headings are kept and shifted below the node heading.
     out = normalize_body(body, "Intro", level=3, allow_headings=True)
     assert out.startswith("Text.")
@@ -146,7 +146,7 @@ def test_body_normalisation() -> None:
 def test_body_headings_flattened_once_and_level_capped() -> None:
     body = "### A ###\n#### **B**\ntext\n\n\n\n##### C\n\n```md\n## keep\n```\n## "
     out = normalize_body(body, "T", level=2)
-    assert out == "**A**\n\n**B**\n\ntext\n\n**C**\n\n```md\n## keep\n```"
+    assert out == "**A.**\n\n**B.** text\n\n**C.**\n\n```md\n## keep\n```"
     assert normalize_body("## Deep", "T", level=6, allow_headings=True) == "###### Deep"
 
 

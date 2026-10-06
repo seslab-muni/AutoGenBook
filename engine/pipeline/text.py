@@ -102,8 +102,10 @@ def glossary_text(glossary: Glossary | None, max_chars: int = 4000) -> str:
 
 
 NO_BODY_HEADINGS = (
-    "Do not use headings inside the body: the outline is the document's only structure. "
-    "Where a topic shift needs a signpost, open the paragraph with a short bold lead-in phrase instead."
+    "Do not use headings, title lines or horizontal rules inside the body: the outline is the document's only structure. "
+    "Where a topic shift needs a signpost, start that paragraph with a short bold lead-in phrase ending with a period "
+    "and continue the text in the same paragraph, e.g. `**Resource integration.** Value emerges when ...`. "
+    "Never put a title on its own line (not even in bold or italics) and never separate blocks with `---`."
 )
 
 
@@ -124,10 +126,10 @@ def heading_rule(graph: DocGraph, key: str, *, allow: bool = False) -> str:
 _FENCE_WRAP_RE = re.compile(r"^\s*```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL | re.IGNORECASE)
 
 
-def clean_body(body: str, title: str, graph: DocGraph, key: str, index: CitationIndex, *, allow_headings: bool = False) -> str:
+def clean_body(body: str, title: str, graph: DocGraph, key: str, index: CitationIndex, *, allow_headings: bool = False, lead_ins: bool = True) -> str:
     """Normalise a model-written body: unwrap a whole-body code fence, drop a
     repeated title heading, flatten (or, with `allow_headings`, re-level) body
-    headings, and rewrite `\\cite{}` and `\\footnote{Source: RID:...}` into
+    headings (`lead_ins=False`, slides: ATX headings only), and rewrite `\\cite{}` and `\\footnote{Source: RID:...}` into
     `[cite_key]` markers."""
     text = (body or "").replace("\r\n", "\n").strip()
     match = _FENCE_WRAP_RE.match(text)
@@ -136,7 +138,7 @@ def clean_body(body: str, title: str, graph: DocGraph, key: str, index: Citation
 
     text = single_key_citations(text, index)
     level = min(6, graph.depth(key) + 1)
-    return normalize_body(text, title, level, allow_headings=allow_headings)
+    return normalize_body(text, title, level, allow_headings=allow_headings, lead_ins=lead_ins)
 
 
 def single_key_citations(text: str, index: CitationIndex) -> str:

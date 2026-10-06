@@ -265,7 +265,7 @@ class PresentationRun(BookRun):
             "retrieved_context": retrieved.text or "(none)",
         }
         draft = await self.agents["writer"].run(self.ctx.llm, values, node_key=key)
-        body = slide_body(clean_body(draft.body_markdown, title, graph, key, self.index))
+        body = slide_body(clean_body(draft.body_markdown, title, graph, key, self.index, lead_ins=False))
         if self.pres.disable_general_knowledge_citation:
             body = _GENERAL_KNOWLEDGE_RE.sub("", body)
         body, dropped = limit_lines(body, MAX_TEXT_LINES)

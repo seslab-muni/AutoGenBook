@@ -104,7 +104,7 @@ def test_length_metric_and_body_cleanup() -> None:
     body = "```markdown\n## Intro\n\nText \\cite{kb_a_1_chunk_1} and \\footnote{Source: RID:kb:a_1:chunk:1}.\n\n# Detail\n\nMore [kb_fake_9].\n```"
     cleaned = clean_body(body, "Intro", g, "1-1", index)
     assert cleaned.startswith("Text [kb_a_1_chunk_1] and [kb_a_1_chunk_1].")
-    assert "**Detail**" in cleaned and "#" not in cleaned
+    assert "**Detail.** More" in cleaned and "#" not in cleaned
     assert "### Detail" in clean_body(body, "Intro", g, "1-1", index, allow_headings=True)
     assert invalid_citations(cleaned, index) == ["kb_fake_9"]
     assert strip_citations("More [kb_fake_9].", ["kb_fake_9"]) == "More."

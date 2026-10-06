@@ -149,6 +149,28 @@ describe('StartRunDialog', () => {
     expect(screen.getByLabelText(/llm model/i)).toHaveTextContent('openai/gpt-5-mini');
   });
 
+  it('allows subdivision by default, also after closing and reopening the dialog', async () => {
+    const user = userEvent.setup();
+    renderRouterApp(`/p/${PROJECT_ID}`);
+    await screen.findByRole('heading', { name: /Distributed Consensus/i });
+
+    useUiStore.setState({ activeModal: 'start-run' });
+    await screen.findByRole('heading', { name: 'Start a run' });
+    const checkbox = () => screen.getByRole('checkbox', { name: /allow subdivision/i });
+    expect(checkbox()).toBeChecked();
+
+    await user.click(checkbox());
+    expect(checkbox()).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Start a run' })).not.toBeInTheDocument(),
+    );
+    useUiStore.setState({ activeModal: 'start-run' });
+    await screen.findByRole('heading', { name: 'Start a run' });
+    expect(checkbox()).toBeChecked();
+  });
+
   it('starting a run with an overridden model shows it on the run detail page', async () => {
     const user = userEvent.setup();
     renderRouterApp(`/p/${PROJECT_ID}`);

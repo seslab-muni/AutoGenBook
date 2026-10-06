@@ -75,7 +75,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
   const lockedCount = lockedNodes(flatNodes).length;
 
   const [outputFormat, setOutputFormat] = useState<OutputFormat>(project.outputFormat);
-  const [allowSubdivision, setAllowSubdivision] = useState(false);
+  const [allowSubdivision, setAllowSubdivision] = useState(true);
   const [auditBookMode, setAuditBookMode] = useState<AuditMode>('warn');
   const [llmModel, setLlmModel] = useState(project.llmModel);
 
@@ -98,7 +98,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
     setWasOpen(open);
     if (open) {
       setOutputFormat(project.outputFormat);
-      setAllowSubdivision(false);
+      setAllowSubdivision(true);
       setAuditBookMode('warn');
       setLlmModel(project.llmModel);
     }
@@ -306,7 +306,7 @@ export function StartRunDialog({ project }: StartRunDialogProps) {
             <span>
               Allow subdivision
               <span className="mt-0.5 block font-normal text-muted-foreground">
-                Lets the CLI split oversized, unlocked leaf sections into more nodes as it drafts.
+                Lets the CLI split oversized, unlocked leaf sections (over 1.5 pages) into numbered subsections, which are imported back into the outline. Off: every outline leaf is written as a single section.
               </span>
             </span>
           </label>

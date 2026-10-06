@@ -131,6 +131,18 @@ def test_full_presentation_run(tmp_path: Path) -> None:
     assert not fake.chat_calls("SlideNarration") and not _tts_calls(fake)
 
 
+def test_slide_bodies_keep_bold_label_lines_separate(tmp_path: Path) -> None:
+    """The presentation pipeline cleans slide drafts with `lead_ins=False`: a bold
+    label on its own line is not merged into the next line (the document rule)."""
+    work = make_work_dir(tmp_path, bench="en_presentation")
+    reply = {"body_markdown": "**Takeaway**\nShort statement.", "summary": "s", "citations_used": []}
+    fake = FakeLLM(overrides={"SlideDraft": lambda call: reply})
+    run = pres_run(work, fake)
+    assert run.exit_code == 0, run.text
+    bodies = [p.read_text(encoding="utf-8") for p in (run.out_dir / "sections").glob("*.md")]
+    assert bodies and all(b.strip() == "**Takeaway**\nShort statement." for b in bodies)
+
+
 def test_explicit_czech_slides_are_used_verbatim(tmp_path: Path) -> None:
     work = tmp_path / "cz"
     work.mkdir()
