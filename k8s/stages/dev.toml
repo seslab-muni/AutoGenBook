@@ -17,9 +17,8 @@ worker = 2
 # Additions to / overrides of k8s/configmap.yaml's `data` for this stage. Applied by
 # `--bootstrap` (which also restarts api/worker when the effective config changed).
 [config]
-# The rewritten engine (epic #158). deploy.py refuses to deploy a commit that has no such file.
-CLI_ENTRYPOINT = "run_engine.py"
-AUTOGENBOOK_LLM_BASE_URL = "https://llm.ai.e-infra.cz/v1/"
+# CLI_ENTRYPOINT (run_engine.py, the rewritten engine) and the e-INFRA base URL are inherited
+# from k8s/configmap.yaml since prod moved to the new engine.
 AUTOGENBOOK_LLM_MODEL = "gpt-oss-120b"
 AUTOGENBOOK_LLM_MINI_MODEL = "gpt-oss-120b"
 AUTOGENBOOK_LLM_REASONING_EFFORT = "low"
