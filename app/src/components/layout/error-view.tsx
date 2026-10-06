@@ -17,9 +17,16 @@ export function ErrorView({ error }: ErrorViewProps) {
     <div className="flex h-full min-h-screen flex-col items-center justify-center gap-3 p-8 text-center">
       <h1 className="text-lg font-semibold text-foreground">{title}</h1>
       {detail ? <p className="max-w-md text-sm text-muted-foreground">{detail}</p> : null}
-      <Button asChild variant="outline">
-        <Link to="/">Back to projects</Link>
-      </Button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {/* A reload is the fix for the most common cause of landing here after a deploy: a tab
+            still running the previous build. `Back to projects` alone kept the stale code. */}
+        <Button type="button" onClick={() => window.location.reload()}>
+          Reload page
+        </Button>
+        <Button asChild variant="outline">
+          <Link to="/">Back to projects</Link>
+        </Button>
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ from fastapi.routing import APIRoute
 
 from api.core.db import get_engine
 from api.core.errors import install_error_handlers
+from api.core.cache_headers import NoStoreMiddleware
 from api.core.request_logging import RequestIdMiddleware, configure_request_logging
 from api.core.settings import default_credentials_warning, get_settings
 from api.presentation.deps import current_user, require_csrf_header
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
     )
     install_error_handlers(app)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(NoStoreMiddleware)
 
     # An explicit "public" router (login, health, ready) beats a path
     # allowlist on the guarded one: a new route added to any of the routers
