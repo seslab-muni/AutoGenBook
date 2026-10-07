@@ -220,26 +220,40 @@ def _pdf_tables(path: Path, pages: list[int], warnings: list[str]) -> dict[int, 
                 if index >= len(pdf.pages):
                     continue
                 page = pdf.pages[index]
-                found = False
-                for table in page.find_tables():
-                    markdown = table_to_markdown(table.extract())
-                    if markdown:
-                        _x0, top, _x1, bottom = table.bbox
-                        out.setdefault(index, []).append((float(top), float(bottom), markdown))
-                        found = True
-                if found:
-                    continue
-                rules: dict[tuple[int, int], list[float]] = {}
-                for line in list(page.lines) + [r for r in page.rects if abs(r["bottom"] - r["top"]) < 1.5]:
-                    if abs(line["bottom"] - line["top"]) > 1.5 or line["x1"] - line["x0"] < 100:
-                        continue
-                    rules.setdefault((round(line["x0"] / 3), round(line["x1"] / 3)), []).append(float(line["top"]))
-                for tops in rules.values():
-                    if len(tops) >= 2 and max(tops) - min(tops) > 10:
-                        out.setdefault(index, []).append((min(tops), max(tops), None))
+                try:
+                    regions = _page_table_regions(page)
+                finally:
+                    # pdfplumber caches every parsed object (chars, lines, rects, images)
+                    # on the Page for the life of the document, so without this a
+                    # 700-page textbook grows to ~3 GB and OOM-kills the worker (#178).
+                    page.close()
+                if regions:
+                    out[index] = regions
     except Exception as exc:  # noqa: BLE001 - tables are an enhancement, text still counts
         warnings.append(f"table extraction failed: {exc}")
     return out
+
+
+def _page_table_regions(page: Any) -> list[tuple[float, float, str | None]]:
+    """One page's `(top, bottom, markdown | None)` regions: pdfplumber tables as
+    Markdown, else ruled regions (markdown None) from horizontal rules."""
+    regions: list[tuple[float, float, str | None]] = []
+    for table in page.find_tables():
+        markdown = table_to_markdown(table.extract())
+        if markdown:
+            _x0, top, _x1, bottom = table.bbox
+            regions.append((float(top), float(bottom), markdown))
+    if regions:
+        return regions
+    rules: dict[tuple[int, int], list[float]] = {}
+    for line in list(page.lines) + [r for r in page.rects if abs(r["bottom"] - r["top"]) < 1.5]:
+        if abs(line["bottom"] - line["top"]) > 1.5 or line["x1"] - line["x0"] < 100:
+            continue
+        rules.setdefault((round(line["x0"] / 3), round(line["x1"] / 3)), []).append(float(line["top"]))
+    for tops in rules.values():
+        if len(tops) >= 2 and max(tops) - min(tops) > 10:
+            regions.append((min(tops), max(tops), None))
+    return regions
 
 
 def table_to_markdown(rows: list[list[Any]]) -> str:
