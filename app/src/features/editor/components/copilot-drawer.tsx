@@ -3,12 +3,10 @@ import { EmptyState } from '@/components/empty-state';
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { CitationsPanel } from '@/features/editor/components/citations-panel';
 import { ReviewPanel } from '@/features/editor/components/review-panel';
-import { parseRagCitations } from '@/features/editor/lib/rag-citation';
 import { CopilotPanel } from '@/features/runs/components/copilot-panel';
 
-export type CopilotTab = 'copilot' | 'citations' | 'review';
+export type CopilotTab = 'copilot' | 'review';
 
 interface CopilotDrawerProps {
   projectId: string;
@@ -16,22 +14,15 @@ interface CopilotDrawerProps {
   node: OutlineNode | null | undefined;
   tab: CopilotTab;
   onTabChange: (tab: CopilotTab) => void;
-  onOpenSource?: (sourceDoc: string) => void;
 }
 
 /**
- * The right-hand drawer's tab shell: `copilot` hosts #21's run-triggering
- * quick actions/event log (`CopilotPanel`), `citations`/`review` are bound to
- * the selected node's real `ragCitations`/`reviewerScore`/`reviewerNotes`.
+ * The legacy right-hand drawer's tab shell (issue #182 keeps it beside the margin until phases 3
+ * and 4 replace what is left): `copilot` hosts #21's run-triggering quick actions/event log
+ * (`CopilotPanel`), `review` is bound to the selected node's `reviewerScore`/`reviewerNotes`.
+ * Citations moved into the editor's sources drawer.
  */
-export function CopilotDrawer({
-  projectId,
-  project,
-  node,
-  tab,
-  onTabChange,
-  onOpenSource,
-}: CopilotDrawerProps) {
+export function CopilotDrawer({ projectId, project, node, tab, onTabChange }: CopilotDrawerProps) {
   return (
     <Tabs
       value={tab}
@@ -41,27 +32,12 @@ export function CopilotDrawer({
       <PaneToolbar className="justify-start">
         <TabsList>
           <TabsTrigger value="copilot">Copilot</TabsTrigger>
-          <TabsTrigger value="citations">Citations</TabsTrigger>
           <TabsTrigger value="review">Review</TabsTrigger>
         </TabsList>
       </PaneToolbar>
 
       <TabsContent value="copilot" className="custom-scrollbar min-h-0 overflow-auto">
         <CopilotPanel projectId={projectId} project={project} selectedNodeId={node?.id ?? null} />
-      </TabsContent>
-
-      <TabsContent value="citations" className="custom-scrollbar min-h-0 overflow-auto">
-        {node ? (
-          <CitationsPanel
-            citations={parseRagCitations(node.ragCitations)}
-            {...(onOpenSource ? { onOpenSource } : {})}
-          />
-        ) : (
-          <EmptyState
-            title="No section selected"
-            description="Select a section to see its citations."
-          />
-        )}
       </TabsContent>
 
       <TabsContent value="review" className="custom-scrollbar min-h-0 overflow-auto">

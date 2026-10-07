@@ -18,13 +18,23 @@ export const DEFAULT_OUTLINE_WIDTH = 320;
 export const MIN_OUTLINE_WIDTH = 240;
 export const MAX_OUTLINE_WIDTH = 560;
 
+/** What the right-hand column shows: the margin workspace (default) or the legacy copilot drawer. */
+export type RightPane = 'margin' | 'copilot';
+
 interface UiState {
   outlineOpen: boolean;
   copilotOpen: boolean;
+  rightPane: RightPane;
+  /** Narrow screens show the right column as an overlay instead; this is its (unpersisted) open state. */
+  rightOverlayOpen: boolean;
   outlineWidth: number;
   activeModal: ModalKind | null;
   toggleOutline: () => void;
   toggleCopilot: () => void;
+  setRightPane: (pane: RightPane) => void;
+  setRightOverlayOpen: (open: boolean) => void;
+  /** Makes the margin visible whatever the screen width (e.g. when a comment composer opens). */
+  revealMargin: () => void;
   setOutlineWidth: (width: number) => void;
   openModal: (modal: ModalKind) => void;
   closeModal: () => void;
@@ -35,10 +45,15 @@ export const useUiStore = create<UiState>()(
     (set) => ({
       outlineOpen: true,
       copilotOpen: true,
+      rightPane: 'margin',
+      rightOverlayOpen: false,
       outlineWidth: DEFAULT_OUTLINE_WIDTH,
       activeModal: null,
       toggleOutline: () => set((state) => ({ outlineOpen: !state.outlineOpen })),
       toggleCopilot: () => set((state) => ({ copilotOpen: !state.copilotOpen })),
+      setRightPane: (rightPane) => set({ rightPane }),
+      setRightOverlayOpen: (rightOverlayOpen) => set({ rightOverlayOpen }),
+      revealMargin: () => set({ rightPane: 'margin', copilotOpen: true, rightOverlayOpen: true }),
       setOutlineWidth: (width) =>
         set({
           outlineWidth: Math.min(MAX_OUTLINE_WIDTH, Math.max(MIN_OUTLINE_WIDTH, width)),
@@ -53,6 +68,7 @@ export const useUiStore = create<UiState>()(
       partialize: (state) => ({
         outlineOpen: state.outlineOpen,
         copilotOpen: state.copilotOpen,
+        rightPane: state.rightPane,
         outlineWidth: state.outlineWidth,
       }),
     },
@@ -60,6 +76,7 @@ export const useUiStore = create<UiState>()(
 );
 
 export const useOutlineOpen = (): boolean => useUiStore((state) => state.outlineOpen);
+export const useRightPane = (): RightPane => useUiStore((state) => state.rightPane);
 export const useCopilotOpen = (): boolean => useUiStore((state) => state.copilotOpen);
 export const useOutlineWidth = (): number => useUiStore((state) => state.outlineWidth);
 export const useActiveModal = (): ModalKind | null => useUiStore((state) => state.activeModal);

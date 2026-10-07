@@ -58,7 +58,10 @@ export function usePaneResize({
     [clamp, direction, onWidthChange, width],
   );
 
-  const onDoubleClick = useCallback(() => onWidthChange(defaultWidth), [defaultWidth, onWidthChange]);
+  const onDoubleClick = useCallback(
+    () => onWidthChange(defaultWidth),
+    [defaultWidth, onWidthChange],
+  );
 
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_OUTLINE_WIDTH, MAX_OUTLINE_WIDTH, MIN_OUTLINE_WIDTH, useUiStore } from './ui-store';
+import {
+  DEFAULT_OUTLINE_WIDTH,
+  MAX_OUTLINE_WIDTH,
+  MIN_OUTLINE_WIDTH,
+  useUiStore,
+} from './ui-store';
 
 function resetStore() {
   useUiStore.setState({

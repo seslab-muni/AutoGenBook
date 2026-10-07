@@ -21,7 +21,12 @@ configure({ asyncUtilTimeout: 5000 });
 /** jsdom has no `matchMedia`; `next-themes` (system theme detection) queries it on mount. */
 if (typeof window.matchMedia !== 'function') {
   window.matchMedia = (query: string) => ({
-    matches: false,
+    // Tests run as a 1440px-wide screen: a `min-width` query matches up to that, so the margin
+    // sits beside the editor; a test of the narrow overlay overrides `matchMedia` itself.
+    matches: (() => {
+      const min = /\(min-width:\s*(\d+)px\)/.exec(query);
+      return min ? 1440 >= Number(min[1]) : false;
+    })(),
     media: query,
     onchange: null,
     addListener: () => {},

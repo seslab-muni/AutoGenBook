@@ -4,12 +4,12 @@ import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { usePaneResize } from '@/components/layout/use-pane-resize';
+import { useRightPane } from '@/components/layout/use-right-pane';
 import { cn } from '@/lib/utils';
 import {
   DEFAULT_OUTLINE_WIDTH,
   MAX_OUTLINE_WIDTH,
   MIN_OUTLINE_WIDTH,
-  useCopilotOpen,
   useOutlineOpen,
   useOutlineWidth,
   useUiStore,
@@ -20,7 +20,10 @@ interface StudioLayoutProps {
   outlinePane: ReactNode;
   /** Centre pane — always mounted, expands to fill closed side panes. */
   editorPane: ReactNode;
-  /** Right pane (`w-80 lg:w-96`) — fully unmounted while collapsed. */
+  /**
+   * Right pane (the margin workspace, 376px) — fully unmounted while collapsed. Below 1280px it
+   * floats over the editor's right edge instead of squeezing it.
+   */
   copilotPane: ReactNode;
 }
 
@@ -33,10 +36,9 @@ interface StudioLayoutProps {
  */
 export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLayoutProps) {
   const outlineOpen = useOutlineOpen();
-  const copilotOpen = useCopilotOpen();
+  const { wide, open: copilotOpen, toggle: toggleRight, close: closeRight } = useRightPane();
   const outlineWidth = useOutlineWidth();
   const toggleOutline = useUiStore((state) => state.toggleOutline);
-  const toggleCopilot = useUiStore((state) => state.toggleCopilot);
   const setOutlineWidth = useUiStore((state) => state.setOutlineWidth);
 
   const { handleProps } = usePaneResize({
@@ -48,7 +50,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
   });
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden">
       {outlineOpen ? (
         <div
           className={cn(
@@ -95,7 +97,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Show copilot pane"
-                onClick={toggleCopilot}
+                onClick={toggleRight}
               >
                 <PanelRightOpen />
               </Button>
@@ -106,7 +108,15 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
       </div>
 
       {copilotOpen ? (
-        <div className="flex w-80 shrink-0 flex-col overflow-hidden border-l lg:w-96">
+        <div
+          className={cn(
+            'flex w-[376px] shrink-0 flex-col overflow-hidden border-l bg-background',
+            !wide && 'absolute inset-y-0 right-0 z-20 max-w-[92%] shadow-2xl',
+          )}
+          onKeyDown={(event) => {
+            if (!wide && event.key === 'Escape' && !event.defaultPrevented) closeRight();
+          }}
+        >
           {copilotPane}
         </div>
       ) : null}

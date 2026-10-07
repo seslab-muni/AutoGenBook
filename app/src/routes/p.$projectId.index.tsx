@@ -4,7 +4,11 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { outline } from '@/api/queries/outline';
 import { projects } from '@/api/queries/projects';
 import { StudioLayout } from '@/components/layout/studio-layout';
-import { CopilotDrawer, type CopilotTab } from '@/features/editor/components/copilot-drawer';
+import { useState } from 'react';
+
+import { type CopilotTab } from '@/features/editor/components/copilot-drawer';
+import { MarginHostContext } from '@/features/editor/margin/margin-host';
+import { RightColumn } from '@/features/editor/margin/right-pane';
 import { EditorPane } from '@/features/editor/components/editor-pane';
 import { OutlinePane } from '@/features/outline/components/outline-pane';
 import { useOutlineOpen } from '@/stores/ui-store';
@@ -28,6 +32,8 @@ function StudioPage() {
   useDocumentTitle(project.title);
 
   const outlineOpen = useOutlineOpen();
+  // The slot in the right column the open section portals its margin into.
+  const [marginHost, setMarginHost] = useState<HTMLElement | null>(null);
   const { data } = useQuery(outline.flat(projectId));
   const flatNodes = data?.items ?? [];
 
@@ -48,35 +54,39 @@ function StudioPage() {
   const selectedNode = node ? (flatNodes.find((n) => n.id === node) ?? null) : null;
 
   return (
-    <StudioLayout
-      outlinePane={
-        <OutlinePane
-          projectId={projectId}
-          maxOutlineLevels={project.maxOutlineLevels}
-          selectedNodeId={node ?? null}
-          onSelectNode={handleSelectNode}
-        />
-      }
-      editorPane={
-        <EditorPane
-          projectId={projectId}
-          nodeId={node ?? null}
-          projectTitle={project.title}
-          lastRunId={project.lastRunId ?? null}
-          flatNodes={flatNodes}
-          outlineOpen={outlineOpen}
-          onSelectNode={handleSelectNode}
-        />
-      }
-      copilotPane={
-        <CopilotDrawer
-          projectId={projectId}
-          project={project}
-          node={selectedNode}
-          tab={tab === 'settings' ? 'copilot' : (tab ?? 'copilot')}
-          onTabChange={handleTabChange}
-        />
-      }
-    />
+    <MarginHostContext.Provider value={marginHost}>
+      <StudioLayout
+        outlinePane={
+          <OutlinePane
+            projectId={projectId}
+            maxOutlineLevels={project.maxOutlineLevels}
+            selectedNodeId={node ?? null}
+            onSelectNode={handleSelectNode}
+          />
+        }
+        editorPane={
+          <EditorPane
+            projectId={projectId}
+            nodeId={node ?? null}
+            projectTitle={project.title}
+            lastRunId={project.lastRunId ?? null}
+            flatNodes={flatNodes}
+            outlineOpen={outlineOpen}
+            onSelectNode={handleSelectNode}
+          />
+        }
+        copilotPane={
+          <RightColumn
+            projectId={projectId}
+            project={project}
+            node={selectedNode}
+            // Old links may still say `citations` (now in the sources drawer) or `settings`.
+            tab={tab === 'review' ? 'review' : 'copilot'}
+            onTabChange={handleTabChange}
+            onMarginHost={setMarginHost}
+          />
+        }
+      />
+    </MarginHostContext.Provider>
   );
 }

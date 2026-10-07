@@ -571,6 +571,14 @@ function locateFuzzy(
 
 // --------------------------------------------------------------------- resolve
 
+let cachedIndex: { text: string; index: CodePointIndex } | null = null;
+
+/** The last text's index is kept: resolving a hundred anchors against one section builds it once. */
+function indexFor(text: string): CodePointIndex {
+  if (cachedIndex?.text !== text) cachedIndex = { text, index: new CodePointIndex(text) };
+  return cachedIndex.index;
+}
+
 /**
  * `anchor` located in `text`: fresh `start`/`end` (and refreshed quote/prefix/suffix) when found,
  * `start`/`end` null when it is orphaned (not found, or ambiguous).
@@ -580,7 +588,7 @@ export function resolveAnchor(text: string, anchor: AnchorInput): Anchor {
   const prefix = anchor.prefix ?? '';
   const suffix = anchor.suffix ?? '';
   if (!quote) return orphan(anchor);
-  const index = new CodePointIndex(text);
+  const index = indexFor(text);
   const range = locateUnits(text, index, { quote, prefix, suffix, start: anchor.start ?? null });
   return range ? anchorFromUnits(text, index, range.start, range.end) : orphan(anchor);
 }
@@ -592,7 +600,7 @@ export function resolveAnchor(text: string, anchor: AnchorInput): Anchor {
 export function resolveAnchorUnits(text: string, anchor: AnchorInput): TextRange | null {
   const quote = anchor.quote ?? '';
   if (!quote) return null;
-  const index = new CodePointIndex(text);
+  const index = indexFor(text);
   return locateUnits(text, index, {
     quote,
     prefix: anchor.prefix ?? '',
