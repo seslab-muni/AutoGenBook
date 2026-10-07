@@ -14,6 +14,9 @@ interface SourcesDrawerProps {
   /** In-scope sources whose indexing failed — listed, but not searched. */
   failedSources: readonly Source[];
   loading: boolean;
+  /** The source list failed to load. */
+  error: boolean;
+  onRetry: () => void;
   scope: EffectiveSourceScope;
   /** The node the scope comes from, when it is an ancestor or the section itself. */
   scopeFromLabel: string | null;
@@ -40,6 +43,8 @@ export function SourcesDrawer({
   sources,
   failedSources,
   loading,
+  error,
+  onRetry,
   scope,
   scopeFromLabel,
   citations,
@@ -84,7 +89,14 @@ export function SourcesDrawer({
           </Button>
         </span>
       </div>
-      {loading ? (
+      {error ? (
+        <p role="alert" className="flex items-center gap-2 text-destructive">
+          Couldn&apos;t load this project&apos;s sources.
+          <Button type="button" variant="link" size="xs" className="h-auto p-0" onClick={onRetry}>
+            Retry
+          </Button>
+        </p>
+      ) : loading ? (
         <p className="text-muted-foreground">Loading sources…</p>
       ) : empty ? (
         <p className="text-muted-foreground">
@@ -93,6 +105,8 @@ export function SourcesDrawer({
       ) : (
         <ul
           aria-label="Effective sources"
+          // Scrollable region: keyboard users need to be able to focus it to scroll.
+          tabIndex={0}
           className="custom-scrollbar grid min-h-0 grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 overflow-y-auto"
         >
           {[...sources, ...failedSources].map((source) => {

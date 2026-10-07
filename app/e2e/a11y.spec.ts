@@ -65,7 +65,10 @@ test.describe('accessibility', () => {
     await expectNoSeriousViolations(page, 'studio');
 
     const dialogs: Array<{ label: string; open: () => Promise<void> }> = [
-      { label: 'Sources dialog', open: () => page.getByRole('button', { name: /Sources/ }).click() },
+      {
+        label: 'Sources dialog',
+        open: () => page.getByRole('button', { name: /^Sources(\s+\d+)?$/ }).click(),
+      },
       { label: 'Export dialog', open: () => page.getByRole('button', { name: /Export/ }).click() },
       {
         label: 'Project settings dialog',

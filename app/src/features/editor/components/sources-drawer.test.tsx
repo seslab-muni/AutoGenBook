@@ -33,6 +33,8 @@ function renderDrawer(overrides: Partial<React.ComponentProps<typeof SourcesDraw
       sources={[source('s1', 'Gottesman.pdf'), source('s2', 'Knill.pdf', null)]}
       failedSources={[]}
       loading={false}
+      error={false}
+      onRetry={vi.fn()}
       scope={{ kind: 'selected', own: false, fromNodeId: 'ch', sourceIds: ['s1', 's2'] }}
       scopeFromLabel="§3 Quantum codes"
       citations={CITATIONS}
@@ -73,6 +75,16 @@ describe('SourcesDrawer', () => {
     renderDrawer({ sources: [], loading: true });
     expect(screen.getByText('Loading sources…')).toBeInTheDocument();
     expect(screen.queryByText(/No sources are attached/)).not.toBeInTheDocument();
+  });
+
+  it('shows an error line with Retry instead of an empty message', async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    renderDrawer({ sources: [], error: true, onRetry });
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load this project's sources.");
+    expect(screen.queryByText(/No sources are attached/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it('ignores Escape that happens outside the drawer', async () => {

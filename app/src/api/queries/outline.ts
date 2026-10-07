@@ -194,6 +194,20 @@ export function useCreateOutlineNodeMutation(projectId: string) {
  * rolls back on error. On success: updates the node's own cache entry and
  * invalidates the flat/tree list views.
  */
+/**
+ * Fields the server recomputes from a PATCH (`OutlineService.update`), per field of the request:
+ * a node's cache entry takes these from the response alongside the fields the PATCH sent.
+ */
+const SERVER_DERIVED_FIELDS: Partial<Record<keyof OutlineNodeUpdate, (keyof OutlineNode)[]>> = {
+  contentMarkdown: ['contentLocked', 'actualWords', 'status'],
+  contentLatex: ['contentLocked', 'actualWords', 'status'],
+  targetPages: ['wordBudget'],
+  parentId: ['parentId', 'orderIndex', 'sectionNumber', 'level'],
+  orderIndex: ['parentId', 'orderIndex', 'sectionNumber', 'level'],
+  sourceScope: ['sourceScope', 'sourceIds'],
+  sourceIds: ['sourceScope', 'sourceIds'],
+};
+
 export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -265,9 +279,9 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
       // Merge only what this PATCH sent (plus what the server derives from it) over the cached
       // node: two PATCHes can be in flight at once (an autosave and a lock toggle), and a late
       // response carrying the other one's older fields must not overwrite them.
-      const touched: (keyof OutlineNode)[] = [...(Object.keys(body) as (keyof OutlineNode)[])];
-      if (body.contentMarkdown !== undefined || body.contentLatex !== undefined) {
-        touched.push('contentLocked', 'actualWords', 'status');
+      const touched = new Set<keyof OutlineNode>(Object.keys(body) as (keyof OutlineNode)[]);
+      for (const key of Object.keys(body) as (keyof OutlineNodeUpdate)[]) {
+        for (const derived of SERVER_DERIVED_FIELDS[key] ?? []) touched.add(derived);
       }
       queryClient.setQueryData<OutlineNode>(projectKeys.outlineNode(projectId, nodeId), (old) => {
         if (!old) return node;

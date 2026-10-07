@@ -81,6 +81,7 @@ export function ManuscriptSheet({
   const [draft, setDraft] = useState(node[field]);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const sourcesButtonRef = useRef<HTMLButtonElement>(null);
   const [optionsFocusSources, setOptionsFocusSources] = useState(false);
   const setSelection = useEditorSelectionStore((state) => state.setSelection);
 
@@ -157,8 +158,8 @@ export function ManuscriptSheet({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PaneToolbar>
-        <div className="flex min-w-0 items-center gap-2">
+      <PaneToolbar className="@container">
+        <div className="-mx-0.5 -my-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-0.5 py-1">
           <LockContentButton projectId={projectId} node={liveNode} flat={flatNodes} />
           <ToggleGroup
             aria-label="Editor view"
@@ -243,7 +244,13 @@ export function ManuscriptSheet({
         </div>
       ) : null}
 
-      <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
+      <div
+        className="custom-scrollbar min-h-0 flex-1 overflow-auto"
+        // Scrollable region: focusable so keyboard users can scroll the manuscript.
+        tabIndex={0}
+        role="region"
+        aria-label="Manuscript"
+      >
         {view === 'source' ? (
           <SectionEditor
             value={draft}
@@ -296,6 +303,8 @@ export function ManuscriptSheet({
           sources={effectiveSources.sources}
           failedSources={effectiveSources.failedSources}
           loading={effectiveSources.loading}
+          error={effectiveSources.error}
+          onRetry={effectiveSources.retry}
           scope={effectiveSources.scope}
           scopeFromLabel={
             effectiveSources.scopeFrom
@@ -308,7 +317,10 @@ export function ManuscriptSheet({
             setOptionsFocusSources(true);
             setOptionsOpen(true);
           }}
-          onClose={closeSources}
+          onClose={() => {
+            closeSources();
+            sourcesButtonRef.current?.focus();
+          }}
         />
       ) : null}
 
@@ -316,6 +328,8 @@ export function ManuscriptSheet({
         characters={characterCount(draft)}
         words={wordCount(draft)}
         sourceCount={effectiveSources.loading ? null : effectiveSources.sources.length}
+        sourcesError={effectiveSources.error}
+        sourcesButtonRef={sourcesButtonRef}
         sourcesOpen={sourcesOpen}
         sourcesDrawerId={SOURCES_DRAWER_ID}
         onToggleSources={() => setSourcesOpen((open) => !open)}

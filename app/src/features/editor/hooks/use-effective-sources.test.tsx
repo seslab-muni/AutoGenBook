@@ -99,4 +99,25 @@ describe('useEffectiveSources', () => {
     expect(result.current.sources.map((s) => s.id)).toEqual(['s1']);
     expect(result.current.failedSources.map((s) => s.id)).toEqual(['s2']);
   });
+
+  it('reports an error (not an empty list) when the fetch fails, and retries', async () => {
+    let fail = true;
+    server.use(
+      http.get('*/api/v1/projects/:projectId/sources', () =>
+        fail
+          ? HttpResponse.json({ title: 'boom' }, { status: 500 })
+          : HttpResponse.json({ items: [source('s1')], total: 1, limit: 50, offset: 0 }),
+      ),
+    );
+    const { result } = renderHook(() => useEffectiveSources(PROJECT_ID, 'other', FLAT), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.error).toBe(true));
+    expect(result.current.loading).toBe(false);
+
+    fail = false;
+    result.current.retry();
+    await waitFor(() => expect(result.current.error).toBe(false));
+    await waitFor(() => expect(result.current.sources).toHaveLength(1));
+  });
 });

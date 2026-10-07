@@ -15,6 +15,10 @@ export interface EffectiveSources {
   failedSources: Source[];
   /** True until the whole project source list has been fetched. */
   loading: boolean;
+  /** The list (or one of its extra pages) failed to load; `sources` is then incomplete. */
+  error: boolean;
+  /** Re-fetches whichever pages failed. */
+  retry: () => void;
   scopeFrom: OutlineNode | undefined;
 }
 
@@ -33,7 +37,6 @@ export function useEffectiveSources(
   const total = first.data?.total ?? 0;
   const firstCount = first.data?.items.length ?? 0;
   const extraOffsets: number[] = [];
-  // `firstCount > 0` guards against looping forever on a server that returns an empty first page.
   for (let offset = firstCount; offset < total; offset += MAX_PAGE) extraOffsets.push(offset);
   const extra = useQueries({
     queries: extraOffsets.map((offset) =>
@@ -49,11 +52,18 @@ export function useEffectiveSources(
   const wanted = scope.kind === 'selected' ? new Set(scope.sourceIds) : null;
   const inScope = wanted ? all.filter((source) => wanted.has(source.id)) : all;
 
+  const error = first.isError || extra.some((query) => query.isError);
+
   return {
     scope,
     sources: inScope.filter((source) => source.status !== 'error'),
     failedSources: inScope.filter((source) => source.status === 'error'),
-    loading: first.isPending || extra.some((query) => query.isPending),
+    loading: !error && (first.isPending || extra.some((query) => query.isPending)),
+    error,
+    retry: () => {
+      if (first.isError) void first.refetch();
+      for (const query of extra) if (query.isError) void query.refetch();
+    },
     scopeFrom,
   };
 }

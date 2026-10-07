@@ -44,31 +44,38 @@ export function ChapterOptionsPopover({
   onOpenChange,
   focusSources = false,
 }: ChapterOptionsPopoverProps) {
+  const contentRef = useRef<HTMLDivElement>(null);
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" size="sm" className="rounded-full">
+        <Button type="button" variant="outline" size="sm" className="shrink-0 rounded-full px-2.5">
           <SlidersHorizontal />
-          <span className="max-xl:sr-only">Chapter options</span>
-          <ChevronDown />
+          <span className="sr-only @xl:not-sr-only">Chapter options</span>
+          <ChevronDown className="hidden @md:block" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"
         aria-label="Chapter options"
+        ref={contentRef}
         onOpenAutoFocus={(event) => {
           if (!focusSources) return;
-          const section =
-            event.currentTarget instanceof HTMLElement
-              ? event.currentTarget.querySelector('[data-sources-section]')
-              : null;
-          const target = section?.querySelector<HTMLElement>(
-            '[role="radio"][aria-checked="true"], [role="radio"]',
+          const content = contentRef.current;
+          const target = content?.querySelector<HTMLElement>(
+            '[data-sources-section] [role="radio"][aria-checked="true"], [data-sources-section] [role="radio"]',
           );
-          if (!target) return;
+          if (!content || !target) return;
           event.preventDefault();
-          target.focus();
-          target.scrollIntoView?.({ block: 'nearest' });
+          target.focus({ preventScroll: true });
+          // Radix sizes the content (`--radix-popover-content-available-height`) after this
+          // handler runs, so scroll once layout has settled; centring keeps the section visible.
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              const box = content.getBoundingClientRect();
+              const at = target.getBoundingClientRect();
+              content.scrollTop += at.top + at.height / 2 - (box.top + box.height / 2);
+            }),
+          );
         }}
         className="custom-scrollbar max-h-[min(36rem,var(--radix-popover-content-available-height))] w-96 max-w-[calc(100vw-2rem)] overflow-y-auto"
       >

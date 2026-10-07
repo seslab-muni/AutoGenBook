@@ -76,6 +76,35 @@ describe('outline queries', () => {
     expect(result.current.node.data?.contentLocked).toBe(true);
   });
 
+  it.each([
+    ['targetPages', { targetPages: 7 }, { wordBudget: 2450 }],
+    [
+      'parentId',
+      { parentId: 'ch-2' },
+      { parentId: 'ch-2', orderIndex: 3, sectionNumber: '2.4', level: 2 },
+    ],
+    ['sourceScope', { sourceScope: 'all' }, { sourceScope: 'all', sourceIds: [] }],
+  ] as const)(
+    'keeps what the server derives from a %s change in the node cache',
+    async (_name, body, derived) => {
+      const { result } = renderWithQueryClient(() => ({
+        node: useQuery(outline.node(PROJECT_ID, 'sec-1-1')),
+        update: useUpdateOutlineNodeMutation(PROJECT_ID, 'sec-1-1'),
+      }));
+      await waitFor(() => expect(result.current.node.isSuccess).toBe(true));
+      const before = result.current.node.data!;
+      server.use(
+        http.patch('*/api/v1/projects/:projectId/outline/:nodeId', () =>
+          HttpResponse.json({ ...before, ...body, ...derived }),
+        ),
+      );
+
+      result.current.update.mutate({ ...body });
+      await waitFor(() => expect(result.current.update.isSuccess).toBe(true));
+      expect(result.current.node.data).toMatchObject({ ...body, ...derived });
+    },
+  );
+
   it('updating a node’s content recomputes actualWords server-side', async () => {
     const { result } = renderWithQueryClient(() =>
       useUpdateOutlineNodeMutation(PROJECT_ID, 'sec-3-1'),

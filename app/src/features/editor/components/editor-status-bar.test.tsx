@@ -60,7 +60,12 @@ describe('EditorStatusBar', () => {
 
   it('shows no count while the source list is loading', () => {
     renderBar({ sourceCount: null });
-    expect(screen.getByRole('button', { name: 'Sources' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Loading sources…' })).toBeInTheDocument();
+  });
+
+  it('shows an error label instead of a count when the sources failed to load', () => {
+    renderBar({ sourceCount: 0, sourcesError: true });
+    expect(screen.getByRole('button', { name: 'Sources unavailable' })).toBeInTheDocument();
   });
 
   it('closes the open drawer on Escape from the sources button', async () => {
