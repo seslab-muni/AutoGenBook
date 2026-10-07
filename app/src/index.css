@@ -234,17 +234,17 @@
   --anchor-focused-bg: oklch(0.82 0.14 90 / 0.7);
 }
 .dark {
-  --anchor-comment-bg: oklch(0.42 0.07 85 / 0.55);
+  --anchor-comment-bg: oklch(0.42 0.07 85 / 0.3);
   --anchor-comment-line: oklch(0.85 0.15 90);
-  --anchor-suggestion-bg: oklch(0.4 0.09 265 / 0.55);
+  --anchor-suggestion-bg: oklch(0.4 0.09 265 / 0.3);
   --anchor-suggestion-line: oklch(0.8 0.12 265);
-  --anchor-review-bg: oklch(0.4 0.09 20 / 0.55);
+  --anchor-review-bg: oklch(0.4 0.09 20 / 0.3);
   --anchor-review-line: oklch(0.82 0.12 20);
-  --anchor-draft-bg: oklch(0.4 0.07 265 / 0.5);
+  --anchor-draft-bg: oklch(0.4 0.07 265 / 0.3);
   --anchor-draft-line: oklch(0.8 0.12 265);
-  --anchor-resolved-bg: oklch(0.4 0 0 / 0.5);
+  --anchor-resolved-bg: oklch(0.4 0 0 / 0.3);
   --anchor-resolved-line: oklch(0.78 0.02 250);
-  --anchor-focused-bg: oklch(0.5 0.1 90 / 0.75);
+  --anchor-focused-bg: oklch(0.45 0.09 90 / 0.35);
 }
 
 @layer components {

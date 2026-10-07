@@ -82,6 +82,9 @@ export function SectionEditor({
     () => [
       language === 'latex' ? StreamLanguage.define(stex) : markdownLang(),
       EditorView.lineWrapping,
+      EditorView.contentAttributes.of({
+        'aria-label': language === 'latex' ? 'Section LaTeX source' : 'Section Markdown source',
+      }),
       anchorHighlightField,
       // The listener reaches the latest callbacks through refs when an edit happens, never while rendering.
       // eslint-disable-next-line react-hooks/refs

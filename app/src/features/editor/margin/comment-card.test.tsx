@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -192,5 +192,37 @@ describe('comment card', () => {
     expect(within(card).getByText('Missing a proof.')).toBeInTheDocument();
     expect(within(card).getByText('open')).toBeInTheDocument();
     expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('keeps the relative time ticking without a re-render from outside', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'], now: Date.now() });
+    try {
+      renderCard();
+      expect(screen.getByText('5 min ago')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+      });
+      expect(screen.getByText('10 min ago')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disables Reply and Resolve while a thread is still being created', () => {
+    renderCard({ root: { id: 'optimistic-1' } });
+    expect(screen.getByRole('button', { name: 'Reply' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Edit comment by/ })).toBeDisabled();
+  });
+
+  it('confirms before deleting a root even without replies', async () => {
+    const user = userEvent.setup();
+    const { root } = renderCard();
+    await user.click(screen.getByRole('button', { name: /^Delete comment by/ }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Delete this comment?');
+    expect(db.comments.has(root.id)).toBe(true);
+    await user.click(within(dialog).getByRole('button', { name: 'Delete comment' }));
+    await waitFor(() => expect(db.comments.has(root.id)).toBe(false));
   });
 });

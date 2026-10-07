@@ -168,6 +168,11 @@ export function makeAnchor(text: string, from: number, to: number): Anchor {
   return anchorFromUnits(text, index, index.toUnit(from), index.toUnit(to));
 }
 
+/** The anchor for the UTF-16 range `[start, end)` of `text` (offsets converted to code points). */
+export function anchorFromUnitRange(text: string, start: number, end: number): Anchor {
+  return anchorFromUnits(text, indexFor(text), start, end);
+}
+
 function orphan(anchor: AnchorInput): Anchor {
   return {
     quote: anchor.quote ?? '',

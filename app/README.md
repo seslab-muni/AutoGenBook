@@ -97,10 +97,12 @@ the old outline-row Properties sheet), a Copilot button (disabled until
 counts, an `N sources` drawer (sources and citations) and the caret/selection
 position (`stores/editor-selection-store.ts`, code-point offsets). Phase 2 adds the
 margin workspace: `features/editor/lib/anchors.ts` (text-quote anchors),
-`features/editor/margin/` (cards, layout, selection toolbar, the right-column
-Margin/Copilot switch), highlights in both views and outline-row comment badges;
+`features/editor/margin/` (cards and their registry, layout, selection layer, the right-column
+Margin/Copilot switch and the narrow-screen side sheet), highlights in both views (CSS Custom
+Highlight API in Write, a CodeMirror field in Source) and outline-row comment badges; `src/test/viewport.ts`
+runs a test at a given screen width;
 `pnpm test` covers them with unit tests, MSW-backed component tests and routed flow
-tests (`margin-flow.route.test.tsx`, `margin-write.route.test.tsx`). See
+tests (`margin-flow`, `margin-write` and `margin-editing` `.route.test.tsx`). See
 `docs/WEB_UI.md` for the behaviour.
 
 Routes stay thin: a route module owns params/search-param parsing, loader

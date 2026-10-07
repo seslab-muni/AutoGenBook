@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  anchorFromUnitRange,
   diffChange,
   mapRangeThroughChange,
   resolveAnchorUnits,
@@ -144,6 +145,29 @@ export function useAnchorPositions(items: readonly AnchorItem[], text: string, o
     return ids.sort();
   }, [current.positions, current.anchored]);
 
+  // While an anchor is located, remember what it looks like *now* (quote and surrounding text, as
+  // edited): the server's copy goes stale as the user types around it, and a later deletion and undo
+  // is searched for with the fresh one. Debounced like the retry below, never per keystroke.
+  const lastGood = useRef(new Map<string, { source: AnchorInput | null; anchor: AnchorInput }>());
+  const latest = useRef(current);
+  useEffect(() => {
+    latest.current = current;
+  });
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const { positions, items: list, text: now } = latest.current;
+      for (const item of list) {
+        const range = positions.get(item.id);
+        if (!item.anchor || !range) continue;
+        lastGood.current.set(item.id, {
+          source: item.anchor,
+          anchor: anchorFromUnitRange(now, range.start, range.end),
+        });
+      }
+    }, retryMs);
+    return () => clearTimeout(timer);
+  }, [current.text, current.positions, retryMs]);
+
   // Search again for anchors that have no position, once the text has settled.
   const triedRef = useRef(new Map<string, string>());
   const unlocatedKey = unlocated.join('|');
@@ -160,7 +184,12 @@ export function useAnchorPositions(items: readonly AnchorItem[], text: string, o
       const item = itemsNow.find((candidate) => candidate.id === id);
       if (item?.anchor && triedRef.current.get(id) !== textNow) {
         triedRef.current.set(id, textNow);
-        const range = resolveAnchorUnits(textNow, item.anchor);
+        // The server's copy may have gone stale around the user's edits (or have just been orphaned by
+        // a save): prefer what the located anchor looked like last, unless the server placed it afresh.
+        const remembered = lastGood.current.get(id);
+        const serverPlacedIt = remembered?.source !== item.anchor && item.anchor.start != null;
+        const anchor = remembered && !serverPlacedIt ? remembered.anchor : item.anchor;
+        const range = resolveAnchorUnits(textNow, anchor);
         setState((previous) => {
           if (previous.text !== textNow) return previous;
           const positions = new Map(previous.positions);

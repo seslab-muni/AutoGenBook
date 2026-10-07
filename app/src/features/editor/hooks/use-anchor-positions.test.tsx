@@ -116,4 +116,40 @@ describe('useAnchorPositions', () => {
       end: END + 22,
     });
   });
+
+  it("retries an orphaned anchor with what it looked like last, not the server's stale copy (delete, save, undo)", async () => {
+    const text =
+      'Alpha beta gamma delta. The theorem statement holds for every input here. Alpha again.';
+    const from = text.indexOf('theorem statement');
+    const server = makeAnchor(text, from, from + 17);
+    const list: AnchorItem[] = [{ id: 'c1', anchor: server }];
+    const { result, rerender } = setup({ text, items: list, mode: 'cm' });
+    // The user rewrites the words around the quote (inside its stored context) and the editor keeps tracking it.
+    const edited = text.replace('Alpha', 'Omega-long');
+    act(() =>
+      result.current.reportMapped(
+        new Map([
+          ['c1', { start: edited.indexOf('theorem'), end: edited.indexOf('theorem') + 17 }],
+        ]),
+      ),
+    );
+    rerender({ text: edited, items: list, mode: 'cm' });
+    await new Promise((resolve) => setTimeout(resolve, 40)); // the snapshot is debounced
+    // Deleting the quote: saved, so the server orphans it but keeps its (now stale) quote and context.
+    const gone = edited.replace('theorem statement', '');
+    act(() => result.current.reportMapped(new Map([['c1', null]])));
+    const orphanedByServer: AnchorItem[] = [
+      { id: 'c1', anchor: { ...server, start: null, end: null } },
+    ];
+    rerender({ text: gone, items: orphanedByServer, mode: 'cm' });
+    await waitFor(() => expect(result.current.pending.size).toBe(0));
+    // Undo: the words are back, with the *new* context the server's copy does not match.
+    rerender({ text: edited, items: orphanedByServer, mode: 'cm' });
+    await waitFor(() =>
+      expect(result.current.positions.get('c1')).toEqual({
+        start: edited.indexOf('theorem'),
+        end: edited.indexOf('theorem') + 17,
+      }),
+    );
+  });
 });

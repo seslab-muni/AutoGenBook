@@ -71,9 +71,8 @@ The editor's status bar (`editor-status-bar.tsx`) shows `N characters · M words
 of the live draft on the left (characters are Unicode code points), an
 **`N sources`** button in the middle and, in the Source view, the caret position
 `Ln x, Col y` (column in code points) on the right (hidden in Write, which has
-no caret in the Markdown source; since phase 2 the Write view publishes the
-Markdown position of its text selection too, so the readout appears there once
-something is selected). The caret and selection live in
+no caret of its own; since phase 2 it publishes the Markdown position of the
+text selection, so the readout appears there once something is selected). The caret and selection live in
 `stores/editor-selection-store.ts` as `{from, to, line, column}` with `from`/`to`
 as code-point offsets over the Markdown source, so a caret move re-renders only
 the status bar readout. The sources button toggles a non-modal drawer that sits
@@ -88,6 +87,179 @@ closes it. What left the status bar compared to before: the `≈ N pages` estima
 and the `N equations` count (dropped), the reviewer score badge (now only in the
 right pane's Review tab) and the `Locked` badge (now the pressed state of the
 header's lock button). The save status moved to the header.
+
+**Margin workspace: anchors, comments and highlights (issue #182, phase 2).**
+Human comments live in the margin, a 376px `bg-muted` column that replaces the
+old right pane's role.
+
+*Right column.* `features/editor/margin/right-pane.tsx` has a **Margin | Copilot**
+switch (persisted `ui-store.rightPane`, margin by default); the Copilot side is the
+legacy `CopilotDrawer` (Copilot and Review tabs; Citations moved into the sources
+drawer, which has a *Sources | Citations* toggle, and a citation chip opens it on
+Citations). The open section renders its margin into the column's slot by portal
+(`MarginHostContext`), because the sheet owns the comment data and the text
+geometry. Below 1280px (`components/layout/use-right-pane.ts`, hook
+`useRightColumn`) the column is a managed, non-modal **side sheet** over the editor's
+right edge: it opens from the toolbar button or when a comment is started, closes
+with its close button, on a press outside it (dialogs and menus it opened are
+exempt) and on Escape from anywhere (an open dialog owns that Escape; a composer
+stops its own), and while it is open the editor pane gets matching right padding so
+the text being commented on stays visible. Its open state is the unpersisted
+`ui-store.rightOverlayOpen`, so opening it on a narrow screen never changes the
+saved wide-screen preference (`copilotOpen`).
+
+*Removing the legacy drawer (phases 3 and 4) is deleting, not rewriting.* Everything
+that goes with it: `CopilotDrawer` and its test; the `copilot` branch, the
+`Margin | Copilot` `ToggleGroup`, the `tab`/`onTabChange`/`project` props and the
+`CopilotTab` import in `margin/right-pane.tsx`; `ui-store.rightPane`/`setRightPane`
+(and `RightPane`, `useRightPaneMode`), plus the `setRightPane('margin')` call in
+`useRightColumn().revealMargin`; the `tab` search param and its `TABS`/`ProjectTab`
+validation in `routes/p.$projectId.tsx`, and the `tab`/`handleTabChange` plumbing in
+`routes/p.$projectId.index.tsx`; the `Review` tab's `ReviewPanel` (phase 3 replaces it
+with review cards); the aria-labels that still say "Show right pane" / "Close right
+pane" stay valid. `RightColumn` then reduces to the margin slot.
+
+*Data.* `api/queries/comments.ts` (`comments.forNode`, create/update/delete/resolve
+mutations): resolve and delete are optimistic (the card or badge moves at once,
+errors roll back and toast the server's message); create and edit take
+`{ optimistic: false }` from the cards, because their composers stay open until the
+server answers. Every write refetches the node's threads and the outline lists, and a
+successful `contentMarkdown` save also refetches the node's comments (the server
+re-anchors on save). MSW mocks (`mocks/handlers.ts`) implement the endpoints,
+including a stand-in for that re-anchoring. Outline rows show **open comments**
+(yellow, round) and **pending suggestions** (amber, square) as count-only pills from
+`openCommentCount` / `pendingSuggestionCount`
+(`features/outline/components/node-count-badges.tsx`, `role="img"` with the kind in
+the accessible name and tooltip).
+
+*Anchors.* `features/editor/lib/anchors.ts` is pure TypeScript: W3C text-quote
+anchors over the Markdown source with **code-point** offsets (`CodePointIndex`
+converts to the UTF-16 offsets CodeMirror and the DOM use). `makeAnchor` records the
+quote and up to 32 code points of context. `resolveAnchor` tries the stored offsets
+(accepted only if the quote is unique), then exact matches, then a whitespace-
+normalised match, then a bounded fuzzy match, else it orphans (a false positive is
+worse). Among exact hits, context decides, never word boundaries: hits where the
+stored prefix *and* suffix both agree in full, then hits where one side does (then
+distance to the stored start); a context shorter than 32 code points means the quote
+was at the text's edge and only agrees with a hit at that edge; a quote under 12
+characters or 3 words is never accepted without one side agreeing, even as the only
+hit; ambiguity orphans. Fuzzy matching (Sellers alignment near seed hits or the stored
+offset; span capped at 1.1x the quote, snapped to word boundaries; head/tail matching
+beyond 2,000 characters) is only for quotes of 12+ characters and 3+ words.
+`mapRangeThroughChange` / `diffChange` / `mapAnchorThroughChange` shift anchors
+through edits.
+
+*Keeping anchors right while a section is open.* In the Source view
+`lib/cm-anchor-highlights.ts` is the single source of truth: one module-level
+`StateField` tracks every located range through CodeMirror's own change sets (the
+start edge is non-inclusive, so text typed right before a highlight stays outside it;
+an edit that swallows a range flags it deleted), draws the visible ones as mark
+decorations, and reports positions back after each edit (`onHighlightsMapped`).
+`hooks/use-anchor-positions.ts` merges that into React state: a new comments list
+re-resolves only rows whose `anchor` object changed (react-query keeps identity for
+unchanged ones), so a refetch landing mid-edit never moves a card; an anchor with no
+position is searched for again (fuzzy included, one at a time, never in render) a
+moment after the text last changed, using what the anchor looked like last (quote and
+context as edited, remembered while it was located) rather than the server's copy,
+which goes stale around the user's edits; so deleting the quoted words orphans the
+card (after that short search) and undoing brings it back. Until the search has failed
+once a card is *pending*, not orphaned. Edits from outside the editor (Write view,
+server content) are diffed as one changed span, and an anchor the span swallows is
+re-resolved from its quote. The decoration field is only pushed to when the resolved
+set really differs from what it holds (never per keystroke) and never during an IME
+composition. Anchors are never PATCHed; the server re-anchors on content save.
+Section text is counted over LF: a CR LF section is normalised on load
+(`lib/eol.ts`), as CodeMirror does, and the anchors' quote and context are normalised
+the same way.
+
+*Server content changing under an open editor.* The draft is no longer seeded once.
+When the node's `contentMarkdown` changes on the server (an accepted suggestion,
+another editor) and the editor has no unsaved edits, `ManuscriptSheet` adopts it and
+re-resolves the anchors; with unsaved edits it keeps the draft and shows a notice with
+*Load the other version*. Cards reach this through `MarginCardContext`:
+`applyServerContent(markdown)` replaces the open editor's text (cancelling a pending
+autosave) and `hasUnsavedEdits()` lets an Accept warn instead of clobbering edits.
+
+*Highlights.* Write view: `markdown-view.tsx` is memoised and its parsed element
+depends on the Markdown alone, with module-level component overrides reading chips'
+data through context, so highlight, focus, filter and citation changes never re-run
+the remark/rehype/KaTeX pipeline or replace the DOM the reader's selection lives in.
+Highlights are painted with the **CSS Custom Highlight API** (`lib/write-highlights.ts`:
+one highlight per kind plus a prioritised focused one; opaque pieces such as math and
+citation chips get a `data-anchor-hit` attribute and an outline instead; a click is
+hit-tested through the caret it leaves). Where the API is missing the ranges are
+wrapped in `<mark>`s by rehype instead (`lib/rehype-anchor-source.ts`), which does
+re-run the pipeline when they change. Both use the `position.offset`s remark keeps
+(UTF-16, mapped back through `normalizeDisplayMathMapped` because `$$..$$` lines are
+rewritten before parsing). Every positioned text piece is wrapped in a
+`span[data-src-start/end]`; text whose value differs from its source (escapes,
+entities, block-quote line prefixes, collapsed whitespace) is aligned character by
+character (`lib/source-map.ts`), `remarkCitations` positions the pieces around a
+citation the same way, and fenced/indented/inline code text gets positions too. Math
+and citation chips are highlighted as a whole (display math as a block). Colours and
+underline styles are CSS variables in `index.css` (comment solid, suggestion dashed,
+review dotted, resolved double, unsent draft wavy; text on every fill keeps 4.5:1 and
+every underline 3:1 against the page, both themes, measured). Clicking a highlight
+focuses its card and focusing a card (Tab or click) reveals and focuses its highlight.
+
+*Selection.* In the Write view every positioned text piece carries its Markdown
+offsets; `lib/dom-source-selection.ts` maps a DOM `Range` back to a source range
+(per-character alignment; boundaries in math, chips or other opaque output snap to the
+enclosing source node; element boundaries move to the nearest tagged text; edge
+whitespace trimmed) and `hooks/use-write-selection.ts` publishes it, with `Ln, Col`,
+to the selection store. `margin/selection-layer.tsx` owns everything that follows the
+selection (the store subscription, the toolbar, the shortcut), so a selection change
+re-renders only it, never the sheet. The toolbar floats over a non-blank selection in
+either view and is hidden while the selection is out of view; it offers **Comment**
+(`Ctrl+Alt+M` with the text focused; with only a caret inside a highlight the same
+shortcut instead moves keyboard focus to that highlight's card; Escape dismisses the
+bar) and never takes focus or the selection. `Prompt…`, the chips (`Add proof`, `More
+rigorous`, `Shorter`, `Cite`) and the card's `Send to Copilot` render only when
+`margin/flags.ts`'s `COPILOT_ACTIONS_ENABLED` is true (phase 4). **Keyboard-only
+commenting works from the Source view**: the Write view has no caret, so there a
+keyboard user can read comments through the cards but cannot start one.
+
+*The margin.* `margin/margin-panel.tsx`: filter *All · Comments · Suggestions ·
+Review*, *Show resolved (n)* (resolved threads hidden by default), *Comment on the
+whole section*. Each card sits at the y of its anchor's first line (`geometry.ts`:
+painted ranges in Write, `coordsAtPos` in Source), stacked top-down by the pure
+`margin-layout.ts` (`layoutMargin`; the focused card keeps its y and the cards above
+it are pushed up). Section-level and orphaned cards are pinned at the top of the text
+column (they scroll away with the text); an anchor that resolves but has no rendered
+highlight in the current view is placed by the nearest positioned block and labelled
+*Not shown in this view*. The card lane never scrolls by itself: it is translated by
+the text pane's scroll position (set on the element, no re-render), a wheel over it is
+forwarded to the text pane, and the text pane is given extra bottom space when cards
+are stacked past its last line, so the text can always be scrolled to both ends with
+every card level with its text. Anchor and card-height measuring is batched per
+animation frame. Composers (new comment, reply, edit) stay open with their text until
+the server accepts it, show the server's message on failure and ignore a second submit;
+Reply/Resolve/Edit/Delete are disabled on an optimistic row; deleting a thread always
+confirms; relative times tick (one shared timer). A LaTeX-only section (no
+`contentMarkdown`) gets no range comments (the server anchors against Markdown); only
+whole-section comments, with a note in the margin.
+
+*Card registry (`margin/card-registry.tsx`).* `MARGIN_CARD_KINDS: Record<CommentKind,
+{ label, icon, Status?, Quote?, Body }>`: `MarginCard` is the shared frame (position,
+focus, header, quote area, body) and each slot takes `{ thread, ctx, approximate }`.
+`Status` is the header's right-hand side (default: Orphaned / Whole section /
+Resolved badges; suggestion cards put running/pending/failed there, review cards the
+severity and type pills), `Quote` the quote area (default: the quoted text; suggestion
+cards put their diff there), `Body` everything below. `suggestion` and `review` render
+read-only until phases 4 and 3 replace their entries. `MarginCardContext` is `{
+projectId, nodeId, currentUserId, copilotActions, restoreEditorFocus,
+applyServerContent, hasUnsavedEdits }`. `ComposerDraft` in `margin-store.ts` is a
+discriminated union (`{ kind: 'comment'; anchor }` today) so the prompt window can add
+its own draft kind.
+
+*Known limits.* The CSS Custom Highlight API is absent in older browsers (the `<mark>`
+fallback re-parses the Markdown when highlights change). Text the aligner cannot map
+falls back to whole-node granularity, and a Write selection inside a KaTeX formula
+snaps to the whole formula. After a long run of edits around an orphaned anchor its
+quote may be gone for good; it is then kept as an orphan, never deleted. A CR LF
+section is saved as LF the first time it is edited. In the Source view CodeMirror
+estimates the height of lines it has not rendered, so a card for an anchor far from the
+viewport can sit a few pixels off until the text is scrolled there.
 
 `routes/__root.tsx` mounts the app shell once (theme toggle, toaster, the
 `NewProjectDialog` — reachable from both the hub and the studio header) and
@@ -155,96 +327,3 @@ message) collapsed underneath as "Original error".
 - **`app/_reference/`, the AI-Studio-exported mock UI this rewrite used as a
   layout/styling reference, is gone** (deleted by issue #23) — if older
   comments or PRs mention it, treat them as historical.
-
-
-**Margin workspace: anchors, comments and highlights (issue #182, phase 2).**
-Human comments live in the margin, a 376px `bg-muted` column that replaces the
-old right pane's role. The right column (`features/editor/margin/right-pane.tsx`)
-has a **Margin | Copilot** switch (persisted `ui-store.rightPane`, margin by
-default): the Copilot side is the legacy `CopilotDrawer` with its Copilot and
-Review tabs (its Citations tab moved into the sources drawer, which now has a
-*Sources | Citations* toggle; clicking a citation chip opens it on Citations).
-Removing the legacy drawer later (phases 3 and 4) is deleting that switch branch
-and `CopilotDrawer`. Below 1280px the column is an overlay over the editor's
-right edge (`components/layout/use-right-pane.ts`, unpersisted
-`ui-store.rightOverlayOpen`), opened by the toolbar button or by starting a
-comment, closed with Escape.
-
-*Data.* `api/queries/comments.ts` (`comments.forNode`, create/update/delete/resolve
-mutations): writes are optimistic (a new card or message appears at once, the row
-badge moves, errors roll back) and always refetch the node's threads and the
-outline lists afterwards; MSW mocks (`mocks/handlers.ts`) implement the endpoints,
-including a stand-in for the server's re-anchoring on content PATCH. Outline rows
-show **open comments** (yellow) and **pending suggestions** (amber) from
-`openCommentCount` / `pendingSuggestionCount`
-(`features/outline/components/node-count-badges.tsx`, labelled `role="img"`).
-
-*Anchors.* `features/editor/lib/anchors.ts` is pure TypeScript: W3C text-quote
-anchors over the Markdown source with **code-point** offsets (`CodePointIndex`
-converts to the UTF-16 offsets CodeMirror and the DOM use). `makeAnchor` records
-the quote and up to 32 code points of context; `resolveAnchor` tries the stored
-offsets (accepted only if the quote is unique), then exact matches decided by the
-*whole* stored prefix and suffix (then distance), then a whitespace-normalised
-match, then a bounded fuzzy match (Sellers alignment near seed hits or the stored
-offset, only for quotes of 12+ characters and 3+ words, span capped at 1.1x the
-quote and snapped to word boundaries, head/tail matching beyond 2,000
-characters), else it orphans; ambiguous results orphan too (a false positive is
-worse). `mapRangeThroughChange` / `diffChange` / `mapAnchorThroughChange` shift
-anchors through edits. While a section is open `hooks/use-anchor-positions.ts`
-keeps each position right: a new comments list (load, refetch after a save, a
-reply from someone else) re-resolves every anchor from its quote against the
-current draft; an edit maps the positions through the single changed span, so
-deleting the quoted words orphans the card at once. Anchors are never PATCHed
-to the server; the server re-anchors on content save.
-
-*Highlights.* Source: `lib/cm-anchor-highlights.ts` is a stable module-level
-`StateField` (decorations map through edits; effects replace the set or set the
-focused id), clicks on a mark report its anchor ids via `SectionEditor`'s
-`onHighlightClick`. Write: `markdown-view.tsx` takes `anchorMarks`/`sourceMap`
-and runs two rehype steps (`lib/rehype-anchor-source.ts`) using the
-`position.offset`s remark keeps (UTF-16, mapped back through
-`normalizeDisplayMathMapped` because `$$..$$` lines are rewritten before parsing):
-text nodes are split at range edges and wrapped in `<mark data-anchor-ids>` (a
-range crossing elements, inline math and citations is wrapped per text node);
-text whose value differs from its source (escapes, entities, quote prefixes) is
-aligned character by character (`lib/source-map.ts`); math and citation chips
-(opaque rendered output) are highlighted as a whole; text it cannot align is
-highlighted as a whole node. Highlight colour is by kind (comment yellow,
-suggestion primary, review destructive, resolved muted) plus a distinct
-underline style; the focused highlight (its card is focused) gets a stronger fill.
-
-*Selection in Write.* Every positioned text piece carries `data-src-start/end`
-(author offsets). `lib/dom-source-selection.ts` maps a DOM `Range` back to a
-Markdown range: text boundaries via per-character alignment, boundaries in math,
-chips or other opaque output snap to the enclosing source node, element boundaries
-move to the nearest tagged text, and whitespace at the edges is trimmed.
-`hooks/use-write-selection.ts` publishes the result (and `Ln, Col`) to the
-selection store. Known limits: text it cannot align falls back to whole-node
-granularity; a selection that only covers rendered-only content (e.g. inside a
-KaTeX formula) snaps to the whole formula.
-
-*Selection toolbar.* A floating bar over any non-empty selection, in both views
-(`margin/selection-toolbar.tsx`): **Comment** (also `Ctrl+Alt+M` with the text
-focused; Escape dismisses the bar). Pointer presses on it are cancelled so the
-selection and focus stay in the text. `Prompt…` and the chips (`Add proof`,
-`More rigorous`, `Shorter`, `Cite`) and the card's `Send to Copilot` exist but
-render only when `margin/flags.ts`'s `COPILOT_ACTIONS_ENABLED` is true (phase 4).
-
-*The margin.* `margin/margin-panel.tsx`: header filter *All · Comments ·
-Suggestions · Review*, *Show resolved (n)* (resolved threads are hidden by
-default) and *Comment on the whole section*. Cards sit at the y of their
-anchor's first line (`margin/geometry.ts` measures: DOM marks in Write,
-`coordsAtPos` in Source), stacked top-down by the pure `margin-layout.ts`
-(`layoutMargin`; the focused card keeps its y and the cards above it are pushed
-up). Section-level and orphaned cards are pinned at the top (orphaned ones show
-their struck-through quote). Measuring is batched per animation frame and never
-runs per keystroke beyond one read pass; card heights come from one
-`ResizeObserver`; the lane scrolls natively and mirrors the text pane's scroll
-position both ways. Clicking a highlight focuses its card and focusing a card
-(Tab or click) reveals and focuses its highlight. `margin-card.tsx` is the shared
-frame (focusable named region, kind icon, status, quote); the per-kind body comes
-from `margin/card-registry.tsx` (`MARGIN_CARD_KINDS`): `comment` renders the
-thread (messages with author, relative time and an *edited* marker, Markdown body
-rendered without HTML, Reply, Resolve/Reopen, Edit/Delete on one's own messages,
-a confirm before deleting a thread that has replies); `suggestion` and `review`
-render read-only (text and status) until phases 4 and 3 replace their `Body`.
