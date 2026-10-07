@@ -109,10 +109,7 @@ describe('OutlinePane structural-edit gating (issue #74)', () => {
     expect(screen.getByRole('menuitem', { name: 'Indent' })).toHaveAttribute('data-disabled', '');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('data-disabled', '');
 
-    // Rename/lock/properties stay enabled — the backend still allows non-structural edits.
-    expect(screen.getByRole('menuitem', { name: 'Properties' })).not.toHaveAttribute(
-      'data-disabled',
-    );
+    // Rename/lock stay enabled — the backend still allows non-structural edits.
     expect(screen.getByRole('menuitem', { name: /lock structure/i })).not.toHaveAttribute(
       'data-disabled',
     );

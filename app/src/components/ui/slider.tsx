@@ -8,8 +8,12 @@ function Slider({
   value,
   min = 0,
   max = 100,
+  thumbLabels,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: React.ComponentProps<typeof SliderPrimitive.Root> & {
+  /** Accessible name per thumb (the Root's own `aria-label` never reaches the focusable thumbs). */
+  thumbLabels?: string[]
+}) {
   const _values = React.useMemo(() => {
     if (Array.isArray(value)) return value
     if (Array.isArray(defaultValue)) return defaultValue
@@ -46,6 +50,7 @@ function Slider({
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={index}
+          {...(thumbLabels?.[index] ? { "aria-label": thumbLabels[index] } : {})}
           className="block size-4 shrink-0 rounded-full border border-primary bg-white shadow-sm ring-ring/50 transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
         />
       ))}

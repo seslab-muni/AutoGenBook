@@ -31,7 +31,7 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
   await expect(page.getByRole('dialog')).toBeHidden();
 
   // --- Source upload + attach ---
-  await page.getByRole('button', { name: /Sources/ }).click();
+  await page.getByRole('button', { name: /^Sources(\s+\d+)?$/ }).click();
   await page.getByLabel('Upload files').setInputFiles(FIXTURE_PDF);
   await expect(page.getByText('Attached.')).toBeVisible({ timeout: 15_000 });
   // The Sources dialog lists attached files as table rows, not headings (#130).
@@ -59,13 +59,20 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
   // --- A row's hover actions are actually clickable ---
   // Regression guard: the status badge fades to `opacity-0` on hover, which gives it a stacking
   // context painted above the action group, and without an explicit z-index on the group the
-  // invisible badge swallowed every click on Add/Properties/Delete.
+  // invisible badge swallowed every click on Add/Delete.
   const firstRow = page.getByRole('treeitem').filter({ hasText: chapterTitles[0] });
   await firstRow.hover();
-  await firstRow.getByRole('button', { name: 'Properties' }).click();
-  await expect(page.getByRole('dialog', { name: chapterTitles[0] })).toBeVisible();
+  await firstRow.getByRole('button', { name: 'Delete' }).click();
+  await expect(page.getByRole('alertdialog')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: chapterTitles[0] })).not.toBeVisible();
+  await expect(page.getByRole('alertdialog')).not.toBeVisible();
+
+  // --- Chapter options live in the editor header, not a row action ---
+  await firstRow.click();
+  await page.getByRole('button', { name: 'Chapter options' }).click();
+  await expect(page.getByRole('dialog', { name: 'Chapter options' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Chapter options' })).not.toBeVisible();
 
   // --- Start a run ---
   await page.getByRole('button', { name: 'Run', exact: true }).click();

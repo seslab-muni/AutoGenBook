@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
-import { Check, Copy, Download, Lock } from 'lucide-react';
+import { Copy, Download, ExternalLink, Lock, MoreHorizontal, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
@@ -10,20 +10,34 @@ import { runs as runQueries } from '@/api/queries/runs';
 import type { OutlineNode } from '@/api/types';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { ChapterOptionsPopover } from '@/features/editor/components/chapter-options-popover';
 import { EditorStatusBar } from '@/features/editor/components/editor-status-bar';
+import { HeaderIconButton } from '@/features/editor/components/header-icon-button';
+import { LockContentButton } from '@/features/editor/components/lock-content-button';
+import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
 import { LazyMarkdownView } from '@/features/editor/components/markdown-view-lazy';
+import { SourcesDrawer } from '@/features/editor/components/sources-drawer';
 import { SectionEditor } from '@/features/editor/components/section-editor';
 import { SectionJumpSelect } from '@/features/editor/components/section-jump-select';
+import { useEffectiveSources } from '@/features/editor/hooks/use-effective-sources';
 import { useDebouncedMutation } from '@/features/editor/hooks/use-debounced-mutation';
-import { countDisplayEquations } from '@/features/editor/lib/count-equations';
 import { parseRagCitations } from '@/features/editor/lib/rag-citation';
 import { isUnsavedStatus } from '@/features/editor/lib/save-status';
-import { wordCount } from '@/features/editor/lib/word-count';
+import { characterCount, wordCount } from '@/features/editor/lib/word-count';
 import { findSectionArtifact } from '@/features/exports/lib/artifacts';
 import { fileContentUrl } from '@/features/exports/lib/file-url';
 import { isLeaf } from '@/features/outline/model';
+import { useEditorSelectionStore } from '@/stores/editor-selection-store';
 import { useEditorStore, useEditorView } from '@/stores/editor-store';
+
+const SOURCES_DRAWER_ID = 'editor-sources-drawer';
 
 interface ManuscriptSheetProps {
   projectId: string;
@@ -33,14 +47,17 @@ interface ManuscriptSheetProps {
   flatNodes: readonly OutlineNode[];
   outlineOpen: boolean;
   onSelectNode: (nodeId: string) => void;
+  /** Hook point for the header's Copilot button (issue #182 phase 4) — the button stays disabled until it is given. */
+  onOpenCopilot?: () => void;
 }
 
 /**
  * The centre pane's main content once a section is selected: a toolbar
- * (Preview/Source toggle, section jump select, copy, "open in run"), the
- * manuscript "sheet" preview or the raw `SectionEditor`, and the status bar.
+ * (content lock, Write/Source toggle, Chapter options, Copilot, section jump select, copy,
+ * "open in run", save status), the manuscript "sheet" (Write) or the raw `SectionEditor`
+ * (Source), and the status bar.
  * Owns the debounced-autosave wiring (`useDebouncedMutation` over
- * `useUpdateOutlineNodeMutation`) so both the preview and source views edit
+ * `useUpdateOutlineNodeMutation`) so both the write and source views edit
  * the same in-memory draft.
  */
 export function ManuscriptSheet({
@@ -51,6 +68,7 @@ export function ManuscriptSheet({
   flatNodes,
   outlineOpen,
   onSelectNode,
+  onOpenCopilot,
 }: ManuscriptSheetProps) {
   const view = useEditorView();
   const setView = useEditorStore((state) => state.setView);
@@ -61,7 +79,15 @@ export function ManuscriptSheet({
   const readOnly = node.status === 'drafting';
 
   const [draft, setDraft] = useState(node[field]);
-  const [copied, setCopied] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const sourcesButtonRef = useRef<HTMLButtonElement>(null);
+  const [optionsFocusSources, setOptionsFocusSources] = useState(false);
+  const setSelection = useEditorSelectionStore((state) => state.setSelection);
+
+  // The outline's flat cache is what mutations patch optimistically, so the lock button and
+  // Chapter options read their node from it (falling back to the fetched copy) to stay live.
+  const liveNode = flatNodes.find((item) => item.id === node.id) ?? node;
 
   // The `sections/<cliKey>.md` artifact the last full run produced for this node, if any — lets
   // the toolbar offer a direct "Download section .md" link (issue #22) alongside "Copy Markdown".
@@ -87,23 +113,34 @@ export function ManuscriptSheet({
   }, [flush]);
   useEffect(() => () => flushRef.current(), []);
 
-  function handleChange(value: string) {
-    if (readOnly) return;
-    setDraft(value);
-    schedule(value);
-  }
+  // Stable identities (here, `closeSources` and the store's `setSelection`) keep `SectionEditor`'s
+  // CodeMirror extensions from being reconfigured on every keystroke or caret move.
+  const handleChange = useCallback(
+    (value: string) => {
+      if (readOnly) return;
+      setDraft(value);
+      schedule(value);
+    },
+    [readOnly, schedule],
+  );
+
+  // The caret readout belongs to the Source view; clear it when that editor goes away.
+  useEffect(() => {
+    if (view !== 'source') setSelection(null);
+    return () => setSelection(null);
+  }, [view, setSelection]);
+
+  const closeSources = useCallback(() => setSourcesOpen(false), []);
 
   function handleCopy() {
     navigator.clipboard
       .writeText(draft)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      })
+      .then(() => toast.success('Markdown copied to clipboard'))
       .catch(() => toast.error('Could not copy to clipboard'));
   }
 
-  const equationCount = countDisplayEquations(draft);
+  const citations = parseRagCitations(node.ragCitations);
+  const effectiveSources = useEffectiveSources(projectId, node.id, flatNodes);
   const isDirty = isUnsavedStatus(status);
   // Non-leaf nodes (chapters/parts with children) never get LLM-generated content — only leaf
   // sections do (book_builder.py's generate_contents walks leaves only) — so the empty-state
@@ -121,14 +158,40 @@ export function ManuscriptSheet({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PaneToolbar className="gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Tabs value={view} onValueChange={(value) => setView(value as 'preview' | 'source')}>
-            <TabsList>
-              <TabsTrigger value="preview">Preview</TabsTrigger>
-              <TabsTrigger value="source">Source</TabsTrigger>
-            </TabsList>
-          </Tabs>
+      <PaneToolbar className="@container">
+        <div className="-mx-0.5 -my-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-0.5 py-1">
+          <LockContentButton projectId={projectId} node={liveNode} flat={flatNodes} />
+          <ToggleGroup
+            aria-label="Editor view"
+            value={view}
+            onValueChange={(value) => setView(value as 'write' | 'source')}
+          >
+            <ToggleGroupItem value="write">Write</ToggleGroupItem>
+            <ToggleGroupItem value="source">Source</ToggleGroupItem>
+          </ToggleGroup>
+          <ChapterOptionsPopover
+            projectId={projectId}
+            node={liveNode}
+            flat={flatNodes}
+            open={optionsOpen}
+            focusSources={optionsFocusSources}
+            onOpenChange={(open) => {
+              setOptionsOpen(open);
+              if (!open) setOptionsFocusSources(false);
+            }}
+          />
+          <HeaderIconButton
+            label="Copilot"
+            tooltip={
+              onOpenCopilot
+                ? 'Prompt the copilot about this section'
+                : 'Coming soon: prompt the copilot here'
+            }
+            disabled={!onOpenCopilot}
+            onClick={onOpenCopilot}
+          >
+            <Sparkles />
+          </HeaderIconButton>
           {!outlineOpen ? (
             <SectionJumpSelect
               flat={flatNodes}
@@ -138,25 +201,39 @@ export function ManuscriptSheet({
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button type="button" variant="outline" size="sm" onClick={handleCopy}>
-            {copied ? <Check className="text-success" /> : <Copy />}
-            Copy Markdown
-          </Button>
-          {sectionArtifact ? (
-            <Button type="button" variant="outline" size="sm" asChild>
-              <a href={fileContentUrl(sectionArtifact.fileId)} download={sectionArtifact.filename}>
-                <Download />
-                Download section .md
-              </a>
-            </Button>
-          ) : null}
-          {lastRunId ? (
-            <Button type="button" variant="outline" size="sm" asChild>
-              <Link to="/p/$projectId/runs/$runId" params={{ projectId, runId: lastRunId }}>
-                Open in run
-              </Link>
-            </Button>
-          ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="icon-sm" aria-label="More actions">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={handleCopy}>
+                <Copy />
+                Copy Markdown
+              </DropdownMenuItem>
+              {sectionArtifact ? (
+                <DropdownMenuItem asChild>
+                  <a
+                    href={fileContentUrl(sectionArtifact.fileId)}
+                    download={sectionArtifact.filename}
+                  >
+                    <Download />
+                    Download section .md
+                  </a>
+                </DropdownMenuItem>
+              ) : null}
+              {lastRunId ? (
+                <DropdownMenuItem asChild>
+                  <Link to="/p/$projectId/runs/$runId" params={{ projectId, runId: lastRunId }}>
+                    <ExternalLink />
+                    Open in run
+                  </Link>
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <SaveStatusBadge status={status} collapsible />
         </div>
       </PaneToolbar>
 
@@ -167,7 +244,13 @@ export function ManuscriptSheet({
         </div>
       ) : null}
 
-      <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
+      <div
+        className="custom-scrollbar min-h-0 flex-1 overflow-auto"
+        // Scrollable region: focusable so keyboard users can scroll the manuscript.
+        tabIndex={0}
+        role="region"
+        aria-label="Manuscript"
+      >
         {view === 'source' ? (
           <SectionEditor
             value={draft}
@@ -176,6 +259,7 @@ export function ManuscriptSheet({
             readOnly={readOnly}
             language={useLatex ? 'latex' : 'markdown'}
             theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+            onSelectionChange={setSelection}
             className="h-full"
           />
         ) : (
@@ -200,10 +284,7 @@ export function ManuscriptSheet({
                     : 'This is a container node — it only has the outline summary shown in the assembled document. Content is generated per leaf section; select a leaf section below it to write or generate text.'}
                 </p>
               ) : (
-                <LazyMarkdownView
-                  markdown={draft}
-                  citations={parseRagCitations(node.ragCitations)}
-                />
+                <LazyMarkdownView markdown={draft} citations={citations} />
               )}
 
               <div className="mt-16 flex items-center justify-between border-t pt-6 font-sans text-xs text-muted-foreground">
@@ -216,14 +297,44 @@ export function ManuscriptSheet({
         )}
       </div>
 
+      {sourcesOpen ? (
+        <SourcesDrawer
+          id={SOURCES_DRAWER_ID}
+          sources={effectiveSources.sources}
+          failedSources={effectiveSources.failedSources}
+          loading={effectiveSources.loading}
+          error={effectiveSources.error}
+          onRetry={effectiveSources.retry}
+          scope={effectiveSources.scope}
+          scopeFromLabel={
+            effectiveSources.scopeFrom
+              ? `§${effectiveSources.scopeFrom.sectionNumber} ${effectiveSources.scopeFrom.title}`
+              : null
+          }
+          citations={citations}
+          onChangeScope={() => {
+            setSourcesOpen(false);
+            setOptionsFocusSources(true);
+            setOptionsOpen(true);
+          }}
+          onClose={() => {
+            closeSources();
+            sourcesButtonRef.current?.focus();
+          }}
+        />
+      ) : null}
+
       <EditorStatusBar
-        serverWords={node.actualWords}
-        draftWords={wordCount(draft)}
-        isDirty={isDirty}
-        equationCount={equationCount}
-        status={status}
-        reviewerScore={node.reviewerScore ?? null}
-        contentLocked={node.contentLocked}
+        characters={characterCount(draft)}
+        words={wordCount(draft)}
+        sourceCount={effectiveSources.loading ? null : effectiveSources.sources.length}
+        sourcesError={effectiveSources.error}
+        sourcesButtonRef={sourcesButtonRef}
+        sourcesOpen={sourcesOpen}
+        sourcesDrawerId={SOURCES_DRAWER_ID}
+        onToggleSources={() => setSourcesOpen((open) => !open)}
+        onCloseSources={closeSources}
+        showCaret={view === 'source'}
       />
     </div>
   );

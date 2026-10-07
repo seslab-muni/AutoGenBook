@@ -76,8 +76,8 @@ interface CopilotPanelProps {
  * free-form instruction feed `POST .../outline/{nodeId}/regenerate`, and a
  * live event log/stage timeline/footer track whichever run is currently
  * relevant to the selected node (an active run, or the last one touching
- * this project). Settings (math level, page budget, ...) stay in
- * `NodePropertiesSheet` (#19); citations/review tabs are #20's.
+ * this project). Settings (math level, page budget, ...) live in the
+ * editor header's Chapter options popover; citations/review tabs are #20's.
  */
 export function CopilotPanel({ projectId, project, selectedNodeId }: CopilotPanelProps) {
   // No `limit` override: shares the route loader's cache entry (`p.$projectId.tsx` already

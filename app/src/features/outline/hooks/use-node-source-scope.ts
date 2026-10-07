@@ -16,7 +16,7 @@ function reportError(error: unknown) {
 
 /**
  * Shared state/actions behind every per-node source-scope control (issue #138) — the node
- * properties sheet's Sources section and the copilot's "Sources for this section" card. Scope
+ * Chapter options popover's Sources section and the copilot's "Sources for this section" card. Scope
  * PATCHes are immediate (not debounced), and "Only selected" never PATCHes an empty selection:
  * it opens the picker instead, and removing the last source reverts to `inherit`.
  */
