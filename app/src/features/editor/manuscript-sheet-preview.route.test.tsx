@@ -21,11 +21,15 @@ describe('Studio editor pane (routed, MSW-backed) — write view and autosave', 
         LONG,
       ),
     ).toBeInTheDocument();
-    // Server `actualWords` (5400), not a locally-recomputed count.
-    expect(await screen.findByText('5400 words', {}, LONG)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/[\d,]+ characters · [\d,]+ words/, {}, LONG),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /\d+ sources?/ })).toBeInTheDocument();
+    // The caret readout belongs to the Source view only.
+    expect(screen.queryByText(/^Ln \d+, Col \d+$/)).not.toBeInTheDocument();
   }, 15000);
 
-  it('collapses a burst of typing in Source view into exactly one PATCH, then shows the updated server word count', async () => {
+  it('collapses a burst of typing in Source view into exactly one PATCH and shows the caret position', async () => {
     const user = userEvent.setup();
     let patchCount = 0;
     server.use(
@@ -85,6 +89,6 @@ describe('Studio editor pane (routed, MSW-backed) — write view and autosave', 
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(patchCount).toBe(1);
 
-    expect(await screen.findByText('3 words', {}, LONG)).toBeInTheDocument();
+    expect(await screen.findByText(/^Ln \d+, Col \d+$/, {}, LONG)).toBeInTheDocument();
   }, 20000);
 });

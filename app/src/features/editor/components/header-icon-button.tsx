@@ -5,8 +5,8 @@ interface HeaderIconButtonProps {
   label: string;
   tooltip: string;
   disabled?: boolean;
-  pressed?: boolean;
-  onClick?: () => void;
+  pressed?: boolean | undefined;
+  onClick?: (() => void) | undefined;
   children: React.ReactNode;
 }
 

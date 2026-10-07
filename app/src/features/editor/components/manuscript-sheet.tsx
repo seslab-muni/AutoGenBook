@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
@@ -17,17 +17,20 @@ import { HeaderIconButton } from '@/features/editor/components/header-icon-butto
 import { LockContentButton } from '@/features/editor/components/lock-content-button';
 import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
 import { LazyMarkdownView } from '@/features/editor/components/markdown-view-lazy';
-import { SectionEditor } from '@/features/editor/components/section-editor';
+import { SourcesDrawer } from '@/features/editor/components/sources-drawer';
+import { SectionEditor, type EditorCaret } from '@/features/editor/components/section-editor';
 import { SectionJumpSelect } from '@/features/editor/components/section-jump-select';
+import { useEffectiveSources } from '@/features/editor/hooks/use-effective-sources';
 import { useDebouncedMutation } from '@/features/editor/hooks/use-debounced-mutation';
-import { countDisplayEquations } from '@/features/editor/lib/count-equations';
 import { parseRagCitations } from '@/features/editor/lib/rag-citation';
 import { isUnsavedStatus } from '@/features/editor/lib/save-status';
-import { wordCount } from '@/features/editor/lib/word-count';
+import { characterCount, wordCount } from '@/features/editor/lib/word-count';
 import { findSectionArtifact } from '@/features/exports/lib/artifacts';
 import { fileContentUrl } from '@/features/exports/lib/file-url';
 import { isLeaf } from '@/features/outline/model';
 import { useEditorStore, useEditorView } from '@/stores/editor-store';
+
+const SOURCES_DRAWER_ID = 'editor-sources-drawer';
 
 interface ManuscriptSheetProps {
   projectId: string;
@@ -71,6 +74,9 @@ export function ManuscriptSheet({
   const [draft, setDraft] = useState(node[field]);
   const [copied, setCopied] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  // The caret is only meaningful in Source: Write is a rendered view with no Markdown caret.
+  const [caret, setCaret] = useState<EditorCaret | null>(null);
 
   // The outline's flat cache is what mutations patch optimistically, so the lock button and
   // Chapter options read their node from it (falling back to the fetched copy) to stay live.
@@ -106,6 +112,8 @@ export function ManuscriptSheet({
     schedule(value);
   }
 
+  const closeSources = useCallback(() => setSourcesOpen(false), []);
+
   function handleCopy() {
     navigator.clipboard
       .writeText(draft)
@@ -116,7 +124,8 @@ export function ManuscriptSheet({
       .catch(() => toast.error('Could not copy to clipboard'));
   }
 
-  const equationCount = countDisplayEquations(draft);
+  const citations = parseRagCitations(node.ragCitations);
+  const effectiveSources = useEffectiveSources(projectId, node.id, flatNodes);
   const isDirty = isUnsavedStatus(status);
   // Non-leaf nodes (chapters/parts with children) never get LLM-generated content — only leaf
   // sections do (book_builder.py's generate_contents walks leaves only) — so the empty-state
@@ -133,7 +142,7 @@ export function ManuscriptSheet({
   });
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       <PaneToolbar className="custom-scrollbar gap-2 overflow-x-auto">
         <div className="flex shrink-0 items-center gap-2">
           <LockContentButton projectId={projectId} node={liveNode} flat={flatNodes} />
@@ -210,6 +219,7 @@ export function ManuscriptSheet({
             readOnly={readOnly}
             language={useLatex ? 'latex' : 'markdown'}
             theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+            onCaretChange={setCaret}
             className="h-full"
           />
         ) : (
@@ -234,10 +244,7 @@ export function ManuscriptSheet({
                     : 'This is a container node — it only has the outline summary shown in the assembled document. Content is generated per leaf section; select a leaf section below it to write or generate text.'}
                 </p>
               ) : (
-                <LazyMarkdownView
-                  markdown={draft}
-                  citations={parseRagCitations(node.ragCitations)}
-                />
+                <LazyMarkdownView markdown={draft} citations={citations} />
               )}
 
               <div className="mt-16 flex items-center justify-between border-t pt-6 font-sans text-xs text-muted-foreground">
@@ -250,14 +257,33 @@ export function ManuscriptSheet({
         )}
       </div>
 
+      {sourcesOpen ? (
+        <SourcesDrawer
+          id={SOURCES_DRAWER_ID}
+          sources={effectiveSources.sources}
+          scope={effectiveSources.scope}
+          scopeFromLabel={
+            effectiveSources.scopeFrom
+              ? `§${effectiveSources.scopeFrom.sectionNumber} ${effectiveSources.scopeFrom.title}`
+              : null
+          }
+          citations={citations}
+          onChangeScope={() => {
+            setSourcesOpen(false);
+            setOptionsOpen(true);
+          }}
+          onClose={closeSources}
+        />
+      ) : null}
+
       <EditorStatusBar
-        serverWords={node.actualWords}
-        draftWords={wordCount(draft)}
-        isDirty={isDirty}
-        equationCount={equationCount}
-        status={status}
-        reviewerScore={node.reviewerScore ?? null}
-        contentLocked={node.contentLocked}
+        characters={characterCount(draft)}
+        words={wordCount(draft)}
+        sourceCount={effectiveSources.sources.length}
+        sourcesOpen={sourcesOpen}
+        sourcesDrawerId={SOURCES_DRAWER_ID}
+        onToggleSources={() => setSourcesOpen((open) => !open)}
+        caret={view === 'source' ? caret : null}
       />
     </div>
   );
