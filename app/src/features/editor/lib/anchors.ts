@@ -299,14 +299,34 @@ function pickPosition(
     ctx: contextScore(hay, i, i + length, prefix, suffix),
     dist: hint === null ? 0 : Math.abs(i - hint),
   }));
+  const nearest = (pool: typeof scored): number | null => {
+    if (pool.length === 1) return pool[0]!.i;
+    if (hint === null) return null;
+    const sorted = [...pool].sort((a, b) => a.dist - b.dist);
+    // Identical context everywhere: keep the hit at (or clearly nearest to) the stored offset.
+    return sorted[0]!.dist < sorted[1]!.dist && sorted[0]!.dist <= NEAR_WINDOW
+      ? sorted[0]!.i
+      : null;
+  };
+
+  // No context to tell the hits apart (and several of them): never trust stale offsets.
+  const fullContext = prefix.length + suffix.length;
+  if (fullContext === 0) return null;
+  // Context first, word boundaries never: hits where the whole stored prefix and suffix agree.
+  // (At the start or end of the text the context is cut short: what is there must still agree.)
+  const agreeing = scored.filter((c) => {
+    const before = hay.slice(Math.max(0, c.i - prefix.length), c.i);
+    const after = hay.slice(c.i + length, c.i + length + suffix.length);
+    return (
+      commonSuffix(before, prefix) === before.length && commonPrefix(after, suffix) === after.length
+    );
+  });
+  if (agreeing.length > 0) return nearest(agreeing);
+  // Only partial agreement: fine for a long quote, not for a short one (a shared space proves nothing).
+  const trimmed = needle.trim();
+  if (trimmed.length < MIN_FUZZY_CHARS || wordCount(trimmed) < MIN_FUZZY_WORDS) return null;
   const best = Math.max(...scored.map((c) => c.ctx));
-  const top = scored.filter((c) => c.ctx === best);
-  if (top.length === 1) return top[0]!.i;
-  if (hint === null) return null;
-  top.sort((a, b) => a.dist - b.dist);
-  // Identical context everywhere: keep the hit at (or clearly nearest to) the stored offset.
-  if (top[0]!.dist < top[1]!.dist && top[0]!.dist <= NEAR_WINDOW) return top[0]!.i;
-  return null;
+  return nearest(scored.filter((c) => c.ctx === best));
 }
 
 /** Exact hit of `quote` in `view`, disambiguated. `'none'` = no hit, `null` = ambiguous. */

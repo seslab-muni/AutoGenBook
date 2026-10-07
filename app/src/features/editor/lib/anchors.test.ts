@@ -268,3 +268,103 @@ describe('change mapping', () => {
     expect(isOrphaned(gone)).toBe(true);
   });
 });
+
+describe('context first, boundaries never', () => {
+  const T =
+    'Let $x_1$ and $x_2$ be the two inputs of the comparator. The network compares x with y and returns the larger one.';
+
+  it('keeps a sub-word selection on its own occurrence when text is inserted before', () => {
+    const a = makeAnchor(T, 5, 6);
+    const resolved = resolveAnchor('Note. ' + T, a);
+    expect(resolved.start).toBe(11);
+    expect(resolved.end).toBe(12);
+  });
+
+  it('orphans a context-free anchor whose quote repeats, instead of trusting stale offsets', () => {
+    const resolved = resolveAnchor('Note. ' + T, {
+      quote: 'x',
+      prefix: '',
+      suffix: '',
+      start: 5,
+      end: 6,
+    });
+    expect(isOrphaned(resolved)).toBe(true);
+  });
+
+  it('records up to 32 code points of context on makeAnchor', () => {
+    const a = makeAnchor(T, 40, 45);
+    expect(a.prefix.length).toBeGreaterThan(0);
+    expect(a.suffix.length).toBeGreaterThan(0);
+  });
+
+  it('never lands on another occurrence (seeded property test)', () => {
+    let seed = 12345;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    const pick = <U>(xs: U[]): U => xs[Math.floor(rand() * xs.length)]!;
+    const vocab = [
+      'x',
+      'y',
+      'the',
+      'a',
+      'of',
+      'and',
+      'node',
+      'edge',
+      'is',
+      'in',
+      'with',
+      'set',
+      'let',
+      'if',
+    ];
+    let orphans = 0;
+    let trials = 0;
+    for (let round = 0; round < 300; round += 1) {
+      const text = Array.from({ length: 150 + Math.floor(rand() * 100) }, () => pick(vocab)).join(
+        ' ',
+      );
+      const start = 80 + Math.floor(rand() * (text.length - 200));
+      const words = rand() < 0.5;
+      let end: number;
+      if (words) {
+        end = start;
+        for (let w = 0; w < 1 + Math.floor(rand() * 3); w += 1) {
+          const next = text.indexOf(' ', end + 1);
+          end = next === -1 ? text.length : next;
+        }
+      } else {
+        end = start + 1 + Math.floor(rand() * 4);
+      }
+      if (end > text.length - 40) continue;
+      const anchor = makeAnchor(text, start, end);
+      // Edit well outside the 32-character context on either side.
+      const insertBefore = rand() < 0.5;
+      let edited: string;
+      let expected: number;
+      if (insertBefore) {
+        const at = Math.floor(rand() * (start - 40));
+        const ins =
+          Array.from({ length: 1 + Math.floor(rand() * 5) }, () => pick(vocab)).join(' ') + ' ';
+        edited = text.slice(0, at) + ins + text.slice(at);
+        expected = start + ins.length;
+      } else {
+        const at = end + 40 + Math.floor(rand() * 10);
+        edited = text.slice(0, at) + ' extra words here ' + text.slice(at);
+        expected = start;
+      }
+      trials += 1;
+      const resolved = resolveAnchor(edited, anchor);
+      if (isOrphaned(resolved)) {
+        orphans += 1;
+        continue;
+      }
+      expect(resolved.start).toBe(expected);
+      expect(resolved.quote).toBe(text.slice(start, end));
+    }
+    expect(trials).toBeGreaterThan(200);
+    expect(orphans / trials).toBeLessThan(0.02);
+  });
+});

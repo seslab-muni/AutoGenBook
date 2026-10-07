@@ -11,6 +11,8 @@ function resetStore() {
   useUiStore.setState({
     outlineOpen: true,
     copilotOpen: true,
+    rightPane: 'margin',
+    rightOverlayOpen: false,
     outlineWidth: DEFAULT_OUTLINE_WIDTH,
     activeModal: null,
   });
@@ -26,6 +28,18 @@ describe('useUiStore', () => {
 
     useUiStore.getState().toggleCopilot();
     expect(useUiStore.getState().copilotOpen).toBe(false);
+  });
+
+  it('shows the margin by default and reveals it from the legacy drawer or a closed pane', () => {
+    expect(useUiStore.getState().rightPane).toBe('margin');
+    useUiStore.getState().setRightPane('copilot');
+    useUiStore.setState({ copilotOpen: false });
+    useUiStore.getState().revealMargin();
+    expect(useUiStore.getState()).toMatchObject({
+      rightPane: 'margin',
+      copilotOpen: true,
+      rightOverlayOpen: true,
+    });
   });
 
   it('opens and closes exactly one modal at a time', () => {
@@ -49,6 +63,7 @@ describe('useUiStore', () => {
     expect(persisted.state).toEqual({
       outlineOpen: false,
       copilotOpen: true,
+      rightPane: 'margin',
       outlineWidth: DEFAULT_OUTLINE_WIDTH,
     });
   });

@@ -36,7 +36,7 @@ describe('CopilotDrawer', () => {
   });
 
   function renderDrawer(
-    tab: 'copilot' | 'citations' | 'review',
+    tab: 'copilot' | 'review',
     options: { node?: OutlineNode | null; onTabChange?: () => void } = {},
   ) {
     const node = options.node !== undefined ? options.node : db.outlineNodes.get(NODE_ID)!;
@@ -51,24 +51,25 @@ describe('CopilotDrawer', () => {
     );
   }
 
-  it('renders the real Copilot panel content and switches to Citations', async () => {
+  it('renders the real Copilot panel content and switches to Review', async () => {
     const user = userEvent.setup();
     const onTabChange = vi.fn();
     renderDrawer('copilot', { onTabChange });
 
     expect(await screen.findByText('Quick actions')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('tab', { name: 'Citations' }));
-    expect(onTabChange).toHaveBeenCalledWith('citations');
+    await user.click(screen.getByRole('tab', { name: 'Review' }));
+    expect(onTabChange).toHaveBeenCalledWith('review');
   });
 
-  it('shows citations when the citations tab is active and a node is selected', async () => {
-    renderDrawer('citations');
-    expect(await screen.findByText('Castro & Liskov, 2002')).toBeInTheDocument();
+  it('no longer has a Citations tab (they live in the sources drawer)', () => {
+    renderDrawer('copilot');
+    expect(screen.getByRole('tab', { name: 'Copilot' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Citations' })).not.toBeInTheDocument();
   });
 
-  it('shows an empty state for citations/review when no node is selected', () => {
-    renderDrawer('citations', { node: null });
+  it('shows an empty state for review when no node is selected', () => {
+    renderDrawer('review', { node: null });
     expect(screen.getByText('No section selected')).toBeInTheDocument();
   });
 
