@@ -10,11 +10,7 @@ import { db } from '@/mocks/db';
 import { server } from '@/mocks/server';
 import { renderWithProviders } from '@/test/component-test-utils';
 
-import {
-  CONTENT_LOCK_LEAF_ONLY_MESSAGE,
-  CONTENT_LOCK_NEEDS_CONTENT_MESSAGE,
-} from '../content-lock';
-import { NodePropertiesSheet } from './node-properties-sheet';
+import { ChapterOptionsPopover } from './chapter-options-popover';
 
 const PROJECT_ID = 'book-consensus-quantum-2026';
 const LAMPORT = 'file-lamport-1982-source';
@@ -22,7 +18,7 @@ const LAMPORT_NAME = 'Lamport_1982_ByzantineGenerals.pdf';
 const CASTRO = 'file-castro-liskov-pbft-source';
 const CASTRO_NAME = 'Castro_Liskov_PBFT_TOCS.pdf';
 
-/** Every PATCH body the sheet sends — observed, then passed through to the regular mock handler. */
+/** Every PATCH body the popover sends — observed, then passed through to the regular mock handler. */
 let patchBodies: OutlineNodeUpdate[];
 
 beforeEach(() => {
@@ -40,13 +36,20 @@ function setScope(nodeId: string, sourceIds: string[]) {
   db.outlineNodes.set(nodeId, { ...node, sourceScope: 'selected', sourceIds });
 }
 
-/** Mirrors `OutlinePane`: the sheet's node is looked up from the live `outline.flat` cache. */
+/** Mirrors `ManuscriptSheet`: the popover's node is looked up from the live `outline.flat` cache. */
 function Harness({ nodeId }: { nodeId: string }) {
   const { data } = useQuery(outline.flat(PROJECT_ID));
   const flat = data?.items ?? [];
-  const node = flat.find((item) => item.id === nodeId) ?? null;
+  const node = flat.find((item) => item.id === nodeId);
+  if (!node) return null;
   return (
-    <NodePropertiesSheet projectId={PROJECT_ID} node={node} flat={flat} onOpenChange={() => {}} />
+    <ChapterOptionsPopover
+      projectId={PROJECT_ID}
+      node={node}
+      flat={flat}
+      open
+      onOpenChange={() => {}}
+    />
   );
 }
 
@@ -54,7 +57,7 @@ async function findScopeGroup() {
   return screen.findByRole('radiogroup', { name: 'Source scope' });
 }
 
-describe('NodePropertiesSheet sources section (issue #138)', () => {
+describe('ChapterOptionsPopover sources section (issue #138)', () => {
   it('offers two choices on a chapter and an inherit choice on a nested section', async () => {
     setScope('ch-2', [LAMPORT]);
     const { unmount } = renderWithProviders(<Harness nodeId="ch-1" />);
@@ -124,34 +127,38 @@ describe('NodePropertiesSheet sources section (issue #138)', () => {
   });
 });
 
-describe('NodePropertiesSheet content lock (issue #113)', () => {
-  it('offers the switch on a drafted leaf and PATCHes contentLocked when toggled', async () => {
+describe('ChapterOptionsPopover brief fields', () => {
+  it('shows the section brief and saves the sub-prompt, summary and math level', async () => {
     const user = userEvent.setup();
     renderWithProviders(<Harness nodeId="sec-1-1" />);
 
-    const toggle = await screen.findByRole('switch', { name: 'Lock content' });
-    expect(toggle).toBeEnabled();
-    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    const subPrompt = await screen.findByRole('textbox', { name: 'Sub-prompt' });
+    expect(screen.getByText('Target pages')).toBeInTheDocument();
+    expect(screen.getByText('Equation density')).toBeInTheDocument();
 
-    await user.click(toggle);
-    await waitFor(() => expect(patchBodies).toContainEqual({ contentLocked: true }));
+    await user.type(subPrompt, 'Use the five-qubit code.');
     await waitFor(() =>
-      expect(screen.getByRole('switch', { name: 'Lock content' })).toHaveAttribute(
-        'aria-checked',
-        'true',
-      ),
+      expect(patchBodies).toContainEqual({ subPrompt: 'Use the five-qubit code.' }),
     );
-    expect(screen.getByText(/keep this section byte-for-byte/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Formal proof' }));
+    await waitFor(() => expect(patchBodies).toContainEqual({ mathLevel: 'formal_proof' }));
+    expect(
+      await screen.findByRole('button', { name: 'Formal proof', pressed: true }),
+    ).toBeInTheDocument();
   });
 
-  it('disables the switch and explains why on a blank leaf and on a node with children', async () => {
-    const { unmount } = renderWithProviders(<Harness nodeId="sec-3-1" />);
-    expect(await screen.findByRole('switch', { name: 'Lock content' })).toBeDisabled();
-    expect(screen.getByText(CONTENT_LOCK_NEEDS_CONTENT_MESSAGE)).toBeInTheDocument();
-    unmount();
+  it('does not offer the content lock — that lives on the editor header', async () => {
+    renderWithProviders(<Harness nodeId="sec-1-1" />);
+    await screen.findByRole('textbox', { name: 'Sub-prompt' });
+    expect(screen.queryByRole('switch', { name: 'Lock content' })).not.toBeInTheDocument();
+  });
 
-    renderWithProviders(<Harness nodeId="ch-1" />);
-    expect(await screen.findByRole('switch', { name: 'Lock content' })).toBeDisabled();
-    expect(screen.getByText(CONTENT_LOCK_LEAF_ONLY_MESSAGE)).toBeInTheDocument();
+  it('saves a pending sub-prompt edit when the popover closes before the debounce fires', async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderWithProviders(<Harness nodeId="sec-1-1" />);
+    await user.type(await screen.findByRole('textbox', { name: 'Sub-prompt' }), 'x');
+    unmount();
+    await waitFor(() => expect(patchBodies).toContainEqual({ subPrompt: 'x' }));
   });
 });

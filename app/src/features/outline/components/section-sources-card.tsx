@@ -15,7 +15,7 @@ interface SectionSourcesCardProps {
 
 /**
  * Compact "Sources for this section" card for the copilot panel (issue #138) — the same scope
- * control as the properties sheet's Sources section, plus chips of the sources the section
+ * control as the Chapter options popover's Sources section, plus chips of the sources the section
  * effectively retrieves from (dashed when inherited from an ancestor).
  */
 export function SectionSourcesCard({ projectId, node, flat }: SectionSourcesCardProps) {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
-import { Check, Copy, Download, Lock } from 'lucide-react';
+import { Check, Copy, Download, Lock, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
@@ -11,7 +11,11 @@ import type { OutlineNode } from '@/api/types';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ChapterOptionsPopover } from '@/features/editor/components/chapter-options-popover';
 import { EditorStatusBar } from '@/features/editor/components/editor-status-bar';
+import { HeaderIconButton } from '@/features/editor/components/header-icon-button';
+import { LockContentButton } from '@/features/editor/components/lock-content-button';
+import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
 import { LazyMarkdownView } from '@/features/editor/components/markdown-view-lazy';
 import { SectionEditor } from '@/features/editor/components/section-editor';
 import { SectionJumpSelect } from '@/features/editor/components/section-jump-select';
@@ -33,14 +37,17 @@ interface ManuscriptSheetProps {
   flatNodes: readonly OutlineNode[];
   outlineOpen: boolean;
   onSelectNode: (nodeId: string) => void;
+  /** Hook point for the header's Copilot button (issue #182 phase 4) — the button stays disabled until it is given. */
+  onOpenCopilot?: () => void;
 }
 
 /**
  * The centre pane's main content once a section is selected: a toolbar
- * (Preview/Source toggle, section jump select, copy, "open in run"), the
- * manuscript "sheet" preview or the raw `SectionEditor`, and the status bar.
+ * (content lock, Write/Source toggle, Chapter options, Copilot, section jump select, copy,
+ * "open in run", save status), the manuscript "sheet" (Write) or the raw `SectionEditor`
+ * (Source), and the status bar.
  * Owns the debounced-autosave wiring (`useDebouncedMutation` over
- * `useUpdateOutlineNodeMutation`) so both the preview and source views edit
+ * `useUpdateOutlineNodeMutation`) so both the write and source views edit
  * the same in-memory draft.
  */
 export function ManuscriptSheet({
@@ -51,6 +58,7 @@ export function ManuscriptSheet({
   flatNodes,
   outlineOpen,
   onSelectNode,
+  onOpenCopilot,
 }: ManuscriptSheetProps) {
   const view = useEditorView();
   const setView = useEditorStore((state) => state.setView);
@@ -62,6 +70,11 @@ export function ManuscriptSheet({
 
   const [draft, setDraft] = useState(node[field]);
   const [copied, setCopied] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+
+  // The outline's flat cache is what mutations patch optimistically, so the lock button and
+  // Chapter options read their node from it (falling back to the fetched copy) to stay live.
+  const liveNode = flatNodes.find((item) => item.id === node.id) ?? node;
 
   // The `sections/<cliKey>.md` artifact the last full run produced for this node, if any — lets
   // the toolbar offer a direct "Download section .md" link (issue #22) alongside "Copy Markdown".
@@ -121,14 +134,34 @@ export function ManuscriptSheet({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PaneToolbar className="gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Tabs value={view} onValueChange={(value) => setView(value as 'preview' | 'source')}>
+      <PaneToolbar className="custom-scrollbar gap-2 overflow-x-auto">
+        <div className="flex shrink-0 items-center gap-2">
+          <LockContentButton projectId={projectId} node={liveNode} flat={flatNodes} />
+          <Tabs value={view} onValueChange={(value) => setView(value as 'write' | 'source')}>
             <TabsList>
-              <TabsTrigger value="preview">Preview</TabsTrigger>
+              <TabsTrigger value="write">Write</TabsTrigger>
               <TabsTrigger value="source">Source</TabsTrigger>
             </TabsList>
           </Tabs>
+          <ChapterOptionsPopover
+            projectId={projectId}
+            node={liveNode}
+            flat={flatNodes}
+            open={optionsOpen}
+            onOpenChange={setOptionsOpen}
+          />
+          <HeaderIconButton
+            label="Copilot"
+            tooltip={
+              onOpenCopilot
+                ? 'Prompt the copilot about this section'
+                : 'Coming soon: prompt the copilot here'
+            }
+            disabled={!onOpenCopilot}
+            onClick={onOpenCopilot}
+          >
+            <Sparkles />
+          </HeaderIconButton>
           {!outlineOpen ? (
             <SectionJumpSelect
               flat={flatNodes}
@@ -157,6 +190,7 @@ export function ManuscriptSheet({
               </Link>
             </Button>
           ) : null}
+          <SaveStatusBadge status={status} className="ml-1" />
         </div>
       </PaneToolbar>
 

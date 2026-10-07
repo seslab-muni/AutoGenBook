@@ -10,8 +10,8 @@ import { renderRouterApp } from '@/test/router-test-utils';
 // give `findByRole` more room than the default 1000ms rather than risking flakiness.
 const LONG = { timeout: 10000 };
 
-describe('Studio editor pane (routed, MSW-backed) — preview and autosave', () => {
-  it('renders the selected section in Preview with its server-derived word count', async () => {
+describe('Studio editor pane (routed, MSW-backed) — write view and autosave', () => {
+  it('renders the selected section in Write view with its server-derived word count', async () => {
     renderRouterApp('/p/book-reinforcement-learning?node=rl-sec-1-1');
 
     expect(

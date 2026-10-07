@@ -40,7 +40,7 @@ function impactSentence(node: OutlineNode, flat: readonly OutlineNode[]): string
 }
 
 /**
- * The node properties sheet's "Sources" section (issue #138): which knowledge-base files this
+ * The editor header's Chapter options "Sources" section (issue #138): which knowledge-base files this
  * node's leaf sections retrieve from — inherited from the nearest scoped ancestor, every project
  * source, or an explicit selection picked in `SourceScopePicker`.
  */

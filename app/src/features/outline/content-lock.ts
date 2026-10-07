@@ -7,7 +7,7 @@ import { isLeaf } from '@/features/outline/model';
  * context, so the sections generated after it stop re-covering it. Distinct from
  * `structureLocked`, which only says whether the CLI may *split* a node.
  *
- * Shared by the outline row, the properties sheet, the Copilot panel and the start-run dialog so
+ * Shared by the outline row, the editor header, the Copilot panel and the start-run dialog so
  * the wording and the "when can this be locked" rule stay identical everywhere.
  */
 
