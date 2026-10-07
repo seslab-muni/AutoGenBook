@@ -9,12 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.errors import NotFound
 from api.domain.models import (
-    SUGGESTION_DECIDED_STATUSES,
+    SUGGESTION_ACTIVE_STATUSES,
     CommentKind,
     CommentStatus,
     NodeComment,
 )
-from api.infrastructure.db.models import NodeCommentRecord, OutlineNodeRecord, UserRecord
+from api.infrastructure.db.models import (
+    NodeCommentRecord,
+    OutlineNodeRecord,
+    ProjectRecord,
+    UserRecord,
+)
 
 
 def _as_aware_utc(value: datetime) -> datetime:
@@ -38,11 +43,12 @@ def _to_domain(record: NodeCommentRecord, author_name: str | None = None) -> Nod
         created_at=_as_aware_utc(record.created_at),
         updated_at=_as_aware_utc(record.updated_at),
         deleted_at=_as_aware_utc(record.deleted_at) if record.deleted_at is not None else None,
+        edited_at=_as_aware_utc(record.edited_at) if record.edited_at is not None else None,
         author_name=author_name,
     )
 
 
-_MUTABLE_FIELDS = ("anchor", "status", "body_markdown", "payload")
+_MUTABLE_FIELDS = ("anchor", "status", "body_markdown", "payload", "edited_at")
 
 
 class SqlAlchemyCommentRepository:
@@ -50,26 +56,44 @@ class SqlAlchemyCommentRepository:
         self._session = session
 
     def _select(self):
-        # Rows of a soft-deleted node never surface: join the node and require
-        # it live. `author_name` is the author's current display name.
+        # Rows of a soft-deleted node or project never surface: join both and
+        # require them live. `author_name` is the author's current display name.
         return (
             select(NodeCommentRecord, UserRecord.display_name)
             .join(OutlineNodeRecord, OutlineNodeRecord.id == NodeCommentRecord.node_id)
+            .join(ProjectRecord, ProjectRecord.id == NodeCommentRecord.project_id)
             .outerjoin(UserRecord, UserRecord.id == NodeCommentRecord.author_id)
             .where(
                 NodeCommentRecord.deleted_at.is_(None),
                 OutlineNodeRecord.deleted_at.is_(None),
+                ProjectRecord.deleted_at.is_(None),
             )
             .order_by(NodeCommentRecord.created_at, NodeCommentRecord.id)
         )
 
     @staticmethod
-    def _filtered(statement, kind: CommentKind | None, status: CommentStatus | None):
+    def _roots(statement, kind: CommentKind | None, status: CommentStatus | None):
+        statement = statement.where(NodeCommentRecord.parent_id.is_(None))
         if kind is not None:
             statement = statement.where(NodeCommentRecord.kind == kind.value)
         if status is not None:
             statement = statement.where(NodeCommentRecord.status == status.value)
         return statement
+
+    async def _with_replies(self, roots: list[NodeComment]) -> list[NodeComment]:
+        if not roots:
+            return []
+        rows = (
+            await self._session.execute(
+                self._select().where(
+                    NodeCommentRecord.parent_id.is_not(None),
+                    NodeCommentRecord.thread_id.in_([root.id for root in roots]),
+                )
+            )
+        ).all()
+        merged = roots + [_to_domain(record, name) for record, name in rows]
+        merged.sort(key=lambda c: (c.created_at, c.id))
+        return merged
 
     async def get(self, comment_id: uuid.UUID) -> NodeComment | None:
         row = (
@@ -79,33 +103,61 @@ class SqlAlchemyCommentRepository:
         ).first()
         return _to_domain(row[0], row[1]) if row is not None else None
 
-    async def list_for_node(
+    async def list_threads_for_node(
         self,
         node_id: uuid.UUID,
         *,
         kind: CommentKind | None = None,
         status: CommentStatus | None = None,
     ) -> list[NodeComment]:
-        statement = self._filtered(
+        statement = self._roots(
             self._select().where(NodeCommentRecord.node_id == node_id), kind, status
         )
         rows = (await self._session.execute(statement)).all()
-        return [_to_domain(record, name) for record, name in rows]
+        return await self._with_replies([_to_domain(record, name) for record, name in rows])
 
-    async def list_for_project(
+    async def list_threads_for_project(
         self,
         project_id: uuid.UUID,
         *,
         kind: CommentKind | None = None,
         status: CommentStatus | None = None,
-    ) -> list[NodeComment]:
-        statement = self._filtered(
+        limit: int,
+        offset: int,
+    ) -> tuple[list[NodeComment], int]:
+        statement = self._roots(
             self._select().where(NodeCommentRecord.project_id == project_id), kind, status
         )
-        rows = (await self._session.execute(statement)).all()
-        return [_to_domain(record, name) for record, name in rows]
+        total = await self._session.scalar(
+            select(func.count()).select_from(statement.order_by(None).subquery())
+        )
+        rows = (await self._session.execute(statement.limit(limit).offset(offset))).all()
+        roots = [_to_domain(record, name) for record, name in rows]
+        return await self._with_replies(roots), int(total or 0)
 
     async def add(self, comment: NodeComment) -> NodeComment:
+        """Insert. A reply first locks its thread root (`FOR UPDATE`, a no-op
+        on SQLite) and re-checks it is still live in this transaction, so a
+        concurrent thread delete can't leave a live reply under a deleted
+        root; a resolved root is reopened (`open`, or `orphaned` when its
+        anchor has null offsets). The result is built from the inserted
+        record, not re-read through the live-node join."""
+        if comment.parent_id is not None:
+            root = (
+                await self._session.execute(
+                    select(NodeCommentRecord)
+                    .where(NodeCommentRecord.id == comment.thread_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if root is None or root.deleted_at is not None:
+                await self._session.rollback()
+                raise NotFound(f"comment {comment.thread_id} does not exist")
+            if root.status == CommentStatus.RESOLVED.value:
+                anchor = root.anchor
+                orphaned = anchor is not None and anchor.get("start") is None
+                root.status = (CommentStatus.ORPHANED if orphaned else CommentStatus.OPEN).value
+                root.updated_at = comment.updated_at
         record = NodeCommentRecord(
             id=comment.id,
             project_id=comment.project_id,
@@ -123,9 +175,7 @@ class SqlAlchemyCommentRepository:
         )
         self._session.add(record)
         await self._session.commit()
-        created = await self.get(comment.id)
-        assert created is not None
-        return created
+        return _to_domain(record, comment.author_name)
 
     async def update(self, comment: NodeComment, *, fields: Sequence[str]) -> NodeComment:
         record = await self._session.get(NodeCommentRecord, comment.id)
@@ -144,6 +194,13 @@ class SqlAlchemyCommentRepository:
         return updated
 
     async def soft_delete_thread(self, thread_id: uuid.UUID) -> None:
+        # Lock the root first so a racing reply insert (which locks it too)
+        # either lands before this sweep or sees the root deleted.
+        await self._session.execute(
+            select(NodeCommentRecord.id)
+            .where(NodeCommentRecord.id == thread_id)
+            .with_for_update()
+        )
         await self._session.execute(
             update(NodeCommentRecord)
             .where(
@@ -166,15 +223,17 @@ class SqlAlchemyCommentRepository:
         self, project_id: uuid.UUID
     ) -> dict[uuid.UUID, tuple[int, int]]:
         """`{node_id: (open_comment_count, pending_suggestion_count)}` in one
-        grouped query. Open = root `comment` rows not yet resolved; pending =
-        root `suggestion` rows not yet accepted/rejected/failed."""
-        is_open_comment = (NodeCommentRecord.kind == CommentKind.COMMENT.value) & (
-            NodeCommentRecord.status.in_(
+        grouped query. Open = root `comment` rows that are open/orphaned; pending =
+        `suggestion` rows (any depth) that are running/pending."""
+        is_open_comment = (
+            (NodeCommentRecord.kind == CommentKind.COMMENT.value)
+            & NodeCommentRecord.parent_id.is_(None)
+            & NodeCommentRecord.status.in_(
                 [CommentStatus.OPEN.value, CommentStatus.ORPHANED.value]
             )
         )
         is_pending_suggestion = (NodeCommentRecord.kind == CommentKind.SUGGESTION.value) & (
-            NodeCommentRecord.status.not_in([s.value for s in SUGGESTION_DECIDED_STATUSES])
+            NodeCommentRecord.status.in_([s.value for s in SUGGESTION_ACTIVE_STATUSES])
         )
         statement = (
             select(
@@ -185,7 +244,6 @@ class SqlAlchemyCommentRepository:
             .where(
                 NodeCommentRecord.project_id == project_id,
                 NodeCommentRecord.deleted_at.is_(None),
-                NodeCommentRecord.parent_id.is_(None),
             )
             .group_by(NodeCommentRecord.node_id)
         )

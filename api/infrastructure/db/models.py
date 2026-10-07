@@ -381,18 +381,25 @@ class NodeCommentRecord(Base):
             "kind IN ('comment', 'suggestion', 'review')", name="ck_node_comments_kind"
         ),
         sa.CheckConstraint(
-            "status IN ('open', 'resolved', 'orphaned', 'pending', 'accepted',"
-            " 'rejected', 'failed')",
-            name="ck_node_comments_status",
+            "(kind IN ('comment', 'review') AND status IN ('open', 'resolved', 'orphaned'))"
+            " OR (kind = 'suggestion' AND status IN ('running', 'pending', 'accepted',"
+            " 'rejected', 'failed', 'cancelled'))",
+            name="ck_node_comments_kind_status",
         ),
         sa.Index(
-            "ix_node_comments_project_node_active",
-            "project_id",
+            "ix_node_comments_node_id_active",
             "node_id",
             postgresql_where=sa.text("deleted_at IS NULL"),
             sqlite_where=sa.text("deleted_at IS NULL"),
         ),
+        sa.Index(
+            "ix_node_comments_project_id_active",
+            "project_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
         sa.Index("ix_node_comments_thread_id", "thread_id"),
+        sa.Index("ix_node_comments_parent_id", "parent_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
@@ -431,6 +438,10 @@ class NodeCommentRecord(Base):
         nullable=False,
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    # Set only by a body edit (`updated_at` moves on any change).
+    edited_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
 

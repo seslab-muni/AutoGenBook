@@ -14,8 +14,8 @@ given content. This track ships the cheap strategy (client offsets if they
 verify, else a unique exact match, else orphaned). The full resolver (exact ->
 whitespace-normalised -> fuzzy near the stored offset, `engine/util/anchors.py`)
 replaces the body of this function later; callers: `CommentService.create`
-today, and every `contentMarkdown` PATCH (re-anchoring all of a node's rows)
-in a later track.
+today. Contract for the full resolver: on a normalised/fuzzy re-anchor the
+stored `quote` is rewritten to the text actually matched.
 """
 from __future__ import annotations
 
@@ -35,6 +35,14 @@ def _with_context(content: str, quote: str, start: int, end: int) -> dict[str, A
     }
 
 
+def _find_all(content: str, quote: str) -> list[int]:
+    found, pos = [], content.find(quote)
+    while pos != -1:
+        found.append(pos)
+        pos = content.find(quote, pos + 1)
+    return found
+
+
 def resolve_anchor(content: str, anchor: Mapping[str, Any]) -> dict[str, Any]:
     """Return `anchor` re-resolved against `content`: `start`/`end` set (and
     `prefix`/`suffix` refreshed from `content`) when the quote was found, both
@@ -43,9 +51,19 @@ def resolve_anchor(content: str, anchor: Mapping[str, Any]) -> dict[str, Any]:
     start, end = anchor.get("start"), anchor.get("end")
     if start is not None and end is not None and content[start:end] == quote:
         return _with_context(content, quote, start, end)
-    found = content.find(quote)
-    if found != -1 and content.find(quote, found + 1) == -1:
-        return _with_context(content, quote, found, found + len(quote))
+    matches = _find_all(content, quote)
+    if len(matches) > 1:
+        # Several exact matches: keep those whose surroundings agree with the
+        # stored prefix/suffix (only when there is context to compare).
+        prefix, suffix = anchor.get("prefix", ""), anchor.get("suffix", "")
+        if prefix or suffix:
+            matches = [
+                m
+                for m in matches
+                if content[:m].endswith(prefix) and content.startswith(suffix, m + len(quote))
+            ]
+    if len(matches) == 1:
+        return _with_context(content, quote, matches[0], matches[0] + len(quote))
     return {
         "quote": quote,
         "prefix": anchor.get("prefix", ""),

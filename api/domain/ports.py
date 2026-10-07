@@ -148,7 +148,8 @@ class OutlineRepository(Protocol):
 class CommentRepository(Protocol):
     async def get(self, comment_id: uuid.UUID) -> NodeComment | None: ...
 
-    async def list_for_node(
+    # Whole threads: the roots matching the filters plus all their live replies.
+    async def list_threads_for_node(
         self,
         node_id: uuid.UUID,
         *,
@@ -156,14 +157,19 @@ class CommentRepository(Protocol):
         status: CommentStatus | None = None,
     ) -> list[NodeComment]: ...
 
-    async def list_for_project(
+    # limit/offset page the matching roots; returns (rows, total matching roots).
+    async def list_threads_for_project(
         self,
         project_id: uuid.UUID,
         *,
         kind: CommentKind | None = None,
         status: CommentStatus | None = None,
-    ) -> list[NodeComment]: ...
+        limit: int,
+        offset: int,
+    ) -> tuple[list[NodeComment], int]: ...
 
+    # For a reply, locks and re-checks the live root in the same transaction
+    # (NotFound if it was deleted meanwhile) and reopens a resolved root.
     async def add(self, comment: NodeComment) -> NodeComment: ...
 
     async def update(

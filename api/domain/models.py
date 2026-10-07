@@ -222,24 +222,25 @@ class CommentKind(str, enum.Enum):
 
 
 class CommentStatus(str, enum.Enum):
-    """`open | resolved | orphaned` apply to comment and review rows;
-    `pending | accepted | rejected | failed` to suggestion rows."""
+    """Comment and review rows: `open | resolved | orphaned`. Suggestion rows:
+    `running` (job in flight, cancellable), `pending` (finished, awaiting
+    accept/reject), `accepted`, `rejected`, `failed`, `cancelled`. A DB CHECK
+    (`ck_node_comments_kind_status`) enforces the pairing."""
 
     OPEN = "open"
     RESOLVED = "resolved"
     ORPHANED = "orphaned"
+    RUNNING = "running"
     PENDING = "pending"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
-# Suggestion statuses that still await the user's decision (badge count).
-SUGGESTION_DECIDED_STATUSES = (
-    CommentStatus.ACCEPTED,
-    CommentStatus.REJECTED,
-    CommentStatus.FAILED,
-)
+# Suggestion statuses that still await the user (badge count): the job is in
+# flight or its result awaits accept/reject.
+SUGGESTION_ACTIVE_STATUSES = (CommentStatus.RUNNING, CommentStatus.PENDING)
 
 
 @dataclass
@@ -249,7 +250,9 @@ class NodeComment:
     root's own id); `parent_id` is the row replied to (None for a root).
     `anchor` is the W3C text-quote selector dict over the node's
     `content_markdown` (see `api.application.comment_anchors`), None = the
-    whole section."""
+    whole section. Threads are flat: every reply's `parent_id` is the root's
+    id, and a reply stores no anchor/status of its own (they are derived from
+    the root when presented)."""
 
     id: uuid.UUID
     project_id: uuid.UUID
@@ -265,6 +268,8 @@ class NodeComment:
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+    # Set only by a body edit.
+    edited_at: datetime | None = None
     # Derived, never persisted - joined in from `users.display_name`.
     author_name: str | None = None
 

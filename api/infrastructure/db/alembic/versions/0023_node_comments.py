@@ -51,13 +51,15 @@ def upgrade() -> None:
             "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("edited_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "kind IN ('comment', 'suggestion', 'review')", name="ck_node_comments_kind"
         ),
         sa.CheckConstraint(
-            "status IN ('open', 'resolved', 'orphaned', 'pending', 'accepted',"
-            " 'rejected', 'failed')",
-            name="ck_node_comments_status",
+            "(kind IN ('comment', 'review') AND status IN ('open', 'resolved', 'orphaned'))"
+            " OR (kind = 'suggestion' AND status IN ('running', 'pending', 'accepted',"
+            " 'rejected', 'failed', 'cancelled'))",
+            name="ck_node_comments_kind_status",
         ),
         sa.ForeignKeyConstraint(["project_id"], ["projects.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["node_id"], ["outline_nodes.id"], ondelete="CASCADE"),
@@ -66,15 +68,24 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_node_comments_project_node_active",
+        "ix_node_comments_node_id_active",
         "node_comments",
-        ["project_id", "node_id"],
+        ["node_id"],
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
+    op.create_index(
+        "ix_node_comments_project_id_active",
+        "node_comments",
+        ["project_id"],
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
     op.create_index("ix_node_comments_thread_id", "node_comments", ["thread_id"])
+    op.create_index("ix_node_comments_parent_id", "node_comments", ["parent_id"])
 
 
 def downgrade() -> None:
     op.drop_index("ix_node_comments_thread_id", table_name="node_comments")
-    op.drop_index("ix_node_comments_project_node_active", table_name="node_comments")
+    op.drop_index("ix_node_comments_parent_id", table_name="node_comments")
+    op.drop_index("ix_node_comments_project_id_active", table_name="node_comments")
+    op.drop_index("ix_node_comments_node_id_active", table_name="node_comments")
     op.drop_table("node_comments")

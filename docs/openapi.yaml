@@ -978,6 +978,9 @@ paths:
       tags:
       - comments
       summary: List Project Comments
+      description: 'Whole threads; `kind`/`status` select thread roots and `limit`/`offset`/
+
+        `total` count roots (each root''s replies come along).'
       operationId: comments-list_project_comments
       security:
       - cookieAuth: []
@@ -1005,6 +1008,23 @@ paths:
           - $ref: '#/components/schemas/CommentStatus'
           - type: 'null'
           title: Status
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 1
+          default: 1000
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
       responses:
         '200':
           description: Successful Response
@@ -1023,6 +1043,8 @@ paths:
       tags:
       - comments
       summary: List Node Comments
+      description: Whole threads of the node, not paged (`total` counts the returned
+        rows).
       operationId: comments-list_node_comments
       security:
       - cookieAuth: []
@@ -1801,7 +1823,7 @@ components:
           title: Authorname
         anchor:
           anyOf:
-          - $ref: '#/components/schemas/CommentAnchor'
+          - $ref: '#/components/schemas/CommentAnchorOut'
           - type: 'null'
         status:
           $ref: '#/components/schemas/CommentStatus'
@@ -1830,6 +1852,12 @@ components:
           type: string
           format: date-time
           title: Updatedat
+        editedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Editedat
       type: object
       required:
       - id
@@ -1846,10 +1874,11 @@ components:
       - createdAt
       - updatedAt
       title: Comment
-    CommentAnchor:
+    CommentAnchorIn:
       properties:
         quote:
           type: string
+          maxLength: 20000
           minLength: 1
           title: Quote
         prefix:
@@ -1878,25 +1907,61 @@ components:
       type: object
       required:
       - quote
-      title: CommentAnchor
-      description: 'W3C text-quote selector over a section''s `contentMarkdown`. `start`/`end`
+      title: CommentAnchorIn
+      description: 'Request anchor: a W3C text-quote selector over the node''s
 
-        are Unicode code-point offsets (not UTF-16 units), `end` exclusive; both
+        `contentMarkdown`. `start`/`end` are Unicode code-point offsets (not UTF-16
 
-        null = orphaned. The server re-resolves a created anchor (see
+        units), `end` exclusive; both null = unknown/orphaned. The server
 
-        `api.application.comment_anchors.resolve_anchor`) and refreshes
+        re-resolves it (`api.application.comment_anchors.resolve_anchor`) and
 
-        `prefix`/`suffix` from the content.'
+        refreshes `prefix`/`suffix` from the content.'
+    CommentAnchorOut:
+      properties:
+        quote:
+          type: string
+          title: Quote
+        prefix:
+          type: string
+          title: Prefix
+          default: ''
+        suffix:
+          type: string
+          title: Suffix
+          default: ''
+        start:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Start
+        end:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: End
+      type: object
+      required:
+      - quote
+      title: CommentAnchorOut
+      description: 'Response anchor. Deliberately lenient: stored anchors (e.g. written
+        by
+
+        a fuzzy re-anchor, which rewrites `quote` to the text actually matched, or
+
+        by the reviewer import) must always serialise, so none of the request
+
+        rules (length equality, max lengths, no extra keys) are re-applied.'
     CommentCreate:
       properties:
         bodyMarkdown:
           type: string
+          maxLength: 20000
           minLength: 1
           title: Bodymarkdown
         anchor:
           anyOf:
-          - $ref: '#/components/schemas/CommentAnchor'
+          - $ref: '#/components/schemas/CommentAnchorIn'
           - type: 'null'
         parentId:
           anyOf:
@@ -1931,18 +1996,26 @@ components:
       - open
       - resolved
       - orphaned
+      - running
       - pending
       - accepted
       - rejected
       - failed
+      - cancelled
       title: CommentStatus
-      description: '`open | resolved | orphaned` apply to comment and review rows;
+      description: 'Comment and review rows: `open | resolved | orphaned`. Suggestion
+        rows:
 
-        `pending | accepted | rejected | failed` to suggestion rows.'
+        `running` (job in flight, cancellable), `pending` (finished, awaiting
+
+        accept/reject), `accepted`, `rejected`, `failed`, `cancelled`. A DB CHECK
+
+        (`ck_node_comments_kind_status`) enforces the pairing.'
     CommentUpdate:
       properties:
         bodyMarkdown:
           type: string
+          maxLength: 20000
           minLength: 1
           title: Bodymarkdown
       additionalProperties: false

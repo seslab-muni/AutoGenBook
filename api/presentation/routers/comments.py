@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from api.application.comments import CommentService
 from api.domain.models import CommentKind, CommentStatus, NodeComment, User
@@ -34,13 +34,12 @@ def to_schema(comment: NodeComment) -> Comment:
         payload=comment.payload,
         created_at=comment.created_at,
         updated_at=comment.updated_at,
+        edited_at=comment.edited_at,
     )
 
 
-def _page(comments: list[NodeComment]) -> Page[Comment]:
-    # Whole list in one shot (a section's / project's cards are never paged).
-    items = [to_schema(comment) for comment in comments]
-    return Page[Comment](items=items, total=len(items), limit=max(len(items), 1), offset=0)
+# Same window as the outline list: a project's threads are read as one unit.
+_DEFAULT_LIST_LIMIT = 1000
 
 
 @router.get("/projects/{project_id}/comments", response_model=Page[Comment])
@@ -48,9 +47,18 @@ async def list_project_comments(
     project_id: uuid.UUID,
     kind: CommentKind | None = None,
     status: CommentStatus | None = None,
+    limit: int = Query(default=_DEFAULT_LIST_LIMIT, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
     service: CommentService = Depends(get_comment_service),
 ) -> Page[Comment]:
-    return _page(await service.list_for_project(project_id, kind=kind, status=status))
+    """Whole threads; `kind`/`status` select thread roots and `limit`/`offset`/
+    `total` count roots (each root's replies come along)."""
+    rows, total = await service.list_for_project(
+        project_id, kind=kind, status=status, limit=limit, offset=offset
+    )
+    return Page[Comment](
+        items=[to_schema(c) for c in rows], total=total, limit=limit, offset=offset
+    )
 
 
 @router.get("/projects/{project_id}/outline/{node_id}/comments", response_model=Page[Comment])
@@ -61,7 +69,10 @@ async def list_node_comments(
     status: CommentStatus | None = None,
     service: CommentService = Depends(get_comment_service),
 ) -> Page[Comment]:
-    return _page(await service.list_for_node(project_id, node_id, kind=kind, status=status))
+    """Whole threads of the node, not paged (`total` counts the returned rows)."""
+    rows = await service.list_for_node(project_id, node_id, kind=kind, status=status)
+    items = [to_schema(c) for c in rows]
+    return Page[Comment](items=items, total=len(items), limit=max(len(items), 1), offset=0)
 
 
 @router.post(

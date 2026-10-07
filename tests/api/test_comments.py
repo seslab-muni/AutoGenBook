@@ -72,7 +72,7 @@ async def test_threading_replies_inherit_root_anchor(authed_client: AsyncClient)
         anchor={"quote": "gamma"},  # ignored on a reply
     )
     assert reply["threadId"] == root["id"] and reply["anchor"] == root["anchor"]
-    assert nested["threadId"] == root["id"] and nested["parentId"] == reply["id"]
+    assert nested["threadId"] == root["id"] and nested["parentId"] == root["id"]  # flat
     assert nested["anchor"] == root["anchor"]
 
     ids = [c["id"] for c in (await authed_client.get(_url(project_id, node_id))).json()["items"]]
@@ -313,29 +313,34 @@ async def test_outline_nodes_carry_badge_counts(
     third = await _post(authed_client, project_id, node_id, bodyMarkdown="c")
     await authed_client.post(f"/api/v1/comments/{second['id']}/resolve")
     await authed_client.delete(f"/api/v1/comments/{third['id']}")
+    orphan = await _post(
+        authed_client, project_id, node_id, bodyMarkdown="o", anchor={"quote": "nope"}
+    )
+    assert orphan["status"] == "orphaned"
     await _insert_row(session_factory, project_id, node_id, status="pending")
-    await _insert_row(session_factory, project_id, node_id, status="accepted")
-    await _insert_row(session_factory, project_id, node_id, status="failed")
+    await _insert_row(session_factory, project_id, node_id, status="running")
+    for done in ("accepted", "rejected", "failed", "cancelled"):
+        await _insert_row(session_factory, project_id, node_id, status=done)
     await _insert_row(session_factory, project_id, node_id, kind="review", status="open")
 
     def counts(items: list[dict]) -> dict[str, tuple[int, int]]:
         return {n["id"]: (n["openCommentCount"], n["pendingSuggestionCount"]) for n in items}
 
     flat = (await authed_client.get(f"/api/v1/projects/{project_id}/outline")).json()["items"]
-    assert counts(flat)[node_id] == (1, 1)
+    assert counts(flat)[node_id] == (2, 2)
     assert counts(flat)[quiet["id"]] == (0, 0)
 
     tree = (
         await authed_client.get(f"/api/v1/projects/{project_id}/outline?format=tree")
     ).json()["items"]
-    assert counts(tree)[node_id] == (1, 1)
+    assert counts(tree)[node_id] == (2, 2)
 
     single = (await authed_client.get(f"/api/v1/projects/{project_id}/outline/{node_id}")).json()
-    assert (single["openCommentCount"], single["pendingSuggestionCount"]) == (1, 1)
+    assert (single["openCommentCount"], single["pendingSuggestionCount"]) == (2, 2)
     patched = await authed_client.patch(
         f"/api/v1/projects/{project_id}/outline/{node_id}", json={"title": "Renamed"}
     )
-    assert patched.json()["openCommentCount"] == 1
+    assert patched.json()["openCommentCount"] == 2
 
 
 async def test_counts_use_a_single_extra_query(
@@ -360,3 +365,199 @@ async def test_deleted_node_comments_are_not_listed(authed_client: AsyncClient) 
     ).status_code == 204
     assert (await authed_client.get(f"/api/v1/projects/{project_id}/comments")).json()["total"] == 0
     assert (await authed_client.get(_url(project_id, node_id))).status_code == 404
+
+
+async def test_stored_anchor_with_odd_shape_still_serialises(
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project_id, node_id = await _setup(authed_client, "abc")
+    odd = {"quote": "abc", "prefix": "p" * 50, "suffix": "", "start": 0, "end": 99, "extra": 1}
+    await _insert_row(
+        session_factory, project_id, node_id, kind="review", status="open", anchor=odd
+    )
+    response = await authed_client.get(_url(project_id, node_id))
+    assert response.status_code == 200, response.text
+    anchor = response.json()["items"][0]["anchor"]
+    assert anchor["end"] == 99 and len(anchor["prefix"]) == 50 and "extra" not in anchor
+
+
+async def test_nul_and_oversized_input_rejected(authed_client: AsyncClient) -> None:
+    project_id, node_id = await _setup(authed_client, "abc")
+    url = _url(project_id, node_id)
+    for body in (
+        {"bodyMarkdown": "a\x00b"},
+        {"bodyMarkdown": "x" * 20_001},
+        {"bodyMarkdown": "c", "anchor": {"quote": "a\x00"}},
+        {"bodyMarkdown": "c", "anchor": {"quote": "a", "prefix": "\x00"}},
+        {"bodyMarkdown": "c", "anchor": {"quote": "a", "suffix": "\x00"}},
+        {"bodyMarkdown": "c", "anchor": {"quote": "q" * 20_001}},
+    ):
+        assert (await authed_client.post(url, json=body)).status_code == 422
+    ok = await _post(authed_client, project_id, node_id, bodyMarkdown="x" * 20_000)
+    assert (
+        await authed_client.patch(f"/api/v1/comments/{ok['id']}", json={"bodyMarkdown": "a\x00"})
+    ).status_code == 422
+    assert (
+        await authed_client.patch(
+            f"/api/v1/comments/{ok['id']}", json={"bodyMarkdown": "x" * 20_001}
+        )
+    ).status_code == 422
+
+
+async def test_soft_deleted_project_hides_comments(authed_client: AsyncClient) -> None:
+    project_id, node_id = await _setup(authed_client)
+    mine = await _post(authed_client, project_id, node_id, bodyMarkdown="a")
+    assert (await authed_client.delete(f"/api/v1/projects/{project_id}")).status_code == 204
+    assert (
+        await authed_client.patch(f"/api/v1/comments/{mine['id']}", json={"bodyMarkdown": "x"})
+    ).status_code == 404
+    assert (await authed_client.delete(f"/api/v1/comments/{mine['id']}")).status_code == 404
+    assert (await authed_client.post(f"/api/v1/comments/{mine['id']}/resolve")).status_code == 404
+
+
+async def test_project_node_mismatch_is_404(authed_client: AsyncClient) -> None:
+    project_a, node_a = await _setup(authed_client)
+    project_b, node_b = await _setup(authed_client)
+    assert (await authed_client.get(_url(project_a, node_b))).status_code == 404
+    response = await authed_client.post(_url(project_a, node_b), json={"bodyMarkdown": "x"})
+    assert response.status_code == 404
+
+
+async def test_reply_state_mirrors_root_and_reopens(authed_client: AsyncClient) -> None:
+    project_id, node_id = await _setup(authed_client, "alpha beta")
+    root = await _post(
+        authed_client, project_id, node_id, bodyMarkdown="r", anchor={"quote": "beta"}
+    )
+    reply = await _post(authed_client, project_id, node_id, bodyMarkdown="1", parentId=root["id"])
+    assert reply["anchor"] == root["anchor"] and reply["status"] == "open"
+
+    await authed_client.post(f"/api/v1/comments/{root['id']}/resolve")
+    items = (await authed_client.get(_url(project_id, node_id))).json()["items"]
+    assert [i["status"] for i in items] == ["resolved", "resolved"]  # reply mirrors root
+    # Replying reopens the resolved thread.
+    second = await _post(authed_client, project_id, node_id, bodyMarkdown="2", parentId=root["id"])
+    assert second["status"] == "open"
+    items = (await authed_client.get(_url(project_id, node_id))).json()["items"]
+    assert [i["status"] for i in items] == ["open"] * 3
+
+    orphan = await _post(
+        authed_client, project_id, node_id, bodyMarkdown="o", anchor={"quote": "zzz"}
+    )
+    await authed_client.post(f"/api/v1/comments/{orphan['id']}/resolve")
+    back = await _post(authed_client, project_id, node_id, bodyMarkdown="b", parentId=orphan["id"])
+    assert back["status"] == "orphaned"
+
+
+async def test_filters_select_roots_and_return_whole_threads(
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    open_root = await _post(authed_client, project_id, node_id, bodyMarkdown="open")
+    done_root = await _post(authed_client, project_id, node_id, bodyMarkdown="done")
+    await _post(authed_client, project_id, node_id, bodyMarkdown="rep", parentId=open_root["id"])
+    await _post(authed_client, project_id, node_id, bodyMarkdown="rep", parentId=done_root["id"])
+    await authed_client.post(f"/api/v1/comments/{done_root['id']}/resolve")
+    await authed_client.post(f"/api/v1/comments/{done_root['id']}/resolve")
+
+    for base in (_url(project_id, node_id), f"/api/v1/projects/{project_id}/comments"):
+        resolved = (await authed_client.get(base + "?status=resolved")).json()
+        assert {i["threadId"] for i in resolved["items"]} == {done_root["id"]}
+        assert len(resolved["items"]) == 2
+    paged = (await authed_client.get(f"/api/v1/projects/{project_id}/comments?limit=1")).json()
+    assert paged["total"] == 2 and paged["limit"] == 1
+    assert {i["threadId"] for i in paged["items"]} == {open_root["id"]}
+    assert len(paged["items"]) == 2
+    second = (
+        await authed_client.get(f"/api/v1/projects/{project_id}/comments?limit=1&offset=1")
+    ).json()
+    assert {i["threadId"] for i in second["items"]} == {done_root["id"]}
+
+
+async def test_reply_under_suggestion_is_409(
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    suggestion_id = uuid.uuid4()
+    await _insert_row(
+        session_factory, project_id, node_id, id=suggestion_id, thread_id=suggestion_id
+    )
+    response = await authed_client.post(
+        _url(project_id, node_id), json={"bodyMarkdown": "x", "parentId": str(suggestion_id)}
+    )
+    assert response.status_code == 409
+    assert (await authed_client.post(f"/api/v1/comments/{suggestion_id}/resolve")).status_code == 409
+
+
+async def test_authorless_rows(
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    review_id, suggestion_id = uuid.uuid4(), uuid.uuid4()
+    await _insert_row(
+        session_factory, project_id, node_id, id=review_id, thread_id=review_id,
+        kind="review", status="open",
+    )
+    await _insert_row(session_factory, project_id, node_id, id=suggestion_id, thread_id=suggestion_id)
+    for row_id in (review_id, suggestion_id):
+        response = await authed_client.patch(
+            f"/api/v1/comments/{row_id}", json={"bodyMarkdown": "x"}
+        )
+        assert response.status_code == 403
+    # Any user may dismiss an authorless row.
+    assert (await authed_client.delete(f"/api/v1/comments/{review_id}")).status_code == 204
+    assert (await authed_client.delete(f"/api/v1/comments/{suggestion_id}")).status_code == 204
+
+
+async def test_root_delete_takes_other_users_reply(
+    authed_client: AsyncClient, authed_client_2: AsyncClient
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    root = await _post(authed_client, project_id, node_id, bodyMarkdown="root")
+    reply = await _post(authed_client_2, project_id, node_id, bodyMarkdown="r", parentId=root["id"])
+    assert (await authed_client.delete(f"/api/v1/comments/{root['id']}")).status_code == 204
+    assert (await authed_client_2.get(_url(project_id, node_id))).json()["items"] == []
+    assert (
+        await authed_client_2.patch(f"/api/v1/comments/{reply['id']}", json={"bodyMarkdown": "x"})
+    ).status_code == 404
+
+
+async def test_edited_at_only_set_by_body_edit(authed_client: AsyncClient) -> None:
+    project_id, node_id = await _setup(authed_client)
+    root = await _post(authed_client, project_id, node_id, bodyMarkdown="root")
+    assert root["editedAt"] is None
+    resolved = (await authed_client.post(f"/api/v1/comments/{root['id']}/resolve")).json()
+    assert resolved["editedAt"] is None
+    edited = (
+        await authed_client.patch(f"/api/v1/comments/{root['id']}", json={"bodyMarkdown": "n"})
+    ).json()
+    assert edited["editedAt"] is not None
+
+
+async def test_unauthenticated_mutations_401(client: AsyncClient) -> None:
+    some = uuid.uuid4()
+    base = f"/api/v1/projects/{some}/outline/{some}/comments"
+    assert (await client.post(base, json={"bodyMarkdown": "x"})).status_code == 401
+    assert (await client.delete(f"/api/v1/comments/{some}")).status_code == 401
+    assert (await client.post(f"/api/v1/comments/{some}/resolve")).status_code == 401
+
+
+async def test_tree_route_counts_use_a_single_query(
+    authed_client: AsyncClient, count_statements
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    await _post(authed_client, project_id, node_id, bodyMarkdown="a")
+    with count_statements() as statements:
+        response = await authed_client.get(f"/api/v1/projects/{project_id}/outline?format=tree")
+    assert response.status_code == 200
+    assert sum("node_comments" in s for s in statements) == 1
+
+
+def test_resolve_anchor_uses_context_among_multiple_matches() -> None:
+    from api.application.comment_anchors import resolve_anchor
+
+    content = "foo bar. foo baz. foo qux."
+    anchor = {"quote": "foo", "prefix": "bar. ", "suffix": " baz", "start": None, "end": None}
+    resolved = resolve_anchor(content, anchor)
+    assert (resolved["start"], resolved["end"]) == (9, 12)
+    still_ambiguous = resolve_anchor(content, {"quote": "foo", "prefix": "", "suffix": ""})
+    assert still_ambiguous["start"] is None
