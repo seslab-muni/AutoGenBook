@@ -119,6 +119,48 @@ def test_benchmark_pdf_extraction_drops_headers_and_keeps_tables(tmp_path: Path)
     assert len(tables) == 1 and "Stored program with" in tables[0].text
 
 
+def test_pdf_table_pass_closes_every_pdfplumber_page(monkeypatch) -> None:
+    """pdfplumber keeps each page's parsed objects cached for the life of the
+    document; on a 700-page textbook that is ~3 GB and OOM-kills the worker
+    (#178). Every page handed to the table pass must be closed right after."""
+    import pdfplumber.page
+    import pdfplumber.pdf
+
+    import engine.retrieval.extract as extract_module
+
+    candidates: list[int] = []
+    original_looks = extract_module._looks_like_table_page
+
+    def spy_looks(page, pdfium_c):
+        is_candidate = original_looks(page, pdfium_c)
+        if is_candidate:
+            candidates.append(1)
+        return is_candidate
+
+    # `PDF.close()` (the `with` exit) closes every page too; only closes that
+    # happen while the document is still open free memory during the pass.
+    events: list[int | str] = []
+    original_page_close, original_pdf_close = pdfplumber.page.Page.close, pdfplumber.pdf.PDF.close
+
+    def spy_page_close(self):
+        events.append(self.page_number)
+        original_page_close(self)
+
+    def spy_pdf_close(self):
+        events.append("document")
+        original_pdf_close(self)
+
+    monkeypatch.setattr(extract_module, "_looks_like_table_page", spy_looks)
+    monkeypatch.setattr(pdfplumber.page.Page, "close", spy_page_close)
+    monkeypatch.setattr(pdfplumber.pdf.PDF, "close", spy_pdf_close)
+    doc = Extractor(ExtractOptions()).extract(BENCH_KB / "electronic-computing" / "stored_program.pdf", BENCH_KB)
+    assert candidates, "the benchmark PDF should have at least one ruled page"
+    assert "document" in events, "pdfplumber no longer closes the document on `with` exit; adjust the spy"
+    closed_during_pass = events[: events.index("document")]
+    assert len(closed_during_pass) == len(candidates) and len(set(closed_during_pass)) == len(closed_during_pass)
+    assert any(b.kind == "table" for b in doc.blocks)  # closing pages must not lose the tables
+
+
 def test_markdown_structure() -> None:
     blocks = parse_markdown("# T\n\nPara one\ncontinues.\n\n- a\n- b\n\n| x | y |\n|---|---|\n\n```\ncode # not heading\n```\n## H2\ntext")
     kinds = [(b.kind, b.level) for b in blocks]
