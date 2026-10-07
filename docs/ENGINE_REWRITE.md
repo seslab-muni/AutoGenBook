@@ -127,7 +127,7 @@ then uploads `sections/<key>.md` and `section_reviews/<key>*.json` for that node
 |---|---|
 | `structure_graph.json` | `graph.input_sha256`; `nodes{key}.title/summary/n_pages/content_file_path/kb_scope/kb_sources/content_locked/structure_locked/content_file`; `edges` as `[parent, child]` rooted at `"book"`; keys `"1"`, `"1-2"`, ... in DFS order. The API **writes** into this file before regenerate/retry (clears `content_file_path`, rewrites `summary`, syncs scopes and locks). |
 | `sections/<key>.md` | section body; word count and citation tokens `[cite_key]` are extracted from it |
-| `section_reviews/<key>.json`, `<key>_revised.json` | `issues[] {severity, type, description, required_fix}` |
+| `section_reviews/<key>.json`, `<key>_revised.json` | `issues[] {severity, type, description, required_fix}`. Additive fields (issue #182, the importer ignores them): `quote`, `start`, `end`, `replace_from`, `replace_to` (section 4.9) |
 | `kb_sources.json` | `cite_keys{}` and `rids{}` mapping to `{source_path, loc, excerpt}`; `chunks[].source_path` (parent directory = source id, used for per-source chunk counts) |
 | `run_meta.json` | `finished_at` (ISO, must be after the run started), `token_totals{}` and `cost_totals_usd{}` (values summed), `error` (failure text). `status` is ignored. |
 | `regen_history/` | written by the API for rollback; the engine must not touch it |
@@ -171,6 +171,9 @@ engine/                      new package (python -m engine)
                              BM25 index, scope filters, context formatting, kb_sources.json
   agents/                    typed Agent[In, Out]: outline, subdivide, writer, reviewer,
                              reviser, length, glossary, consistency
+  revision.py                engine.revise: in-process revision of one section/range (4.9)
+  util/anchors.py            text-quote anchors over a section's Markdown (4.9)
+  util/textdiff.py           word-level hunks in code-point offsets (4.9)
   pipeline/                  plan (task DAG), scheduler (asyncio), book stages, resume rules
   assemble/                  citations resolver, Markdown builder, pandoc -> LuaLaTeX, audit
 run_engine.py                two-line shim so CLI_ENTRYPOINT can point at a file
@@ -345,6 +348,50 @@ message, payload`) that the API can adopt later to replace stdout parsing and gr
 
 All settings resolve once into an immutable `RunConfig` from argv and env. There is no `input()`
 anywhere; `AUTOGENBOOK_NONINTERACTIVE` and `AUTOGENBOOK_ASSUME_YES` are accepted and ignored.
+
+### 4.9 Anchors and `engine.revise` (issue #182)
+
+Two additions for the Studio margin workspace. Neither changes the frozen contract: they add
+fields and an entry point.
+
+**Anchors.** `engine/util/anchors.py` (pure stdlib; the API imports it too) implements the W3C
+text-quote selector `{quote, prefix, suffix, start, end}` over a section's Markdown source.
+Offsets are **Unicode code points** (Python `str` indices), `end` exclusive, `prefix`/`suffix` up to
+32 code points, `start`/`end` both `null` = orphaned. `make_anchor(text, start, end)`,
+`resolve_anchor(text, anchor)` (stored offsets, exact match with prefix/suffix/distance
+disambiguation, whitespace-normalised match, bounded fuzzy match with a similarity threshold,
+orphan) and `resolve_quote(text, quote)` (the same ladder without offsets, plus tolerance for what
+LLMs change when quoting: curly vs straight quotes, non-breaking hyphens and spaces, zero-width
+characters, Markdown emphasis and code markers, surrounding quote marks or ellipses, an ellipsis
+for elided text). A found anchor's `quote` is the text actually matched, so
+`text[start:end] == quote` always holds.
+
+**Anchored review issues.** `ReviewIssue` gains `quote` (verbatim span, one sentence or less),
+`start`, `end` and the optional literal-replacement pair `replace_from`/`replace_to`. The model
+supplies only `quote` and the replacement pair (`start`/`end` are hidden from its schema). The
+engine resolves each quote with `resolve_quote` against the section file as it lies on disk and
+writes the offsets into `section_reviews/<key>.json` and `<key>_revised.json`. This runs after
+every write of `sections/<key>.md` (`BookRun._anchor_reviews`, from `_finish_leaf` and the
+consistency patch), so the offsets always index the final text, not the draft that was reviewed:
+a quote that no longer occurs gets `start`/`end` `null`. The offsets index the whole file
+(`sections/<key>.md` has no header or front matter; `api/application/graph_import.py` reads it
+unchanged into `content_markdown`). Consistency findings and the removed-citation note carry no
+quote and stay unanchored.
+
+**`engine.revise(request, sink) -> ReviseResult`** (`engine/revision.py`, exported next to
+`engine.run`) revises one section's existing text in-process: no run directory, no
+`structure_graph.json`, no queue, no files. `ReviseRequest` carries the body, the free-text
+instruction, typed `ReviseParams` (`more_proofs`, `more_examples`, `more_rigorous`, `shorter`,
+`longer`, `cite_sources`, `fix_issues`, `address_comments`; rendered into the prompt
+deterministically), a `SectionBrief` (the chapter options), `LLMSettings` and an optional
+prebuilt `KnowledgeBase`. `scope="section"` asks for the whole revised body and diffs it;
+`scope="range"` resolves the anchor first (an orphaned anchor raises `AnchorOrphaned`), asks only
+for the replacement of that range, splices it in and verifies the text outside is unchanged.
+`ReviseResult` holds `replacement_markdown` (the full new body), `original_markdown`, `hunks`
+(`{start, end, removed, added}` over the original in code points; word-level), `summary`,
+`changes_made` and the usage totals. Progress goes to the `EventSink` as stages `retrieve`,
+`revise` and `diff`. Prompts: `prompts/book/copilot_reviser.md` (section) and `copilot_range.md`
+(range); the full-run `reviser.md` is only extended by one clause about the optional issue fields.
 
 ## 5. Testing strategy
 
