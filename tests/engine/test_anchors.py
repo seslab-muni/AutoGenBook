@@ -596,3 +596,58 @@ def test_long_quote_with_an_edit_in_its_head_or_tail_still_anchors() -> None:
         r = resolve_anchor(edited, a)
         assert r["start"] == edited.index("term"), r
         assert abs((r["end"] - r["start"]) - len(quote)) <= 60
+
+
+# ============================================================ fuzzy needs corroboration
+FILLER = "Some unrelated prose about sorting networks and comparators that goes on. " * 70
+
+
+def _near_duplicate_text(s1: str, s2: str) -> tuple[str, dict]:
+    text = "Intro text here. " + s1 + " " + FILLER + s2 + " The end of the section."
+    i = text.index(s1)
+    return text, make_anchor(text, i, i + len(s1))
+
+
+@pytest.mark.parametrize(
+    "s1, s2",
+    [
+        ("Let $x_1$ be the smallest root of the polynomial $p$.", "Let $x_2$ be the smallest root of the polynomial $q$."),
+        ("The gradient step updates all of the weights in the network at once.", "The gradient step updates all of the biases in the network at once."),
+    ],
+)
+def test_a_deleted_sentence_is_not_re_attached_to_a_similar_one_far_away(s1: str, s2: str) -> None:
+    text, anchor = _near_duplicate_text(s1, s2)
+    deleted = text.replace(s1 + " ", "")
+    r, level = resolve_anchor_detailed(deleted, anchor)
+    assert r["start"] is None and level == "orphan", (level, r["start"])
+    replaced = text.replace(s1, "A completely different remark replaces the original sentence entirely.")
+    assert resolve_anchor(replaced, anchor)["start"] is None
+
+
+def test_in_place_edits_with_intact_context_still_resolve_fuzzily() -> None:
+    s1 = "Let $x_1$ be the smallest root of the polynomial $p$."
+    text, anchor = _near_duplicate_text(s1, "Let $x_2$ be the smallest root of the polynomial $q$.")
+    edited = text.replace("smallest root", "smallest real root")
+    r, level = resolve_anchor_detailed(edited, anchor)
+    assert level == "fuzzy" and r["start"] == edited.index(s1[:20])
+    far_edit = "A new opening paragraph was typed in front. " + edited  # shifted, context intact
+    r2, level2 = resolve_anchor_detailed(far_edit, anchor)
+    assert level2 == "fuzzy" and r2["start"] == far_edit.index(s1[:20])
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_deleting_or_replacing_a_quote_never_lands_on_its_near_duplicate(seed: int) -> None:
+    import random
+
+    rng = random.Random(seed)
+    words = [f"w{rng.randrange(10**5)}" for _ in range(300)]
+    for _ in range(40):
+        body = " ".join(rng.choice(words) for _ in range(14))
+        twin = body.replace(body.split()[3], "changed", 1)  # a near-duplicate sentence
+        pad = lambda: " ".join(rng.choice(words) for _ in range(rng.randint(150, 400)))  # noqa: E731
+        text = f"{pad()}. {body}. {pad()}. {twin}. {pad()}."
+        i = text.index(body)
+        anchor = make_anchor(text, i, i + len(body))
+        for edited in (text.replace(body + ". ", "", 1), text.replace(body, " ".join(rng.choice(words) for _ in range(14)), 1)):
+            r = resolve_anchor(edited, anchor)
+            assert r["start"] is None or edited[r["start"]:r["end"]] != twin, "re-attached to the near-duplicate"
