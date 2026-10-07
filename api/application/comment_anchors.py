@@ -64,3 +64,51 @@ def resolve_anchors_detailed(
 ) -> list[tuple[dict[str, Any], str]]:
     """`(anchor, level)` for each anchor (see `resolve_anchor_level`)."""
     return [resolve_anchor_level(content, anchor) for anchor in anchors]
+
+
+def _nows(text: str) -> str:
+    return "".join(text.split())
+
+
+def context_agrees(content: str, stored: Mapping[str, Any], start: int, end: int) -> bool:
+    """Whether the text around `content[start:end]` is what the stored anchor
+    remembers: its full `prefix` ends right before `start`, or its full `suffix`
+    starts right at `end` (whitespace ignored). An empty stored prefix/suffix
+    agrees only at the edge of the text it was taken at (start 0 / end of text)."""
+    prefix, suffix = str(stored.get("prefix") or ""), str(stored.get("suffix") or "")
+    if prefix.strip():
+        want = _nows(prefix)
+        if _nows(content[max(0, start - 2 * len(prefix) - 8) : start]).endswith(want):
+            return True
+    elif start == 0:
+        return True
+    if suffix.strip():
+        want = _nows(suffix)
+        if _nows(content[end : end + 2 * len(suffix) + 8]).startswith(want):
+            return True
+    elif end == len(content):
+        return True
+    return False
+
+
+def suggestion_anchor_accepted(
+    content: str,
+    stored: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    level: str,
+    *,
+    original_unique: bool,
+) -> bool:
+    """May a pending suggestion's `stored` anchor move to where the engine
+    found it (`resolved` at `level`)? Only an unchanged quote, and only if that
+    is demonstrably the same place: the stored context agrees there, or the quote
+    was unique when the suggestion was made (`payload.anchorUnique`) and still
+    occurs exactly once. A copy of the quote elsewhere is not the selected text -
+    that includes a duplicate that slid onto the stored offsets."""
+    if resolved.get("start") is None or level not in ACCEPTED_LEVELS:
+        return False
+    start, end = resolved["start"], resolved["end"]
+    if context_agrees(content, stored, start, end):
+        return True
+    quote = str(resolved.get("quote") or "")
+    return bool(original_unique and quote and content.count(quote) == 1)

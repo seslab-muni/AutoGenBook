@@ -55,7 +55,10 @@ class SqlAlchemyRevisionRepository:
         """Serialise per-user admission (`FOR UPDATE` on the user row; held to
         the end of the transaction; a no-op on SQLite)."""
         await self._session.execute(
-            select(UserRecord.id).where(UserRecord.id == user_id).with_for_update()
+            # FOR NO KEY UPDATE: a reply by this user takes FOR KEY SHARE on the
+            # user row (author FK) after locking its root; a plain FOR UPDATE
+            # would deadlock with a start inside that thread.
+            select(UserRecord.id).where(UserRecord.id == user_id).with_for_update(key_share=True)
         )
 
     # ------------------------------------------------------------------ jobs

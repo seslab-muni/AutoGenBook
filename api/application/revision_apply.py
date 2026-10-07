@@ -28,7 +28,7 @@ from typing import Any
 from engine.util.anchors import CONTEXT, resolve_anchor_detailed
 from engine.util.textdiff import Hunk, apply_hunks
 
-from api.application.comment_anchors import ACCEPTED_LEVELS
+from api.application.comment_anchors import ACCEPTED_LEVELS, suggestion_anchor_accepted
 
 MIN_INSERTION_CONTEXT = 12
 
@@ -108,8 +108,21 @@ def _apply_hunks_to_changed(current: str, original: str, hunks: list[Hunk]) -> s
     return text
 
 
-def _squash(text: str) -> str:
-    return " ".join(text.split())
+def _is_word(char: str | None) -> bool:
+    return char is not None and (char.isalnum() or char == "_")
+
+
+def _edges_unchanged(current: str, start: int, end: int, original: str, a0: int, a1: int) -> bool:
+    """The characters just outside the range, where either is a word
+    character, are the same as in the original (an edit glued to the range
+    boundary - "(Lemma 1)s" - changes the word the range ends in)."""
+    for now, then in (
+        (current[start - 1] if start > 0 else None, original[a0 - 1] if a0 > 0 else None),
+        (current[end] if end < len(current) else None, original[a1] if a1 < len(original) else None),
+    ):
+        if (_is_word(now) or _is_word(then)) and now != then:
+            return False
+    return True
 
 
 def _range_replacement(payload: dict[str, Any]) -> str:
@@ -150,28 +163,35 @@ def apply_revision(
     if content_hash(current) == base_hash:
         if hunk_indexes is None:
             return replacement
-        return apply_hunks(original, chosen)
+        try:
+            return apply_hunks(original, chosen)
+        except (ValueError, IndexError, TypeError) as exc:
+            raise MalformedSuggestion("the suggestion's changes do not apply to its text") from exc
 
     if scope == "range":
         if anchor is None:
             raise StaleSuggestion("the selected range is gone")
         resolved, level = resolve_anchor_detailed(current, anchor)
-        if resolved["start"] is None or level not in ACCEPTED_LEVELS:
+        if not suggestion_anchor_accepted(
+            current, anchor, resolved, level, original_unique=bool(payload.get("anchorUnique"))
+        ):
             raise StaleSuggestion(
                 "the selected text changed since this suggestion was made; ask again"
             )
-        # The text now at the range must be what the model was asked to rewrite
-        # (up to whitespace): a small edit inside the range is the user's work
-        # and must never be overwritten.
         anchor_info = payload.get("anchor") or {}
         a0, a1 = anchor_info.get("start"), anchor_info.get("end")
         if not isinstance(a0, int) or not isinstance(a1, int):
             raise MalformedSuggestion("the suggestion has no resolved range")
-        now_text = current[resolved["start"] : resolved["end"]]
-        if _squash(now_text) != _squash(original[a0:a1]):
+        start, end = resolved["start"], resolved["end"]
+        # The text now at the range must be exactly what the model was given,
+        # and a word touching the range must not have been glued to or cut by
+        # an edit: an edit inside or at the edge of the range is the user's work.
+        if current[start:end] != original[a0:a1] or not _edges_unchanged(
+            current, start, end, original, a0, a1
+        ):
             raise StaleSuggestion(
                 "the selected text was edited since this suggestion was made; ask again"
             )
         new_range = _range_replacement(payload)
-        return current[: resolved["start"]] + new_range + current[resolved["end"] :]
+        return current[:start] + new_range + current[end:]
     return _apply_hunks_to_changed(current, original, chosen)

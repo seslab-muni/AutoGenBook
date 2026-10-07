@@ -80,6 +80,7 @@ from engine.errors import (
     ReviseTimeout,
     ReviseUnusableOutput,
 )
+from engine.util.anchors import make_anchor
 from engine.revision import (
     ReviseClientPool,
     ReviseParams,
@@ -281,6 +282,7 @@ class RevisionRunner:
         self._pool: ReviseClientPool | None = None
         self._tasks: dict[uuid.UUID, asyncio.Task] = {}
         self._reasons: dict[uuid.UUID, str] = {}
+        self._records: set[asyncio.Future] = set()
         self._sweeper: asyncio.Task | None = None
         self._closing = False
 
@@ -324,6 +326,16 @@ class RevisionRunner:
                 task.cancel()
         if tasks:
             await asyncio.wait(tasks, timeout=10)
+        # Nothing may write to the database after the engine is disposed: give
+        # the outcome-recording tasks a last moment, then cancel what is left.
+        leftover = [t for t in self._records if not t.done()]
+        if leftover:
+            _done, pending = await asyncio.wait(leftover, timeout=5)
+            for task in pending:
+                logger.warning("a revision outcome was still being recorded at shutdown; cancelling it")
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         self._tasks.clear()
         if self._pool is not None:
             pool, self._pool = self._pool, None
@@ -432,56 +444,97 @@ class RevisionRunner:
         started = _now()
         work = asyncio.create_task(self._work(job, sink), name=f"revise-{comment_id}")
         flusher = asyncio.create_task(self._flush_loop(job, sink, work), name=f"flush-{comment_id}")
-        outcome: tuple[str, dict[str, Any]] | None = None
+        # The outcome is defaulted before anything is awaited, so a cancel at
+        # any point (even a second one while the work unwinds) still records
+        # something meaningful, and everything after the work is torn down and
+        # recorded inside the shield.
+        outcome: tuple[str, dict[str, Any]] = (
+            "failed",
+            {"error": ("internal", ERROR_MESSAGES["internal"])},
+        )
         try:
             try:
-                done, _ = await asyncio.wait({work}, timeout=self._settings.revision_timeout_s)
+                await asyncio.wait({work}, timeout=self._settings.revision_timeout_s)
             except asyncio.CancelledError:
+                outcome = (
+                    self._reasons.setdefault(comment_id, "cancelled"),
+                    {"usage": dict(sink.last_usage)},
+                )
                 work.cancel()
-                await asyncio.gather(work, return_exceptions=True)
-                reason = self._reasons.get(comment_id, "cancelled")
-                outcome = (reason, {"usage": dict(sink.last_usage)})
-            else:
-                if not done:
-                    work.cancel()
-                    await asyncio.gather(work, return_exceptions=True)
-                    code, message, usage = map_error(asyncio.TimeoutError())
-                    message = f"The revision did not finish within {int(self._settings.revision_timeout_s)} seconds."
-                    outcome = ("failed", {"error": (code, message), "usage": usage or dict(sink.last_usage)})
-                elif work.cancelled():
-                    outcome = (
-                        self._reasons.get(comment_id, "external"),
-                        {"usage": dict(sink.last_usage)},
-                    )
-                elif work.exception() is not None:
-                    exc = work.exception()
-                    code, message, usage = map_error(exc)  # type: ignore[arg-type]
-                    if code == "internal":
-                        logger.error("revision %s failed", comment_id, exc_info=exc)
-                    outcome = ("failed", {"error": (code, message), "usage": usage or dict(sink.last_usage)})
-                else:
+                await self._drain(work)
+                # a result that was already there wins over the cancel
+                if work.done() and not work.cancelled() and work.exception() is None:
                     outcome = ("pending", {"result": work.result()})
+            else:
+                if not work.done():
+                    code, _message, usage = map_error(asyncio.TimeoutError())
+                    message = (
+                        f"The revision did not finish within "
+                        f"{int(self._settings.revision_timeout_s)} seconds."
+                    )
+                    outcome = (
+                        "failed",
+                        {"error": (code, message), "usage": usage or dict(sink.last_usage)},
+                    )
+                    work.cancel()
+                    await self._drain(work)
+                else:
+                    outcome = self._classify(comment_id, work, sink)
         finally:
-            flusher.cancel()
-            await asyncio.gather(flusher, return_exceptions=True)
-            # Recording the outcome must survive a cancel / shutdown arriving
-            # right now (the result and the usage would be lost and the card
-            # would stay `running` until the sweeper): it runs as its own task
-            # that this one waits for even when cancelled.
-            await self._shielded(self._record(job, sink, outcome, started))
+            await self._shielded(self._teardown_and_record(job, sink, flusher, outcome, started))
 
     @staticmethod
-    async def _shielded(coro) -> None:
+    async def _drain(task: asyncio.Task) -> None:
+        """Wait for `task` to finish, whatever else cancels the caller meanwhile."""
+        while not task.done():
+            try:
+                await asyncio.wait({task})
+            except asyncio.CancelledError:
+                continue
+
+    def _classify(
+        self, comment_id: uuid.UUID, work: asyncio.Task, sink: DbEventSink
+    ) -> tuple[str, dict[str, Any]]:
+        if work.cancelled():
+            return (self._reasons.get(comment_id, "external"), {"usage": dict(sink.last_usage)})
+        exc = work.exception()
+        if exc is not None:
+            code, message, usage = map_error(exc)
+            if code == "internal":
+                logger.error("revision %s failed", comment_id, exc_info=exc)
+            return ("failed", {"error": (code, message), "usage": usage or dict(sink.last_usage)})
+        return ("pending", {"result": work.result()})
+
+    async def _teardown_and_record(
+        self,
+        job: RevisionJob,
+        sink: DbEventSink,
+        flusher: asyncio.Task,
+        outcome: tuple[str, dict[str, Any]],
+        started: datetime,
+    ) -> None:
+        flusher.cancel()
+        await asyncio.gather(flusher, return_exceptions=True)
+        await self._record(job, sink, outcome, started)
+
+    async def _shielded(self, coro) -> None:
+        """Run `coro` as its own task and wait for it even if this task is
+        cancelled (once or repeatedly); the cancel is re-raised afterwards."""
         task = asyncio.ensure_future(coro)
+        self._records.add(task)
+        task.add_done_callback(self._records.discard)
         cancelled = False
         while not task.done():
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
+                if task.cancelled():
+                    break
                 cancelled = True
         if cancelled:
             raise asyncio.CancelledError
-        task.result()
+        if not task.cancelled():
+            task.result()
 
     async def _record(
         self,
@@ -815,7 +868,19 @@ class RevisionService:
             candidate = anchor if anchor is not None else (thread_root.anchor if thread_root else None)
             if candidate is None:
                 raise ValidationFailed("a range revision needs an anchor (or a threadId with one)")
-            resolved, level = await run_in_threadpool(resolve_anchor_level, content, candidate)
+            quote = str(candidate.get("quote") or "")
+            c_start, c_end = candidate.get("start"), candidate.get("end")
+            if (
+                isinstance(c_start, int) and isinstance(c_end, int)
+                and not isinstance(c_start, bool) and not isinstance(c_end, bool)
+                and 0 <= c_start < c_end <= len(content) and content[c_start:c_end] == quote
+            ):
+                # Exact client offsets that really hold the quote are the
+                # selection (the server computes the context): this is what
+                # disambiguates a repeated quote.
+                resolved, level = make_anchor(content, c_start, c_end), "stored"
+            else:
+                resolved, level = await run_in_threadpool(resolve_anchor_level, content, candidate)
             if resolved.get("start") is None or level not in ACCEPTED_LEVELS:
                 raise Conflict(
                     "the selected text no longer matches the section; select it again",
@@ -864,6 +929,10 @@ class RevisionService:
             "params": params.to_payload(),
             "threadId": str(thread_root.id) if thread_root else None,
             "baseContentHash": content_hash(content),
+            # Was the selected text the only copy of itself? (decides whether a
+            # lone remaining copy may stand in for it later; see
+            # `suggestion_anchor_accepted`)
+            "anchorUnique": bool(resolved_anchor) and content.count(resolved_anchor["quote"]) == 1,
             "model": llm.model,
             "startedAt": _iso(now),
         }

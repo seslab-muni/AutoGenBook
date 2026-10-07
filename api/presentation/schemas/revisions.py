@@ -74,7 +74,7 @@ class SuggestionAccept(BaseSchema):
     hunk_indexes: list[int] | None = Field(default=None, max_length=10_000)
     # The `contentHash` of the section text the client is showing (flush any
     # pending autosave first); 409 `content_conflict` if the text is different.
-    expected_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    expected_content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SuggestionAccepted(BaseSchema):

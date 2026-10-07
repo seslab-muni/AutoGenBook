@@ -35,7 +35,7 @@ import logging
 import uuid
 from starlette.concurrency import run_in_threadpool
 
-from api.application.comment_anchors import ACCEPTED_LEVELS, resolve_anchors_detailed
+from api.application.comment_anchors import resolve_anchors_detailed, suggestion_anchor_accepted
 from api.domain.models import CommentKind, CommentStatus, NodeComment
 from api.domain.ports import CommentRepository
 
@@ -76,11 +76,17 @@ async def reanchor_node_cards(
 
     updates: list[tuple[uuid.UUID, dict | None, CommentStatus | None]] = []
     for row, (new_anchor, level) in zip(rows, resolved):
-        if row.kind == CommentKind.SUGGESTION and level not in ACCEPTED_LEVELS:
-            # A suggestion's anchor only follows text that is still the same
-            # (up to whitespace). A fuzzy/tolerant match would rewrite its quote
-            # to the user's edited text; instead the anchor is orphaned (the
-            # status stays) and accept answers `stale`.
+        if row.kind == CommentKind.SUGGESTION and not suggestion_anchor_accepted(
+            content,
+            row.anchor or {},
+            new_anchor,
+            level,
+            original_unique=bool(row.payload.get("anchorUnique")),
+        ):
+            # A suggestion's anchor only follows text that is demonstrably the
+            # same place (see `suggestion_anchor_accepted`): not an edited
+            # quote (fuzzy), not another copy of it. Otherwise it is orphaned
+            # (the status stays) and accept answers `stale`.
             old = row.anchor or {}
             new_anchor = {
                 "quote": old.get("quote", ""),

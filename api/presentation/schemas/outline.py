@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 
 from api.domain.models import MathLevel, NodeStatus, SourceScope
 from api.presentation.schemas.common import BaseSchema, NonBlankStr
@@ -110,7 +110,7 @@ class OutlineNodeUpdate(BaseSchema):
     content_markdown: str | None = None
     # Optimistic precondition for a `contentMarkdown` write: the `contentHash`
     # of the text this edit was based on; 409 `content_conflict` on mismatch.
-    expected_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    expected_content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     content_latex: str | None = None
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
@@ -124,6 +124,15 @@ class OutlineNodeUpdate(BaseSchema):
     # this project (422 otherwise). `sourceIds` alone keeps the scope.
     source_scope: SourceScope | None = None
     source_ids: list[uuid.UUID] | None = None
+
+
+    @field_validator("content_markdown")
+    @classmethod
+    def _content_markdown_not_null(cls, value: str | None) -> str | None:
+        # The column is NOT NULL: clear a section with "" (an explicit null used to be a 500).
+        if value is None:
+            raise ValueError("must be a string (send \"\" to clear the section)")
+        return value
 
 
 class OutlineTreeReplaceNode(BaseSchema):

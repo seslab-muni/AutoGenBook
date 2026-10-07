@@ -180,7 +180,11 @@ class SqlAlchemyOutlineRepository:
             await self._session.execute(
                 select(OutlineNodeRecord)
                 .where(OutlineNodeRecord.id == node_id)
-                .with_for_update()
+                # FOR NO KEY UPDATE, not FOR UPDATE: inserting a card takes
+                # FOR KEY SHARE on the node (foreign key), which must not wait
+                # for this lock - a reply locks its thread root first, so
+                # waiting here would deadlock with a save that then wants the root.
+                .with_for_update(key_share=True)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()

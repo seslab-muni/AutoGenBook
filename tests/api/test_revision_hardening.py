@@ -104,16 +104,34 @@ async def test_small_edit_inside_a_range_is_never_overwritten_by_accept(
     assert (await _get(authed_client, done["id"]))["status"] == "pending"
 
 
-async def test_whitespace_only_change_of_the_range_text_still_applies(
+async def test_a_paragraph_break_inside_the_range_makes_accept_stale(
     authed_client: AsyncClient, revision_runner: RevisionRunner
 ) -> None:
     project_id, node_id = await _setup(authed_client)
     done = await _range_suggestion(authed_client, revision_runner, project_id, node_id, quote=TARGET)
-    edited = BODY.replace("must pairwise", "must  pairwise")
+    edited = BODY.replace("must pairwise", "must\n\npairwise")
     await _set_content(authed_client, project_id, node_id, edited)
     response = await authed_client.post(_accept(done["id"]))
-    assert response.status_code == 200, response.text
-    assert "An added proof sentence (revised)." in response.json()["node"]["contentMarkdown"]
+    assert response.status_code == 409 and response.json()["code"] == "stale"
+    assert (await _node(authed_client, project_id, node_id))["contentMarkdown"] == edited
+
+
+async def test_an_edit_glued_to_the_range_boundary_makes_accept_stale(
+    authed_client: AsyncClient, revision_runner: RevisionRunner
+) -> None:
+    text = "Intro text here for the section.\n\nThe claim (Lemma 1) is used again in the proof.\n"
+    project_id, node_id = await _setup(authed_client, text)
+    start = text.index("(Lemma 1)")
+    done = await _revise(
+        authed_client, revision_runner, project_id, node_id, scope="range",
+        anchor={"quote": "(Lemma 1)", "start": start, "end": start + 9},
+    )
+    assert done["status"] == "pending"
+    edited = text.replace("(Lemma 1) is", "(Lemma 1)s is")
+    await _set_content(authed_client, project_id, node_id, edited)
+    response = await authed_client.post(_accept(done["id"]))
+    assert response.status_code == 409 and response.json()["code"] == "stale"
+    assert (await _node(authed_client, project_id, node_id))["contentMarkdown"] == edited
 
 
 # -------------------------------------------- 2. hunks in repetitive text
@@ -589,3 +607,245 @@ async def test_the_real_lifespan_recovers_on_startup_and_closes_the_runner(
     assert revision_runner.running_jobs == 0 and revision_runner._pool is None and revision_runner._sweeper is None
     final = await _get(authed_client, card["id"])
     assert final["status"] == "failed" and final["payload"]["error"]["code"] == "interrupted"
+
+
+# ----------------------------------- R2-1/5. a copy of the quote is not the range
+SENTENCE = "The generators of S must pairwise commute."
+REPEATS = [
+    pytest.param(SENTENCE, id="sentence"),
+    pytest.param("minus identity", id="short-phrase"),
+    pytest.param("$\\sigma^2 = 1$", id="formula"),
+]
+
+
+def _twice(quote: str) -> str:
+    return f"Theorem. {quote} Proof sketch of several statements.\n\nRecall: {quote} Done.\n"
+
+
+@pytest.mark.parametrize("quote", REPEATS)
+@pytest.mark.parametrize("edit", ["edit", "delete"])
+async def test_a_suggestion_never_moves_to_another_copy_of_its_quote(
+    authed_client: AsyncClient, revision_runner: RevisionRunner, quote: str, edit: str
+) -> None:
+    content = _twice(quote)
+    project_id, node_id = await _setup(authed_client, content)
+    second = content.rindex(quote)
+    # exact offsets, no prefix/suffix (R2-5): enough to select the second copy
+    done = await _revise(
+        authed_client, revision_runner, project_id, node_id, scope="range",
+        anchor={"quote": quote, "start": second, "end": second + len(quote)},
+    )
+    assert done["status"] == "pending" and done["anchor"]["start"] == second
+    changed = quote[:3] + "X" + quote[3:] if edit == "edit" else ""
+    edited = content[:second] + changed + content[second + len(quote):]
+    await _set_content(authed_client, project_id, node_id, edited)
+    assert (await _get(authed_client, done["id"]))["anchor"]["start"] is None  # orphaned, not moved to the first copy
+    response = await authed_client.post(_accept(done["id"]))
+    assert response.status_code == 409 and response.json()["code"] == "stale"
+    assert (await _node(authed_client, project_id, node_id))["contentMarkdown"] == edited
+
+
+async def test_a_suggestion_on_a_repeated_quote_still_applies_to_the_selected_copy(
+    authed_client: AsyncClient, revision_runner: RevisionRunner
+) -> None:
+    content = _twice(SENTENCE)
+    project_id, node_id = await _setup(authed_client, content)
+    second = content.rindex(SENTENCE)
+    done = await _revise(
+        authed_client, revision_runner, project_id, node_id, scope="range",
+        anchor={"quote": SENTENCE, "start": second, "end": second + len(SENTENCE)},
+    )
+    await _set_content(authed_client, project_id, node_id, "A new opening paragraph.\n\n" + content)
+    response = await authed_client.post(_accept(done["id"]))
+    assert response.status_code == 200, response.text
+    result = response.json()["node"]["contentMarkdown"]
+    assert result.startswith("A new opening paragraph.\n\nTheorem. " + SENTENCE + " Proof sketch")
+    assert "Recall: " + SENTENCE + " An added proof sentence (revised)." in result
+
+
+async def test_a_duplicate_that_slid_onto_the_stored_offsets_is_refused() -> None:
+    from api.application.revision_apply import StaleSuggestion, apply_revision
+
+    original = "Alpha. Same sentence here. Omega.\n"
+    start = original.index("Same")
+    quote = "Same sentence here."
+    payload = {
+        "scope": "range", "originalMarkdown": original, "replacementMarkdown": original.replace(quote, "NEW"),
+        "hunks": [], "baseContentHash": content_hash(original), "anchorUnique": True,
+        "anchor": {"quote": quote, "start": start, "end": start + len(quote)},
+    }
+    stored = {"quote": quote, "prefix": "Alpha. ", "suffix": " Omega.\n", "start": start, "end": start + len(quote)}
+    # the selected sentence was rewritten and an identical copy now sits at the stored offsets
+    current = "Beta. Same sentence here. Zeta. Same sentence here.\n"
+    with pytest.raises(StaleSuggestion):
+        apply_revision(current, payload, {**stored, "start": current.index("Same"), "end": current.index("Same") + len(quote)})
+
+
+# ------------------------------------------------------------- R2-2 deadlocks
+@needs_postgres
+async def test_a_reply_does_not_deadlock_with_a_save(
+    authed_client: AsyncClient, monkeypatch
+) -> None:
+    import api.application.outline as outline_module
+
+    project_id, node_id = await _setup(authed_client)
+    root = (await authed_client.post(
+        f"/api/v1/projects/{project_id}/outline/{node_id}/comments",
+        json={"bodyMarkdown": "root", "anchor": {"quote": TARGET}},
+    )).json()
+    original = outline_module.reanchor_node_cards
+
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(0.8)  # the save holds the node lock and is about to want the root
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(outline_module, "reanchor_node_cards", slow)
+    save = asyncio.create_task(authed_client.patch(
+        f"/api/v1/projects/{project_id}/outline/{node_id}", json={"contentMarkdown": "Prefix. " + BODY}
+    ))
+    await asyncio.sleep(0.3)
+    reply = asyncio.create_task(authed_client.post(
+        f"/api/v1/projects/{project_id}/outline/{node_id}/comments", json={"bodyMarkdown": "reply", "parentId": root["id"]}
+    ))
+    results = await asyncio.gather(save, reply, return_exceptions=True)
+    assert [getattr(r, "status_code", r) for r in results] == [200, 201]
+
+
+@needs_postgres
+async def test_a_reply_does_not_deadlock_with_a_revision_started_in_its_thread(
+    authed_client: AsyncClient, revision_runner: RevisionRunner, monkeypatch
+) -> None:
+    from api.application.revisions import RevisionService
+
+    project_id, node_id = await _setup(authed_client)
+    root = (await authed_client.post(
+        f"/api/v1/projects/{project_id}/outline/{node_id}/comments", json={"bodyMarkdown": "root"},
+    )).json()
+    original = RevisionService._llm_settings
+
+    async def slow(self, project, user):
+        await asyncio.sleep(0.8)  # the start holds the user lock and is about to want the root
+        return await original(self, project, user)
+
+    monkeypatch.setattr(RevisionService, "_llm_settings", slow)
+    start = asyncio.create_task(authed_client.post(
+        _revisions(project_id, node_id), json={"instruction": "x", "threadId": root["id"]}
+    ))
+    await asyncio.sleep(0.3)
+    reply = asyncio.create_task(authed_client.post(
+        f"/api/v1/projects/{project_id}/outline/{node_id}/comments", json={"bodyMarkdown": "reply", "parentId": root["id"]}
+    ))
+    results = await asyncio.gather(start, reply, return_exceptions=True)
+    assert [getattr(r, "status_code", r) for r in results] == [202, 201]
+
+
+# ---------------------------------------------- R2-3/4/9. cancel and shutdown
+async def test_cancel_landing_during_the_flusher_teardown_does_not_lose_the_outcome(
+    authed_client: AsyncClient, revision_runner: RevisionRunner, monkeypatch
+) -> None:
+    tearing_down = asyncio.Event()
+
+    async def slow_flusher(job, sink, work):
+        try:
+            while not work.done():
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            tearing_down.set()
+            await asyncio.sleep(0.4)
+            raise
+
+    monkeypatch.setattr(revision_runner, "_flush_loop", slow_flusher)
+    project_id, node_id = await _setup(authed_client)
+    card = (await _start(authed_client, project_id, node_id))["suggestion"]
+    await asyncio.wait_for(tearing_down.wait(), 10)
+    await revision_runner.aclose()  # a shutdown landing in the middle of the teardown
+    final = await _get(authed_client, card["id"])
+    assert final["status"] == "pending" and final["payload"]["replacementMarkdown"]
+    assert revision_runner._records == set()
+
+
+async def test_double_cancel_ends_cancelled_not_failed(
+    authed_client: AsyncClient, revision_runner: RevisionRunner, fake_llm: FakeLLM
+) -> None:
+    fake_llm.latency_s = 5.0
+    project_id, node_id = await _setup(authed_client)
+    card = (await _start(authed_client, project_id, node_id))["suggestion"]
+    await asyncio.sleep(0.3)
+    cid = uuid.UUID(card["id"])
+    first = asyncio.create_task(revision_runner.cancel_local(cid))
+    await asyncio.sleep(0)
+    second = asyncio.create_task(revision_runner.cancel_local(cid))  # a double click
+    await asyncio.gather(first, second)
+    await revision_runner.wait_idle(5)
+    final = await _get(authed_client, card["id"])
+    assert final["status"] == "cancelled" and "error" not in final["payload"]
+
+
+async def test_two_cancel_requests_both_end_cancelled(
+    authed_client: AsyncClient, revision_runner: RevisionRunner, fake_llm: FakeLLM
+) -> None:
+    fake_llm.latency_s = 5.0
+    project_id, node_id = await _setup(authed_client)
+    card = (await _start(authed_client, project_id, node_id))["suggestion"]
+    await asyncio.sleep(0.3)
+    results = await asyncio.gather(
+        authed_client.post(f"/api/v1/suggestions/{card['id']}/cancel"),
+        authed_client.post(f"/api/v1/suggestions/{card['id']}/cancel"),
+    )
+    assert [r.status_code for r in results] == [200, 200]
+    assert (await _get(authed_client, card["id"]))["status"] == "cancelled"
+
+
+# --------------------------------------------------------------- R2-7/8 inputs
+async def test_malformed_hunks_on_the_hash_match_path_are_a_409_not_a_500(
+    authed_client: AsyncClient, session_factory
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    row = await _add_card(
+        session_factory, project_id, node_id, CommentKind.SUGGESTION, status=CommentStatus.PENDING,
+        payload={"scope": "section", "originalMarkdown": BODY, "replacementMarkdown": "x", "baseContentHash": content_hash(BODY),
+                 "hunks": [{"start": 0, "end": 3, "removed": "zzz", "added": "y"}, {"start": 5, "end": 6, "removed": "q", "added": ""}]},
+    )
+    response = await authed_client.post(_accept(str(row)), json={"hunkIndexes": [0]})
+    assert response.status_code == 409 and response.json()["code"] == "invalid_suggestion"
+
+
+async def test_expected_content_hash_format_and_null_content(authed_client: AsyncClient) -> None:
+    project_id, node_id = await _setup(authed_client)
+    url = f"/api/v1/projects/{project_id}/outline/{node_id}"
+    for bad in ("A" * 64, "g" * 64, _sha(BODY).upper()):
+        assert (await authed_client.patch(url, json={"contentMarkdown": "x", "expectedContentHash": bad})).status_code == 422
+        assert (await authed_client.post(_accept(str(uuid.uuid4())), json={"expectedContentHash": bad})).status_code == 422
+    assert (await authed_client.patch(url, json={"contentMarkdown": None})).status_code == 422
+    # checked whenever contentMarkdown is present, even when the text is identical
+    stale = await authed_client.patch(url, json={"contentMarkdown": BODY, "expectedContentHash": _sha("other")})
+    assert stale.status_code == 409 and stale.json()["code"] == "content_conflict"
+    assert (await authed_client.patch(url, json={"contentMarkdown": ""})).status_code == 200
+
+
+# ----------------------------------------------------------------- R2-10
+async def test_accept_re_reads_the_suggestion_after_taking_the_node_lock(
+    authed_client: AsyncClient, revision_runner: RevisionRunner, monkeypatch
+) -> None:
+    """B reads the pending suggestion, pauses before the lock; A accepts meanwhile.
+    A stale pre-lock read would let B try to apply it to the changed text and
+    answer `stale`; B must see that it is no longer pending."""
+    project_id, node_id = await _setup(authed_client)
+    done = await _range_suggestion(authed_client, revision_runner, project_id, node_id, quote=TARGET)
+    original = SqlAlchemyOutlineRepository.get_for_update
+    calls = {"n": 0}
+
+    async def paused(self, node_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            await asyncio.sleep(0.6)
+        return await original(self, node_id)
+
+    monkeypatch.setattr(SqlAlchemyOutlineRepository, "get_for_update", paused)
+    slow = asyncio.create_task(authed_client.post(_accept(done["id"])))
+    await asyncio.sleep(0.2)
+    fast = await authed_client.post(_accept(done["id"]))
+    loser = await slow
+    assert fast.status_code == 200 and loser.status_code == 409
+    assert loser.json()["code"] == "not_pending"
