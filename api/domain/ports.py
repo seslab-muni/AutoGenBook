@@ -10,7 +10,10 @@ from api.domain.models import (
     ArtifactKind,
     File,
     FileKind,
+    CommentKind,
+    CommentStatus,
     LlmModelInfo,
+    NodeComment,
     OutlineNode,
     Project,
     Run,
@@ -140,6 +143,41 @@ class OutlineRepository(Protocol):
     async def count(self, project_id: uuid.UUID) -> int: ...
 
     async def clear_content_locked(self, project_id: uuid.UUID) -> int: ...
+
+
+class CommentRepository(Protocol):
+    async def get(self, comment_id: uuid.UUID) -> NodeComment | None: ...
+
+    async def list_for_node(
+        self,
+        node_id: uuid.UUID,
+        *,
+        kind: CommentKind | None = None,
+        status: CommentStatus | None = None,
+    ) -> list[NodeComment]: ...
+
+    async def list_for_project(
+        self,
+        project_id: uuid.UUID,
+        *,
+        kind: CommentKind | None = None,
+        status: CommentStatus | None = None,
+    ) -> list[NodeComment]: ...
+
+    async def add(self, comment: NodeComment) -> NodeComment: ...
+
+    async def update(
+        self, comment: NodeComment, *, fields: Sequence[str]
+    ) -> NodeComment: ...
+
+    async def soft_delete_thread(self, thread_id: uuid.UUID) -> None: ...
+
+    async def soft_delete(self, comment_id: uuid.UUID) -> None: ...
+
+    # {node_id: (open_comment_count, pending_suggestion_count)}, one grouped query.
+    async def counts_for_project(
+        self, project_id: uuid.UUID
+    ) -> dict[uuid.UUID, tuple[int, int]]: ...
 
 
 class RunRepository(Protocol):

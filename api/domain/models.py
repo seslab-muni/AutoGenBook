@@ -209,6 +209,64 @@ class OutlineNode:
     # imports not overwriting API-authored *structure*. Only settable on a
     # leaf with non-blank content (`OutlineService.update`).
     content_locked: bool = False
+    # Issue #182: derived, never persisted on the node - filled in by
+    # `OutlineService` from one grouped `node_comments` query per request.
+    open_comment_count: int = 0
+    pending_suggestion_count: int = 0
+
+
+class CommentKind(str, enum.Enum):
+    COMMENT = "comment"
+    SUGGESTION = "suggestion"
+    REVIEW = "review"
+
+
+class CommentStatus(str, enum.Enum):
+    """`open | resolved | orphaned` apply to comment and review rows;
+    `pending | accepted | rejected | failed` to suggestion rows."""
+
+    OPEN = "open"
+    RESOLVED = "resolved"
+    ORPHANED = "orphaned"
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+# Suggestion statuses that still await the user's decision (badge count).
+SUGGESTION_DECIDED_STATUSES = (
+    CommentStatus.ACCEPTED,
+    CommentStatus.REJECTED,
+    CommentStatus.FAILED,
+)
+
+
+@dataclass
+class NodeComment:
+    """One margin card row (issue #182): a comment/reply, an AI suggestion or
+    a reviewer issue on an outline node. `thread_id` is the root row's id (a
+    root's own id); `parent_id` is the row replied to (None for a root).
+    `anchor` is the W3C text-quote selector dict over the node's
+    `content_markdown` (see `api.application.comment_anchors`), None = the
+    whole section."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    node_id: uuid.UUID
+    kind: CommentKind
+    author_id: uuid.UUID | None
+    anchor: dict | None
+    status: CommentStatus
+    thread_id: uuid.UUID
+    parent_id: uuid.UUID | None
+    body_markdown: str
+    payload: dict
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+    # Derived, never persisted - joined in from `users.display_name`.
+    author_name: str | None = None
 
 
 class FileKind(str, enum.Enum):

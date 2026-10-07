@@ -12,7 +12,7 @@ from api.core.cache_headers import NoStoreMiddleware
 from api.core.request_logging import RequestIdMiddleware, configure_request_logging
 from api.core.settings import default_credentials_warning, get_settings
 from api.presentation.deps import current_user, require_csrf_header
-from api.presentation.routers import auth, files, outline, projects, runs, sources, system
+from api.presentation.routers import auth, comments, files, outline, projects, runs, sources, system
 
 configure_request_logging()
 logger = logging.getLogger("api")
@@ -81,6 +81,7 @@ def create_app() -> FastAPI:
     guarded_router.include_router(projects.router)
     guarded_router.include_router(sources.router)
     guarded_router.include_router(outline.router)
+    guarded_router.include_router(comments.router)
     guarded_router.include_router(runs.router)
     guarded_router.include_router(system.guarded_router)
 

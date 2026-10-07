@@ -53,6 +53,11 @@ class OutlineNode(BaseSchema):
     # `sourceIds` is non-empty only when `sourceScope` is `selected`.
     source_scope: SourceScope
     source_ids: list[uuid.UUID]
+    # Issue #182 outline badges. `openCommentCount`: root comment threads not
+    # yet resolved (open or orphaned); `pendingSuggestionCount`: suggestions not
+    # yet accepted, rejected or failed. Soft-deleted rows are not counted.
+    open_comment_count: int = 0
+    pending_suggestion_count: int = 0
     created_at: datetime
     updated_at: datetime
 

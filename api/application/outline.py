@@ -17,6 +17,7 @@ from api.domain.outline import (
 )
 from api.domain.ports import (
     OutlineRepository,
+    CommentRepository,
     ProjectRepository,
     RunRepository,
     SourceRepository,
@@ -41,7 +42,9 @@ class OutlineService:
         project_repository: ProjectRepository,
         run_repository: RunRepository,
         source_repository: SourceRepository | None = None,
+        comment_repository: CommentRepository | None = None,
     ) -> None:
+        self._comment_repository = comment_repository
         self._outline_repository = outline_repository
         self._project_repository = project_repository
         self._run_repository = run_repository
@@ -132,6 +135,27 @@ class OutlineService:
                 f"outline node {node.id} has child sections; only a leaf's content can be locked"
             )
 
+    async def _with_counts(
+        self, project_id: uuid.UUID, nodes: Sequence[OutlineNode]
+    ) -> list[OutlineNode]:
+        """Fill `open_comment_count` / `pending_suggestion_count` (issue #182)
+        from one grouped `node_comments` query for the whole project."""
+        if self._comment_repository is None:
+            return list(nodes)
+        counts = await self._comment_repository.counts_for_project(project_id)
+        if not counts:
+            return list(nodes)
+        return [
+            dataclass_replace(
+                node,
+                open_comment_count=counts[node.id][0],
+                pending_suggestion_count=counts[node.id][1],
+            )
+            if node.id in counts
+            else node
+            for node in nodes
+        ]
+
     async def _get_project(self, project_id: uuid.UUID) -> Project:
         project = await self._project_repository.get(project_id)
         if project is None:
@@ -166,7 +190,9 @@ class OutlineService:
         self, project_id: uuid.UUID, *, format: str = "flat"
     ) -> tuple[list[OutlineNode] | list[OutlineTree], int]:
         await self._get_project(project_id)
-        flat = await self._outline_repository.list(project_id)
+        flat = await self._with_counts(
+            project_id, await self._outline_repository.list(project_id)
+        )
         positioned = assign_positions(flat)
         if format == "tree":
             return build_tree(flat), len(positioned)
@@ -174,7 +200,9 @@ class OutlineService:
 
     async def get(self, project_id: uuid.UUID, node_id: uuid.UUID) -> OutlineNode:
         await self._get_project(project_id)
-        flat = await self._outline_repository.list(project_id)
+        flat = await self._with_counts(
+            project_id, await self._outline_repository.list(project_id)
+        )
         node = self._get_node(project_id, node_id, flat)
         positioned = {n.id: n for n in assign_positions(flat)}
         return positioned[node.id]
@@ -278,10 +306,16 @@ class OutlineService:
             )
             await self._outline_repository.reorder(project_id, parent_id, new_order)
             refreshed = await self._outline_repository.list(project_id)
-            positioned = {n.id: n for n in assign_positions(refreshed)}
+            positioned = {
+                n.id: n
+                for n in assign_positions(await self._with_counts(project_id, refreshed))
+            }
             return positioned[created.id]
 
-        positioned = {n.id: n for n in assign_positions(flat + [created])}
+        positioned = {
+            n.id: n
+            for n in assign_positions(await self._with_counts(project_id, flat + [created]))
+        }
         return positioned[created.id]
 
     async def update(
@@ -362,7 +396,9 @@ class OutlineService:
             await self._outline_repository.reorder(project_id, new_parent_id, new_order)
 
         refreshed = await self._outline_repository.list(project_id)
-        positioned = {n.id: n for n in assign_positions(refreshed)}
+        positioned = {
+            n.id: n for n in assign_positions(await self._with_counts(project_id, refreshed))
+        }
         return positioned[node_id]
 
     async def delete(self, project_id: uuid.UUID, node_id: uuid.UUID) -> None:
@@ -429,7 +465,7 @@ class OutlineService:
 
         walk(tree, None, 1)
         saved = await self._outline_repository.replace_all(project_id, flat_nodes)
-        return assign_positions(saved)
+        return assign_positions(await self._with_counts(project_id, saved))
 
     async def duplicate_from(
         self,
@@ -491,7 +527,9 @@ class OutlineService:
         `book_structure.json` was already written."""
         await self._get_project(project_id)
         await self._outline_repository.clear_content_locked(project_id)
-        return assign_positions(await self._outline_repository.list(project_id))
+        return assign_positions(
+            await self._with_counts(project_id, await self._outline_repository.list(project_id))
+        )
 
     async def count(self, project_id: uuid.UUID) -> int:
         return await self._outline_repository.count(project_id)

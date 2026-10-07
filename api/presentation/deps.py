@@ -7,6 +7,7 @@ from fastapi.security import APIKeyCookie
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.application.auth import AuthService
+from api.application.comments import CommentService
 from api.application.files import FileService
 from api.application.outline import OutlineService
 from api.application.runs import RunService
@@ -16,6 +17,7 @@ from api.core.errors import Forbidden, Unauthorized
 from api.core.settings import Settings, get_settings
 from api.domain.models import User
 from api.domain.ports import FileStorage, ModelCatalog
+from api.infrastructure.db.comment_repository import SqlAlchemyCommentRepository
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
@@ -110,6 +112,15 @@ def get_outline_service(session: AsyncSession = Depends(get_session)) -> Outline
         project_repository=SqlAlchemyProjectRepository(session),
         run_repository=SqlAlchemyRunRepository(session),
         source_repository=SqlAlchemySourceRepository(session),
+        comment_repository=SqlAlchemyCommentRepository(session),
+    )
+
+
+def get_comment_service(session: AsyncSession = Depends(get_session)) -> CommentService:
+    return CommentService(
+        comment_repository=SqlAlchemyCommentRepository(session),
+        outline_repository=SqlAlchemyOutlineRepository(session),
+        project_repository=SqlAlchemyProjectRepository(session),
     )
 
 

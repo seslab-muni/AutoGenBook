@@ -332,6 +332,44 @@ Status codes: `204`; `404`.
 
 Source (all seven): `api/application/outline.py:OutlineService`, `api/domain/outline.py`, `api/presentation/routers/outline.py`
 
+Every `OutlineNode` (flat, tree, single, create/update/replace responses, and the outline embedded in `Project`) also carries two derived badge counts (issue #182), computed from `node_comments` with one grouped query per request: `openCommentCount` (root `comment` threads whose status is `open` or `orphaned`, i.e. not resolved) and `pendingSuggestionCount` (root `suggestion` rows not yet `accepted`, `rejected` or `failed`). Soft-deleted rows are never counted.
+
+## Comments
+
+Margin cards of an outline node (issue #182): human comments and replies, and (later tracks) AI suggestions and reviewer issues, all in table `node_comments` (soft delete via `deletedAt`, never exposed). Behind the session guard like every route; like the rest of the API any signed-in user can read and comment on any project.
+
+`Comment`: `id`, `projectId`, `nodeId`, `kind` (`comment|suggestion|review`), `authorId` (nullable: copilot/reviewer), `authorName` (nullable, the author's current display name), `anchor` (nullable = the whole section), `status`, `threadId` (the root row's id; a root's own id), `parentId` (nullable; the row replied to), `bodyMarkdown`, `payload` (object; review/suggestion fields, `{}` for comments), `createdAt`, `updatedAt`.
+
+`status`: comment and review rows use `open | resolved | orphaned` (`orphaned` = the anchor's quote cannot be found any more; a resolved row stays `resolved`); suggestion rows use `pending | accepted | rejected | failed`.
+
+`anchor` is a W3C text-quote selector over the node's `contentMarkdown`: `{quote, prefix, suffix, start, end}`. `start`/`end` are offsets in **Unicode code points** (Python `str` indices; not JS UTF-16 units), `end` exclusive, both `null` = orphaned; `prefix`/`suffix` are up to 32 code points of context (default `""`). Request validation (`422`): non-empty `quote`, `start`/`end` both set or both null, `end - start == len(quote)`, no extra keys. On create the server resolves the anchor against the node's current content (`api/application/comment_anchors.py:resolve_anchor`): the client's offsets are kept only if `content[start:end] == quote`, else a unique exact `find(quote)` is used, else `start`/`end` are stored `null` and the row is `orphaned`; `prefix`/`suffix` of a resolved anchor are refreshed from the content. The same function is the hook for re-anchoring on `contentMarkdown` edits (a later track).
+
+#### `GET /api/v1/projects/{projectId}/outline/{nodeId}/comments`
+
+Query: `kind`, `status` (optional filters). All live rows of the node, oldest first (`createdAt`, then `id`); group by `threadId` client-side. Returns `Page<Comment>` sized to the result (never windowed). `404` for an unknown project or node.
+
+#### `GET /api/v1/projects/{projectId}/comments`
+
+Same, for the whole project (all live nodes); used for the margin/outline badges.
+
+#### `POST /api/v1/projects/{projectId}/outline/{nodeId}/comments`
+
+Body: `bodyMarkdown` (required, non-blank), `anchor` (optional), `parentId` (optional, makes it a reply). Creates a `kind=comment` row authored by the caller, `201` with the `Comment`. A reply (`parentId` set) joins the root's thread (`threadId` = root id even when replying to a reply) and takes the root's `anchor`; an `anchor` sent with a reply is ignored. `404` if `parentId` is not a live row of this node.
+
+#### `PATCH /api/v1/comments/{commentId}`
+
+Body: `bodyMarkdown`. Author only (`403` otherwise, also for suggestion/review rows); returns the `Comment`.
+
+#### `DELETE /api/v1/comments/{commentId}`
+
+Soft delete, `204`. Author only (`403`); rows with no author (copilot/reviewer cards) can be dismissed by any signed-in user. Deleting a thread root soft-deletes the whole thread; deleting a reply only that reply. Comments of a soft-deleted outline node are not listed.
+
+#### `POST /api/v1/comments/{commentId}/resolve`
+
+Body (optional): `{"resolved": true|false}`, default `true`. `true` sets the thread root's status to `resolved`; `false` reopens it (`open`, or `orphaned` if its anchor is unresolved). Any signed-in user may resolve. `409` for a reply (only a thread root) and for a suggestion row.
+
+Source: `api/application/comments.py:CommentService`, `api/infrastructure/db/comment_repository.py`, `api/presentation/routers/comments.py`
+
 ## Runs
 
 Generation runs: driving the CLI as a subprocess, streaming its progress, and syncing its output back into outline nodes/files. `RunService` (API-side: create/list/get/cancel/export/regenerate/retry/events) is called from the routers below; `GenerationService` (worker-side, `api/worker/__main__.py`) is a separate process that actually claims queued runs and executes them — the two never run in the same process.
