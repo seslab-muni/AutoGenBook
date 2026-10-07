@@ -1,7 +1,7 @@
 import { markdown as markdownLang } from '@codemirror/lang-markdown';
 import { StreamLanguage } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
-import type { EditorState, Text } from '@codemirror/state';
+import { EditorState, Transaction, type Text } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror, { ExternalChange } from '@uiw/react-codemirror';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -82,6 +82,11 @@ export function SectionEditor({
     () => [
       language === 'latex' ? StreamLanguage.define(stex) : markdownLang(),
       EditorView.lineWrapping,
+      // Text applied from outside (server content, an accepted suggestion) is not the user's edit:
+      // undoing it would bring back what the other side replaced, and the next autosave would save that.
+      EditorState.transactionExtender.of((tr) =>
+        tr.annotation(ExternalChange) ? { annotations: Transaction.addToHistory.of(false) } : null,
+      ),
       EditorView.contentAttributes.of({
         'aria-label': language === 'latex' ? 'Section LaTeX source' : 'Section Markdown source',
       }),

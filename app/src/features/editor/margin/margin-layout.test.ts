@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { layoutMargin, type LayoutItem } from './margin-layout';
+import { extraBottom, layoutMargin, type LayoutItem } from './margin-layout';
 
 const item = (id: string, y: number, height = 100): LayoutItem => ({ id, y, height });
 
@@ -67,5 +67,21 @@ describe('layoutMargin', () => {
     });
     expect(tops.get('b')).toBe(50);
     expect(tops.get('c')).toBe(158);
+  });
+});
+
+describe('extraBottom', () => {
+  it('is zero while the cards fit inside the text, and the shortfall once they stack past its end', () => {
+    expect(extraBottom(900, 1200)).toBe(0);
+    expect(extraBottom(1200, 1200)).toBe(0);
+    expect(extraBottom(1500.2, 1200)).toBe(301);
+  });
+
+  it('follows a content height that is revised later (CodeMirror re-measuring unrendered lines)', () => {
+    // First estimate: 12000 tall, cards end at 12400 -> 400 extra. The editor then measures 12405.
+    expect(extraBottom(12400, 12000)).toBe(400);
+    expect(extraBottom(12400, 12405)).toBe(0);
+    // ...and the other way: the content shrank to 11800.
+    expect(extraBottom(12400, 11800)).toBe(600);
   });
 });

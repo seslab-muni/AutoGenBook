@@ -47,6 +47,7 @@ function observe(targets: readonly Element[], listener: () => void): () => void 
 /** Write view: anchors are the ranges painted by `applyWriteHighlights` (or the `<mark>` fallback). */
 export function writeGeometry(region: HTMLElement): MarginGeometry {
   let extra = 0;
+  let spacer: HTMLDivElement | null = null;
   const root = () => region.querySelector<HTMLElement>('[data-markdown-root]');
   return {
     scrollEl: region,
@@ -113,8 +114,18 @@ export function writeGeometry(region: HTMLElement): MarginGeometry {
       else if (box.bottom > view.bottom - 8) region.scrollTop += box.bottom - view.bottom + 48;
     },
     setExtraBottom: (px) => {
+      if (px === extra) return;
       extra = px;
-      region.style.paddingBottom = px > 0 ? `${px}px` : '';
+      // A spacer *inside* the scroll content (padding on the scroll container itself is not part of
+      // its scrollable overflow in every layout, which left the last card's buttons out of reach).
+      if (px > 0) {
+        spacer ??= Object.assign(document.createElement('div'), { ariaHidden: 'true' });
+        spacer.style.height = `${px}px`;
+        spacer.style.flexShrink = '0';
+        region.append(spacer);
+      } else {
+        spacer?.remove();
+      }
     },
     subscribe: (listener) => {
       const stop = observe(
@@ -174,6 +185,7 @@ export function sourceGeometry(view: EditorView): MarginGeometry {
       view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'nearest', yMargin: 48 }) });
     },
     setExtraBottom: (px) => {
+      if (px === extra) return;
       extra = px;
       // `.cm-content` carries its own 4px block padding; the extra space goes below it.
       view.contentDOM.style.paddingBottom = px > 0 ? `${4 + px}px` : '';

@@ -96,11 +96,43 @@ function rangeInPiece(piece: Piece, markdown: string, start: number, end: number
   return range;
 }
 
+/** What each rendered Markdown (root) currently contributes to the document-wide highlight registry. */
+interface Contribution {
+  byKind: Map<string, Range[]>;
+  focused: Range[];
+}
+const contributions = new Map<HTMLElement, Contribution>();
+
+/**
+ * The highlight registry is document-wide, and more than one `MarkdownView` can be mounted (the
+ * export preview, the artifacts list, a reviewer's notes): each name is rebuilt from the union of
+ * every root's ranges, so one instance applying (or cleaning up) never wipes another's.
+ */
+function rebuildRegistry(): void {
+  const registry = (CSS as unknown as { highlights?: HighlightRegistryLike }).highlights;
+  if (!registry) return;
+  const HighlightCtor = (
+    globalThis as unknown as { Highlight: new (...r: Range[]) => HighlightLike }
+  ).Highlight;
+  for (const kind of KINDS) {
+    const ranges = [...contributions.values()].flatMap((entry) => entry.byKind.get(kind) ?? []);
+    if (ranges.length) registry.set(NAME(kind), new HighlightCtor(...ranges));
+    else registry.delete(NAME(kind));
+  }
+  const focused = [...contributions.values()].flatMap((entry) => entry.focused);
+  if (focused.length) {
+    const highlight = new HighlightCtor(...focused);
+    highlight.priority = 10;
+    registry.set(FOCUSED, highlight);
+  } else registry.delete(FOCUSED);
+}
+
 /**
  * Paints `highlights` over `root` (the rendered Markdown, tagged with `data-src-*` by
  * `rehypeAnchorSource`): one Custom Highlight per kind, plus a prioritised one for the focused
  * id. Opaque pieces (math, citation chips) cannot take a text range and get a `data-anchor-hit`
- * attribute instead. Returns a cleanup that removes everything again.
+ * attribute instead. An instance with no highlights does not touch the registry at all. Returns a
+ * cleanup that removes this root's contribution again.
  */
 export function applyWriteHighlights(
   root: HTMLElement,
@@ -108,18 +140,13 @@ export function applyWriteHighlights(
   highlights: readonly HighlightRange[],
   focusedId: string | null,
 ): () => void {
-  const registry = (CSS as unknown as { highlights: HighlightRegistryLike }).highlights;
-  const HighlightCtor = (
-    globalThis as unknown as { Highlight: new (...r: Range[]) => HighlightLike }
-  ).Highlight;
+  if (highlights.length === 0) return () => {};
   const all = pieces(root);
   const entry: Applied = { ranges: new Map(), elements: new Map() };
-  const byKind = new Map<string, Range[]>();
-  const focused: Range[] = [];
+  const contribution: Contribution = { byKind: new Map(), focused: [] };
   const hits = new Map<HTMLElement, { ids: string[]; kind: string }>();
 
   for (const highlight of highlights) {
-    // First tagged piece that could overlap (pieces are in document order, mostly source order).
     for (const piece of all) {
       if (piece.e <= highlight.start || piece.s >= highlight.end) continue;
       if (piece.el.hasAttribute('data-src-opaque')) {
@@ -136,23 +163,15 @@ export function applyWriteHighlights(
       const list = entry.ranges.get(highlight.id) ?? [];
       list.push(range);
       entry.ranges.set(highlight.id, list);
-      const kindList = byKind.get(highlight.kind) ?? [];
+      const kindList = contribution.byKind.get(highlight.kind) ?? [];
       kindList.push(range);
-      byKind.set(highlight.kind, kindList);
-      if (highlight.id === focusedId) focused.push(range);
+      contribution.byKind.set(highlight.kind, kindList);
+      if (highlight.id === focusedId) contribution.focused.push(range);
     }
   }
 
-  for (const kind of KINDS) {
-    const ranges = byKind.get(kind);
-    if (ranges?.length) registry.set(NAME(kind), new HighlightCtor(...ranges));
-    else registry.delete(NAME(kind));
-  }
-  if (focused.length) {
-    const focusHighlight = new HighlightCtor(...focused);
-    focusHighlight.priority = 10;
-    registry.set(FOCUSED, focusHighlight);
-  } else registry.delete(FOCUSED);
+  contributions.set(root, contribution);
+  rebuildRegistry();
 
   for (const [el, hit] of hits) {
     el.setAttribute('data-anchor-hit', hit.ids.join(' '));
@@ -163,8 +182,8 @@ export function applyWriteHighlights(
   for (const listener of listeners) listener();
 
   return () => {
-    for (const kind of KINDS) registry.delete(NAME(kind));
-    registry.delete(FOCUSED);
+    contributions.delete(root);
+    rebuildRegistry();
     for (const el of hits.keys()) {
       el.removeAttribute('data-anchor-hit');
       el.removeAttribute('data-anchor-kind');
@@ -174,25 +193,39 @@ export function applyWriteHighlights(
   };
 }
 
-/** Ids of the highlights covering a collapsed caret at `(node, offset)` or a click on an opaque hit. */
-export function highlightIdsAt(
+function inRect(rect: DOMRect, x: number, y: number): boolean {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+/**
+ * Ids of the highlights under a pointer at `(x, y)`, shortest first: a click on a highlight's own
+ * painted rectangles (not on the blank space after a line, not on the neighbour of a nested
+ * highlight), or on an opaque piece (math, citation chip) that carries one. Never prevents
+ * anything: link and chip clicks go through as usual.
+ */
+export function highlightIdsAtPoint(
   root: HTMLElement,
-  node: Node | null,
-  offset: number,
+  x: number,
+  y: number,
   target: EventTarget | null,
 ): string[] {
-  const ids: string[] = [];
+  const found: { id: string; length: number }[] = [];
   if (target instanceof Element) {
     const hit = target.closest('[data-anchor-hit]');
-    if (hit && root.contains(hit))
-      ids.push(...(hit.getAttribute('data-anchor-hit') ?? '').split(' ').filter(Boolean));
-  }
-  const entry = applied.get(root);
-  if (entry && node && root.contains(node)) {
-    for (const [id, ranges] of entry.ranges) {
-      if (ids.includes(id)) continue;
-      if (ranges.some((range) => range.isPointInRange(node, offset))) ids.push(id);
+    if (hit && root.contains(hit)) {
+      for (const id of (hit.getAttribute('data-anchor-hit') ?? '').split(' ').filter(Boolean)) {
+        found.push({ id, length: 0 });
+      }
     }
   }
-  return ids;
+  const entry = applied.get(root);
+  if (entry) {
+    for (const [id, ranges] of entry.ranges) {
+      if (found.some((candidate) => candidate.id === id)) continue;
+      if (ranges.some((range) => [...range.getClientRects()].some((rect) => inRect(rect, x, y)))) {
+        found.push({ id, length: ranges.reduce((sum, range) => sum + range.toString().length, 0) });
+      }
+    }
+  }
+  return found.sort((a, b) => a.length - b.length).map((candidate) => candidate.id);
 }

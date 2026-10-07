@@ -57,8 +57,6 @@ function useStable<T>(value: T): T {
 }
 
 interface Options {
-  /** `cm` while the Source view owns position tracking, `diff` otherwise (see `useAnchorPositions`). */
-  mode: 'cm' | 'diff';
   /** Bumped when the text was replaced from outside. */
   resetKey: number;
   /** False for LaTeX-only sections: the server anchors against Markdown, so nothing is located. */
@@ -74,7 +72,7 @@ export function useSectionComments(
   projectId: string,
   nodeId: string,
   text: string,
-  { mode, resetKey, anchorsEnabled }: Options,
+  { resetKey, anchorsEnabled }: Options,
 ) {
   const query = useQuery(comments.forNode(projectId, nodeId));
   const filter = useMarginStore((state) => state.filter);
@@ -83,7 +81,7 @@ export function useSectionComments(
 
   const rows = query.data?.items;
   const groups = useMemo(() => groupThreads(rows ?? []), [rows]);
-  const draftAnchor = composer?.kind === 'comment' ? composer.anchor : null;
+  const draftAnchor = composer?.anchor ?? null;
   const items = useMemo<AnchorItem[]>(
     () => [
       ...(anchorsEnabled
@@ -93,7 +91,7 @@ export function useSectionComments(
     ],
     [groups, draftAnchor, anchorsEnabled],
   );
-  const { positions, pending, reportMapped } = useAnchorPositions(items, text, { mode, resetKey });
+  const { positions, pending, reportMapped } = useAnchorPositions(items, text, { resetKey });
 
   const threads = useMemo<MarginThread[]>(
     () =>
@@ -139,7 +137,7 @@ export function useSectionComments(
     ),
     ...((): SectionHighlight[] => {
       const range: TextRange | null = positions.get(DRAFT_ID) ?? null;
-      return composer?.kind === 'comment' && range
+      return composer && range
         ? [{ id: DRAFT_ID, kind: 'draft', start: range.start, end: range.end, hidden: false }]
         : [];
     })(),

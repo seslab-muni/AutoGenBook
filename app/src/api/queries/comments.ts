@@ -7,11 +7,19 @@ import { authKeys, projectKeys } from './keys';
 
 type CommentPage = Page<Comment>;
 
+/**
+ * How often an open section's threads (and the outline's badge counts) are fetched again, so a
+ * second user's comment or reply shows up without any action. TanStack Query pauses it while the
+ * tab is hidden (`refetchIntervalInBackground` is off).
+ */
+export const COLLABORATION_POLL_MS = 15_000;
+
 export const comments = {
   /** Every live thread of one node (root plus replies, oldest first), whatever its status. */
   forNode: (projectId: string, nodeId: string) =>
     queryOptions({
       queryKey: projectKeys.nodeComments(projectId, nodeId),
+      refetchInterval: COLLABORATION_POLL_MS,
       queryFn: () =>
         unwrap(
           apiClient.GET('/api/v1/projects/{project_id}/outline/{node_id}/comments', {
@@ -157,6 +165,29 @@ export function useCreateCommentMutation(
       if (!context || !optimistic) return;
       queryClient.setQueryData(projectKeys.nodeComments(projectId, nodeId), context.previous);
       bumpOpenCount(queryClient, projectId, nodeId, -context.bumped);
+    },
+    onSuccess: (comment) => {
+      // A composer that waited for the server closes the moment this resolves: put the row in the
+      // cache first so the card and highlight do not vanish until the refetch lands.
+      if (optimistic) return;
+      let bumped = 0;
+      patchComments(queryClient, projectId, nodeId, (items) => {
+        if (items.some((item) => item.id === comment.id)) return items;
+        if (comment.parentId === null) {
+          if (countsAsOpen(comment)) bumped = 1;
+          return [...items, comment];
+        }
+        const next = items.map((item) =>
+          item.threadId === comment.threadId ? { ...item, status: comment.status } : item,
+        );
+        let last = -1;
+        next.forEach((item, i) => {
+          if (item.threadId === comment.threadId) last = i;
+        });
+        next.splice(last + 1, 0, comment);
+        return next;
+      });
+      bumpOpenCount(queryClient, projectId, nodeId, bumped);
     },
     onSettled: () => invalidateAfterWrite(queryClient, projectId, nodeId),
   });

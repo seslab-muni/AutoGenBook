@@ -20,7 +20,7 @@ import {
 import { remarkCallouts, remarkCitations } from '@/features/editor/lib/remark-plugins';
 import {
   applyWriteHighlights,
-  highlightIdsAt,
+  highlightIdsAtPoint,
   supportsCustomHighlights,
 } from '@/features/editor/lib/write-highlights';
 import { mathAwareSchema } from '@/features/editor/lib/sanitize-schema';
@@ -356,10 +356,11 @@ export const MarkdownView = memo(function MarkdownView({
     if (!onAnchorClick || !root) return;
     let ids: string[] = [];
     if (custom) {
-      // Highlights are not elements: hit-test the caret a plain click leaves behind.
+      // Highlights are not elements: hit-test the painted rectangles under the pointer, but leave a
+      // drag-selection's click alone.
       const selection = document.getSelection();
-      if (selection && selection.isCollapsed) {
-        ids = highlightIdsAt(root, selection.anchorNode, selection.anchorOffset, event.target);
+      if (!selection || selection.isCollapsed) {
+        ids = highlightIdsAtPoint(root, event.clientX, event.clientY, event.target);
       }
     } else if (event.target instanceof Element) {
       const hit = event.target.closest('[data-anchor-ids]');

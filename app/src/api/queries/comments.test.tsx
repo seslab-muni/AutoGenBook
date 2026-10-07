@@ -95,4 +95,28 @@ describe('comment queries', () => {
     await waitFor(() => expect(result.current.threads.data?.items).toHaveLength(0));
     expect(openCount(result.current.flat.data)).toBe(0);
   });
+
+  it('a non-optimistic create has its row in the cache the moment it resolves (no gap before the refetch)', async () => {
+    const { server } = await import('@/mocks/server');
+    const { http, HttpResponse, delay } = await import('msw');
+    // Hold the refetch back so the cache could only have the row from the POST response.
+    let posted = false;
+    server.use(
+      http.get('*/api/v1/projects/:projectId/outline/:nodeId/comments', async () => {
+        if (posted) await delay(500);
+        return HttpResponse.json({ items: [], total: 0, limit: 0, offset: 0 });
+      }),
+    );
+    const { result, queryClient } = renderWithQueryClient(() => ({
+      threads: useQuery(comments.forNode(PROJECT_ID, NODE_ID)),
+      create: useCreateCommentMutation(PROJECT_ID, NODE_ID, { optimistic: false }),
+    }));
+    await waitFor(() => expect(result.current.threads.isSuccess).toBe(true));
+    posted = true;
+    const created = await result.current.create.mutateAsync({ bodyMarkdown: 'No gap' });
+    const cached = queryClient.getQueryData<{ items: { id: string }[] }>(
+      comments.forNode(PROJECT_ID, NODE_ID).queryKey,
+    );
+    expect(cached?.items.map((c) => c.id)).toContain(created.id);
+  });
 });

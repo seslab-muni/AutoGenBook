@@ -19,6 +19,7 @@ const CTX: MarginCardContext = {
   restoreEditorFocus: vi.fn(),
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
+  flushEdits: () => Promise.resolve(),
 };
 
 function geometry(y: Record<string, number>): MarginGeometry {

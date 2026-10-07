@@ -34,6 +34,10 @@ interface SelectionLayerProps {
   /** Focus the card of the highlight the caret is in. */
   onFocusThread: (id: string) => void;
   copilotActions: boolean;
+  /** `Prompt…` (phase 4): with the flag on and this supplied, the toolbar shows it. */
+  onPrompt?: (() => void) | undefined;
+  /** A quick chip (`Add proof`, ...; phase 4): likewise. */
+  onChip?: ((chip: string) => void) | undefined;
 }
 
 /**
@@ -56,6 +60,8 @@ export function SelectionLayer({
   onComment,
   onFocusThread,
   copilotActions,
+  onPrompt,
+  onChip,
 }: SelectionLayerProps) {
   const selection = useEditorSelectionStore((state) => state.selection);
   useWriteSelection(region, text, view === 'write');
@@ -221,6 +227,8 @@ export function SelectionLayer({
       containerHeight={paneSize.height}
       onComment={startComment}
       copilotActions={copilotActions}
+      onPrompt={onPrompt}
+      onChip={onChip}
     />
   );
 }

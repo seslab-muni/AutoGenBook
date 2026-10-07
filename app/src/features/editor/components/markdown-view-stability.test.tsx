@@ -59,6 +59,45 @@ function Harness({ custom }: { custom: boolean }) {
   );
 }
 
+describe('a second MarkdownView', () => {
+  it("neither wipes nor paints over the first one's highlights, mounted, updated or unmounted", () => {
+    const registry = stubCustomHighlights();
+    const start = MD.indexOf('some words');
+    const first = render(
+      <MarkdownView
+        markdown={MD}
+        anchorMarks={[{ id: 'a', kind: 'comment', start, end: start + 10 }]}
+        sourceMap
+      />,
+    );
+    expect(registry.get('anchor-comment')?.ranges.map((r) => r.toString())).toEqual(['some words']);
+    // The export preview / a reviewer's notes: no highlights of its own.
+    const second = render(<MarkdownView markdown="Other text." />);
+    expect(registry.get('anchor-comment')?.ranges.map((r) => r.toString())).toEqual(['some words']);
+    second.rerender(<MarkdownView markdown="Other text, changed." />);
+    second.unmount();
+    expect(registry.get('anchor-comment')?.ranges.map((r) => r.toString())).toEqual(['some words']);
+    // One with highlights of its own adds to the union and leaves it again on unmount.
+    const third = render(
+      <MarkdownView
+        markdown="Third document here."
+        anchorMarks={[{ id: 'b', kind: 'comment', start: 0, end: 5 }]}
+        sourceMap
+      />,
+    );
+    expect(
+      registry
+        .get('anchor-comment')
+        ?.ranges.map((r) => r.toString())
+        .sort(),
+    ).toEqual(['Third', 'some words']);
+    third.unmount();
+    expect(registry.get('anchor-comment')?.ranges.map((r) => r.toString())).toEqual(['some words']);
+    first.unmount();
+    expect(registry.size).toBe(0);
+  });
+});
+
 describe('MarkdownView DOM stability', () => {
   describe('with the CSS Custom Highlight API', () => {
     beforeEach(() => {
@@ -104,35 +143,38 @@ describe('MarkdownView DOM stability', () => {
       expect(registry.size).toBe(0);
     });
 
-    it('maps a click on a highlight to its id through the caret it leaves', () => {
+    it('hit-tests clicks against the painted rectangles: inside, outside, and nested (shortest wins)', () => {
       const onAnchorClick = vi.fn();
-      const start = MD.indexOf('some words');
+      const outerStart = MD.indexOf('has some words in it');
+      const innerStart = MD.indexOf('some words');
       const { container } = render(
         <MarkdownView
           markdown={MD}
-          anchorMarks={[{ id: 'a', kind: 'comment', start, end: start + 10 }]}
+          anchorMarks={[
+            { id: 'outer', kind: 'comment', start: outerStart, end: outerStart + 20 },
+            { id: 'inner', kind: 'review', start: innerStart, end: innerStart + 10 },
+          ]}
           sourceMap
           onAnchorClick={onAnchorClick}
         />,
       );
-      const piece = [...container.querySelectorAll('[data-src-start]')].find((el) =>
-        el.textContent?.includes('some words'),
-      )!;
-      const text = piece.firstChild as Text;
-      const at = text.data.indexOf('some words') + 3;
-      const range = document.createRange();
-      range.setStart(text, at);
-      range.collapse(true);
-      document.getSelection()!.removeAllRanges();
-      document.getSelection()!.addRange(range);
-      fireEvent.click(piece);
-      expect(onAnchorClick).toHaveBeenCalledWith(['a']);
+      // jsdom has no layout: give each range one rectangle, 10px per character from x=0.
+      vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (this: Range) {
+        const width = this.toString().length * 10;
+        const left = this.toString() === 'some words' ? 40 : 0;
+        const rect = { left, right: left + width, top: 0, bottom: 20, width, height: 20 };
+        return [rect] as unknown as DOMRectList;
+      });
+      const piece = container.querySelector('[data-src-start]')!;
+      fireEvent.click(piece, { clientX: 60, clientY: 10 });
+      expect(onAnchorClick).toHaveBeenLastCalledWith(['inner', 'outer']);
       onAnchorClick.mockClear();
-      range.setStart(text, 0);
-      range.collapse(true);
-      document.getSelection()!.removeAllRanges();
-      document.getSelection()!.addRange(range);
-      fireEvent.click(piece);
+      fireEvent.click(piece, { clientX: 5, clientY: 10 });
+      expect(onAnchorClick).toHaveBeenLastCalledWith(['outer']);
+      onAnchorClick.mockClear();
+      // Far to the right of the line, or below it: nothing.
+      fireEvent.click(piece, { clientX: 400, clientY: 10 });
+      fireEvent.click(piece, { clientX: 60, clientY: 80 });
       expect(onAnchorClick).not.toHaveBeenCalled();
     });
 

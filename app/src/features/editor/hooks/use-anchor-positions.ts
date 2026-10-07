@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   anchorFromUnitRange,
-  diffChange,
-  mapRangeThroughChange,
   resolveAnchorUnits,
   type AnchorInput,
   type TextRange,
@@ -29,13 +27,6 @@ interface State {
 }
 
 interface Options {
-  /**
-   * `cm`: the Source view's decoration field maps positions through real change sets and reports
-   * them with `reportMapped`; text changes are not diffed. `diff`: positions are mapped through
-   * the single span that differs between the old and the new text (the text only changes from
-   * outside there: another user's content, an accepted suggestion).
-   */
-  mode: 'cm' | 'diff';
   /** Bump to say the text was replaced from outside: every anchor is re-resolved from its quote. */
   resetKey: number;
   /** Debounce before unplaced anchors are searched for again after the text changed. */
@@ -58,20 +49,24 @@ function resolveAll(items: readonly AnchorItem[], text: string): Map<string, Tex
 /**
  * Where each anchor sits in the live `text` (UTF-16 offsets), kept right while the section is open.
  *
+ * - While the editor is open, positions come from it: the Source view's decoration field maps them
+ *   through real change sets and reports them with `reportMapped` (the Write view's text only
+ *   changes from outside, which bumps `resetKey`).
  * - A new `items` list (comments loaded or refetched, a reply from someone else, a save after which
- *   the server re-anchored) re-resolves only the rows whose `anchor` object changed (react-query
- *   keeps identity for unchanged ones): rows that did not change keep their local position, so a
- *   refetch landing mid-edit never makes a card jump.
- * - In `diff` mode an edit maps positions through the changed span; an anchor the span swallows is
- *   not given up on but re-resolved from its quote.
+ *   the server re-anchored) re-resolves only rows that are new. A row whose `anchor` object changed
+ *   (the server re-anchored it) keeps its local position when it has one, so a refetch landing
+ *   mid-edit, or while typing inside a commented range, never makes a card or highlight jump; a row
+ *   that has none takes the server's, and an orphan stays orphaned (settled) when the server also
+ *   says it has no place.
  * - Anchors without a position are searched for again (fuzzy included) a moment after the text last
- *   changed, one at a time, never in render: so undoing a deletion brings the card back. Until that
- *   search has failed once they are `pending`, not orphaned.
+ *   changed, one at a time, never in render, at most once per text and anchor: so undoing a
+ *   deletion brings the card back. Until that search has failed once they are `pending`, not
+ *   orphaned.
  *
  * `items` must be memoised by the caller.
  */
 export function useAnchorPositions(items: readonly AnchorItem[], text: string, options: Options) {
-  const { mode, resetKey, retryMs = 350 } = options;
+  const { resetKey, retryMs = 350 } = options;
   const [state, setState] = useState<State>(() => ({
     items,
     text,
@@ -98,26 +93,27 @@ export function useAnchorPositions(items: readonly AnchorItem[], text: string, o
     const settled = new Set<string>();
     for (const item of items) {
       const before = previous.get(item.id);
-      if (before && before.anchor === item.anchor && state.positions.has(item.id)) {
-        positions.set(item.id, state.positions.get(item.id) ?? null);
+      const local = state.positions.get(item.id);
+      if (before && before.anchor === item.anchor && local !== undefined) {
+        positions.set(item.id, local);
         if (state.settled.has(item.id)) settled.add(item.id);
+      } else if (before && local) {
+        // The server re-anchored a row the editor is tracking: the editor's position is the live one.
+        positions.set(item.id, local);
       } else {
-        positions.set(item.id, resolveQuick(text, item.anchor));
+        const range = resolveQuick(text, item.anchor);
+        positions.set(item.id, range);
+        // Still orphaned and nothing new to go on (same text, or the server agrees): not "pending" again.
+        const wasSettled = before !== undefined && state.settled.has(item.id);
+        if (range === null && wasSettled && (state.text === text || item.anchor?.start == null)) {
+          settled.add(item.id);
+        }
       }
     }
     current = { ...state, items, text, positions, anchored: anchoredIds(items), settled };
   } else if (state.text !== text) {
-    let positions = state.positions;
-    if (mode === 'diff') {
-      const change = diffChange(state.text, text);
-      const mapped = new Map<string, TextRange | null>();
-      for (const [id, range] of state.positions) {
-        mapped.set(id, range && change ? mapRangeThroughChange(range, change) : range);
-      }
-      positions = mapped;
-    }
-    // (In `cm` mode the editor reports positions itself.)
-    current = { ...state, text, positions };
+    // The editor reports positions itself; only the text the retries search in moves.
+    current = { ...state, text };
   }
   if (current !== state) setState(current);
 
@@ -169,8 +165,11 @@ export function useAnchorPositions(items: readonly AnchorItem[], text: string, o
   }, [current.text, current.positions, retryMs]);
 
   // Search again for anchors that have no position, once the text has settled.
-  const triedRef = useRef(new Map<string, string>());
+  const triedRef = useRef(new Map<string, { text: string; anchor: AnchorInput | null }>());
   const unlocatedKey = unlocated.join('|');
+  const anchorsKey = unlocated
+    .map((id) => (current.items.find((item) => item.id === id)?.anchor?.start == null ? 'o' : 'p'))
+    .join('');
   const textNow = current.text;
   const itemsNow = current.items;
   useEffect(() => {
@@ -182,8 +181,9 @@ export function useAnchorPositions(items: readonly AnchorItem[], text: string, o
       const id = queue.shift();
       if (cancelled || id === undefined) return;
       const item = itemsNow.find((candidate) => candidate.id === id);
-      if (item?.anchor && triedRef.current.get(id) !== textNow) {
-        triedRef.current.set(id, textNow);
+      const tried = triedRef.current.get(id);
+      if (item?.anchor && (tried?.text !== textNow || tried.anchor !== item.anchor)) {
+        triedRef.current.set(id, { text: textNow, anchor: item.anchor });
         // The server's copy may have gone stale around the user's edits (or have just been orphaned by
         // a save): prefer what the located anchor looked like last, unless the server placed it afresh.
         const remembered = lastGood.current.get(id);
@@ -210,7 +210,7 @@ export function useAnchorPositions(items: readonly AnchorItem[], text: string, o
     };
     // The key restarts the search only when the set of unplaced anchors or the text changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlocatedKey, textNow, retryMs]);
+  }, [unlocatedKey, anchorsKey, current.items, textNow, retryMs]);
 
   const pending = useMemo(
     () => new Set(unlocated.filter((id) => !current.settled.has(id))),

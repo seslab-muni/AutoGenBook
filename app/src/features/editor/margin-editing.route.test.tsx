@@ -61,6 +61,7 @@ beforeEach(() => {
   useEditorStore.setState({ view: 'source' });
   useUiStore.setState({ rightPane: 'margin', copilotOpen: true, rightOverlayOpen: false });
   useMarginStore.getState().reset();
+  useMarginStore.setState({ drafts: {} });
 });
 
 describe('Source view: anchors follow real edits', () => {
@@ -323,11 +324,16 @@ describe('keyboard: a highlight to its card', () => {
 vi.setConfig({ testTimeout: 30000 });
 
 describe('server content changing under an open editor', () => {
-  it('adopts it when there are no unsaved edits, and re-resolves the anchors against it', async () => {
+  it('adopts it when there are no unsaved edits, re-resolves the anchors, and Ctrl+Z does not bring the old text back', async () => {
+    const user = userEvent.setup();
     seed(TEXT, 'theorem statement');
     const rendered = renderRouterApp(NODE_URL);
     await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), LONG);
     await waitFor(() => expect(marks()).toBe('theorem statement'), LONG);
+    let patches = 0;
+    server.events.on('request:start', ({ request }) => {
+      if (request.method === 'PATCH') patches += 1;
+    });
 
     const changed = 'A brand new first line.\n' + TEXT;
     const node = db.outlineNodes.get(NODE)!;
@@ -338,37 +344,104 @@ describe('server content changing under an open editor', () => {
     await waitFor(() => expect(editorView().state.doc.toString()).toBe(changed), LONG);
     await waitFor(() => expect(marks()).toBe('theorem statement'), LONG);
     expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
+
+    // The replace is not the user's edit: undoing it must not revert the other side's change (and
+    // the next autosave must not write that back).
+    await user.click(document.querySelector('.cm-content')!);
+    await user.keyboard('{Control>}z{/Control}');
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(editorView().state.doc.toString()).toBe(changed);
+    expect(patches).toBe(0);
   }, 30000);
 
-  it('keeps unsaved edits and says so instead of overwriting them', async () => {
+  async function openWithConflict() {
     const user = userEvent.setup();
     seed(TEXT, 'theorem statement');
     const rendered = renderRouterApp(NODE_URL);
     await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), LONG);
+    await waitFor(() => expect(marks()).toBe('theorem statement'), LONG);
+    const sent: string[] = [];
+    server.events.on('request:start', async ({ request }) => {
+      if (request.method === 'PATCH') {
+        sent.push(
+          ((await request.clone().json()) as { contentMarkdown?: string }).contentMarkdown ?? '',
+        );
+      }
+    });
     await user.click(document.querySelector('.cm-content')!);
     await user.keyboard('typing');
-    // Held up in flight so the edit is still unsaved when the other change lands.
-    server.use(
-      http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async () => {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        return HttpResponse.json(db.outlineNodes.get(NODE)!);
-      }),
-    );
     const mine = editorView().state.doc.toString();
+    const theirs = 'A new first line.\n' + TEXT;
     const node = db.outlineNodes.get(NODE)!;
-    db.outlineNodes.set(NODE, { ...node, contentMarkdown: 'Somebody else rewrote this.' });
+    db.outlineNodes.set(NODE, { ...node, contentMarkdown: theirs });
     await act(async () => {
       await rendered.queryClient.invalidateQueries({ queryKey: ['projects'] });
     });
     const notice = (await screen.findByText(/changed elsewhere/, {}, LONG)).closest(
       '[role="status"]',
     ) as HTMLElement;
+    return { user, notice, sent, mine, theirs };
+  }
+
+  it('holds autosave while a conflicting change is pending, keeping the unsaved edits', async () => {
+    const { user, sent, mine } = await openWithConflict();
+    // Blur-flush and the 800 ms autosave must not save over the other version.
+    await user.click(screen.getByRole('button', { name: 'Chapter options' }));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(sent).toEqual([]);
     expect(editorView().state.doc.toString()).toBe(mine);
+  }, 30000);
+
+  it('"Load the other version" replaces the draft without saving, and the highlights come back', async () => {
+    const { user, notice, sent, theirs } = await openWithConflict();
     await user.click(within(notice).getByRole('button', { name: 'Load the other version' }));
-    await waitFor(
-      () => expect(editorView().state.doc.toString()).toBe('Somebody else rewrote this.'),
-      LONG,
-    );
+    await waitFor(() => expect(editorView().state.doc.toString()).toBe(theirs), LONG);
+    await waitFor(() => expect(marks()).toBe('theorem statement'), LONG);
     expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(sent).toEqual([]);
+  }, 30000);
+
+  it('"Keep mine" saves the draft over the other version and clears the notice', async () => {
+    const { user, notice, sent, mine } = await openWithConflict();
+    await user.click(within(notice).getByRole('button', { name: 'Keep mine' }));
+    await waitFor(() => expect(sent).toEqual([mine]), LONG);
+    expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
+    expect(editorView().state.doc.toString()).toBe(mine);
+  }, 30000);
+});
+
+describe('unsent composer text survives the composer unmounting', () => {
+  it('a press outside the narrow side sheet closes it, and reopening restores the text', async () => {
+    const user = userEvent.setup();
+    setViewportWidth(1024);
+    seed(TEXT, 'theorem statement');
+    renderRouterApp(NODE_URL);
+    await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), LONG);
+    const view = editorView();
+    act(() => view.dispatch({ selection: { anchor: 0, head: 11 } }));
+    await user.click(await screen.findByRole('button', { name: 'Comment' }));
+    await user.type(await screen.findByRole('textbox', { name: 'New comment' }), 'half a thought');
+    // A press in the editor closes the sheet (the composer unmounts with it).
+    await user.click(document.querySelector('.cm-content')!);
+    expect(screen.queryByRole('complementary', { name: 'Margin' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show right pane' }));
+    expect(await screen.findByRole('textbox', { name: 'New comment' })).toHaveValue(
+      'half a thought',
+    );
+  }, 30000);
+
+  it('switching the right pane to Copilot and back keeps a half-written reply', async () => {
+    const user = userEvent.setup();
+    seed(TEXT, 'theorem statement');
+    renderRouterApp(NODE_URL);
+    await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), LONG);
+    const card = await screen.findByRole('region', { name: /^Comment by Ada/ }, LONG);
+    await user.click(within(card).getByRole('button', { name: 'Reply' }));
+    await user.type(within(card).getByRole('textbox', { name: 'Reply' }), 'draft reply');
+    await user.click(screen.getByRole('radio', { name: 'Copilot' }));
+    await user.click(await screen.findByRole('radio', { name: 'Margin' }));
+    const back = await screen.findByRole('region', { name: /^Comment by Ada/ }, LONG);
+    expect(within(back).getByRole('textbox', { name: 'Reply' })).toHaveValue('draft reply');
   }, 30000);
 });

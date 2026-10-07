@@ -56,3 +56,12 @@ export function layoutMargin(
   }
   return new Map(sorted.map((item, i) => [item.id, tops[i]!]));
 }
+
+/**
+ * Extra scroll space the text pane needs so cards stacked down to `extent` (the lane's height) can be
+ * scrolled into view: the lane mirrors the text pane's scroll position, so a card stacked past the
+ * last line is only reachable if the text can scroll at least that far.
+ */
+export function extraBottom(extent: number, contentHeight: number): number {
+  return Math.max(0, Math.ceil(extent - contentHeight));
+}

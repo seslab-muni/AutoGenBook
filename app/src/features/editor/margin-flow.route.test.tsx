@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { MOCK_USER } from '@/mocks/fixtures';
 import { db } from '@/mocks/db';
+import { server } from '@/mocks/server';
 import { useEditorStore } from '@/stores/editor-store';
 import { useMarginStore } from '@/features/editor/margin/margin-store';
 import { useUiStore } from '@/stores/ui-store';
@@ -117,6 +118,18 @@ describe('Margin workspace (routed, MSW-backed) — comments in the Source view'
     act(() => editorView().dispatch({ changes: { from: from + 7, to: to + 7 } }));
     expect(await screen.findByText('Orphaned', {}, LONG)).toBeInTheDocument();
     expect(document.querySelector('.cm-content .anchor-mark')).toBeNull();
+    // ...and it stays that way past the autosave and the refetch that brings the server's re-anchor
+    // (a new anchor object): still the badge, the note and the struck quote, never a bare pinned card.
+    let patched = false;
+    server.events.on('request:end', ({ request }) => {
+      if (request.method === 'PATCH') patched = true;
+    });
+    await waitFor(() => expect(patched).toBe(true), LONG);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const card = screen.getByRole('region', { name: /\(orphaned\)/ });
+    expect(within(card).getByText('Orphaned')).toBeInTheDocument();
+    expect(within(card).getByText(/gone from the section/)).toBeInTheDocument();
+    expect(card.querySelector('blockquote')?.className).toContain('line-through');
     expect(MOCK_USER.displayName).toBeTruthy();
   }, 30000);
 });

@@ -15,8 +15,8 @@
  *  4. a bounded fuzzy match near seed hits / the stored offset, only for quotes of at least
  *     {@link MIN_FUZZY_CHARS} characters and {@link MIN_FUZZY_WORDS} words; the span is capped at
  *     1.1x the quote, snapped to word boundaries and re-scored as a whole against the threshold.
- *     Quotes longer than {@link HEAD_TAIL_THRESHOLD} match by their first and last
- *     {@link HEAD_TAIL_LEN} characters instead,
+ *     Quotes longer than {@link HEAD_TAIL_THRESHOLD} (500) match by their first and last
+ *     {@link HEAD_TAIL_LEN} characters instead (an alignment of a long quote would take far too long),
  *  5. otherwise orphaned.
  *
  * Whenever a match is found `text.slice(start, end) === quote` holds (in code points): the quote is
@@ -28,7 +28,7 @@ export const FUZZY_THRESHOLD = 0.8;
 export const MIN_FUZZY_CHARS = 12;
 export const MIN_FUZZY_WORDS = 3;
 export const MAX_FUZZY_LEN = 2000;
-export const HEAD_TAIL_THRESHOLD = 2000;
+export const HEAD_TAIL_THRESHOLD = 500;
 export const HEAD_TAIL_LEN = 200;
 const MAX_POSITIONS = 5000;
 const NEAR_WINDOW = 2000;
@@ -552,6 +552,33 @@ interface Scored {
   sim: number;
 }
 
+/**
+ * A fuzzy hit is only believable with something besides the text itself: a meaningful run of the
+ * stored context still sitting around it on at least one side (not a shared space), or the hit
+ * lying where the stored offset predicts. Without that, a near-duplicate sentence elsewhere
+ * ("Let $x_2$ ... $q$." for a deleted "Let $x_1$ ... $p$.") would inherit the comment.
+ */
+function corroborated(
+  text: string,
+  range: TextRange,
+  prefix: string,
+  suffix: string,
+  hint: number | null,
+  n: number,
+): boolean {
+  if (hint !== null && Math.abs(range.start - hint) <= Math.max(120, n)) return true;
+  const run = (side: string, run: number, fromEnd: boolean) => {
+    const used = fromEnd ? side.slice(side.length - run) : side.slice(0, run);
+    return run >= Math.min(16, side.length) && used.trim().length >= 8;
+  };
+  const before = text.slice(Math.max(0, range.start - prefix.length), range.start);
+  const after = text.slice(range.end, range.end + suffix.length);
+  return (
+    (prefix.length > 0 && run(prefix, commonSuffix(before, prefix), true)) ||
+    (suffix.length > 0 && run(suffix, commonPrefix(after, suffix), false))
+  );
+}
+
 function fuzzyEdit(
   text: string,
   quote: string,
@@ -578,6 +605,7 @@ function fuzzyEdit(
       seen.add(key);
       const sim = similarity(quote, text.slice(snapped.start, snapped.end));
       if (sim < FUZZY_THRESHOLD) continue;
+      if (!corroborated(text, snapped, prefix, suffix, hint, n)) continue;
       const ctx =
         contextScore(text, snapped.start, snapped.end, prefix, suffix) /
         Math.max(1, prefix.length + suffix.length);
@@ -638,6 +666,14 @@ function locateFuzzy(
 }
 
 // --------------------------------------------------------------------- resolve
+
+let cachedView: { text: string; view: View } | null = null;
+
+/** The whitespace-collapsed copy of the last text, kept: resolving many anchors against one section builds it once. */
+function collapsedViewFor(text: string): View {
+  if (cachedView?.text !== text) cachedView = { text, view: collapseWhitespace(text) };
+  return cachedView.view;
+}
 
 let cachedIndex: { text: string; index: CodePointIndex } | null = null;
 
@@ -710,7 +746,7 @@ function locateUnits(
 
   const collapsedQuote = collapseString(quote).trim();
   if (collapsedQuote) {
-    const view = collapseWhitespace(text);
+    const view = collapsedViewFor(text);
     const folded = locateExact(
       view,
       collapsedQuote,

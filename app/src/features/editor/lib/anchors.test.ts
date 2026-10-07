@@ -430,3 +430,108 @@ describe('resolver edge cases (review round 1)', () => {
     expect(wrong).toBe(0);
   });
 });
+
+describe('fuzzy matching never adopts a near-duplicate elsewhere', () => {
+  // Varied prose (a deterministic hash per word), so no two stretches share context by accident.
+  const words = [
+    'lorem',
+    'ipsum',
+    'dolor',
+    'amet',
+    'tensor',
+    'kernel',
+    'gradient',
+    'proof',
+    'lemma',
+    'bound',
+    'norm',
+    'basis',
+    'rank',
+    'trace',
+    'graph',
+    'field',
+  ];
+  const filler = (n: number, seed: string) => {
+    let h = 0;
+    for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return (
+      Array.from({ length: n * 5 }, () => {
+        h = (h * 1664525 + 1013904223) >>> 0;
+        return words[(h >>> 8) % words.length];
+      }).join(' ') + '.'
+    );
+  };
+
+  it('a deleted sentence does not move to a similar one 4.8k characters away', () => {
+    const a = 'Let $x_1$ be the smallest root of the polynomial $p$.';
+    const b = 'Let $x_2$ be the smallest root of the polynomial $q$.';
+    const text =
+      filler(40, 'intro ') +
+      ' ' +
+      a +
+      ' ' +
+      filler(40, 'mid ') +
+      ' ' +
+      b +
+      ' ' +
+      filler(10, 'end ');
+    const at = text.indexOf(a);
+    const anchor = makeAnchor(text, at, at + a.length);
+    const edited = text.replace(a + ' ', '');
+    expect(isOrphaned(resolveAnchor(edited, anchor))).toBe(true);
+  });
+
+  it('the gradient weights/biases variant', () => {
+    const a = 'Update the weights using the gradient of the loss with respect to the weights.';
+    const b = 'Update the biases using the gradient of the loss with respect to the biases.';
+    const text =
+      filler(30, 'one ') + ' ' + a + ' ' + filler(60, 'two ') + ' ' + b + ' ' + filler(5, 'three ');
+    const at = text.indexOf(a);
+    const anchor = makeAnchor(text, at, at + a.length);
+    expect(isOrphaned(resolveAnchor(text.replace(a + ' ', ''), anchor))).toBe(true);
+  });
+
+  it('still resolves an in-place edit with the context intact', () => {
+    const a = 'Let $x_1$ be the smallest root of the polynomial $p$.';
+    const text = filler(10, 'intro ') + ' ' + a + ' ' + filler(10, 'tail ');
+    const at = text.indexOf(a);
+    const anchor = makeAnchor(text, at, at + a.length);
+    const edited = text.replace('smallest root', 'smallest real root');
+    const resolved = resolveAnchor(edited, anchor);
+    expect(isOrphaned(resolved)).toBe(false);
+    expect(resolved.quote).toContain('smallest');
+    // ...and after text was added before it (offsets stale), the context finds it.
+    const shifted = 'New opening paragraph. ' + edited;
+    expect(isOrphaned(resolveAnchor(shifted, anchor))).toBe(false);
+  });
+
+  it('seeded near-duplicate property: a deleted sentence never resolves to its near-twin', () => {
+    let seed = 4242;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    const subjects = ['root', 'weight', 'vector', 'matrix', 'operator', 'kernel'];
+    const sentence = (k: number, v: string) =>
+      `Let the ${subjects[k % subjects.length]} number ${v} be the smallest element of the set used here.`;
+    let wrong = 0;
+    for (let round = 0; round < 300; round += 1) {
+      const a = sentence(Math.floor(rand() * 6), String(Math.floor(rand() * 90) + 10));
+      const b = sentence(Math.floor(rand() * 6), String(Math.floor(rand() * 90) + 10));
+      if (a === b) continue;
+      const text = `${filler(8 + Math.floor(rand() * 5), 'p')} ${a} ${filler(40 + Math.floor(rand() * 20), 'q')} ${b} ${filler(6, 'r')}`;
+      const at = text.indexOf(a);
+      const anchor = makeAnchor(text, at, at + a.length);
+      const edited = text.replace(a + ' ', '');
+      const resolved = resolveAnchor(edited, anchor);
+      if (
+        !isOrphaned(resolved) &&
+        resolved.quote.includes('number') &&
+        resolved.start! >= edited.indexOf(b) - 5
+      ) {
+        wrong += 1;
+      }
+    }
+    expect(wrong).toBe(0);
+  });
+});

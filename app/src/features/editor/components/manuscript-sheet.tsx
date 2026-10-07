@@ -112,6 +112,8 @@ export function ManuscriptSheet({
   const [optionsFocusSources, setOptionsFocusSources] = useState(false);
   const setSelection = useEditorSelectionStore((state) => state.setSelection);
   const [composeTick, setComposeTick] = useState(0);
+  /** Bumped after an outside replace-all so the highlights are pushed again onto the new text. */
+  const [pushTick, setPushTick] = useState(0);
   // The text pane's scroll container (Write) and the CodeMirror view (Source): what the margin
   // measures anchors against.
   const [region, setRegion] = useState<HTMLElement | null>(null);
@@ -133,9 +135,11 @@ export function ManuscriptSheet({
   const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
   // What this editor has sent (and so what coming back from the server is not "someone else's change").
   const sentRef = useRef(new Set<string>());
-  const { status, schedule, flush, cancel } = useDebouncedMutation<string>({
+  const { status, schedule, flush, cancel, hold, flushEdits } = useDebouncedMutation<string>({
     onSave: (text) => {
+      // Bounded: only the last few saves matter for recognising our own content coming back.
       sentRef.current.add(text);
+      if (sentRef.current.size > 8) sentRef.current.delete(sentRef.current.values().next().value!);
       return updateMutation.mutateAsync(
         useLatex ? { contentLatex: text } : { contentMarkdown: text },
       );
@@ -221,13 +225,29 @@ export function ManuscriptSheet({
     const unsaved = draftRef.current !== baselineRef.current;
     const ours = sentRef.current.has(serverText) || serverText === draftRef.current;
     if (ours) {
-      // Our own save coming back.
+      // Our own save coming back (or the other side reverted to what we have).
       baselineRef.current = serverText;
+      setIncoming(null);
       return;
     }
     if (!unsaved) adoptServerContent(serverText);
     else setIncoming(serverText);
   }, [serverText, adoptServerContent]);
+
+  // A conflicting change from elsewhere is pending: nothing may be saved until the user has chosen.
+  useEffect(() => {
+    hold(incoming !== null);
+    return () => hold(false);
+  }, [incoming, hold]);
+
+  /** "Keep mine": the other version is deliberately overwritten by the draft. */
+  const keepMine = useCallback(() => {
+    if (incoming !== null) baselineRef.current = incoming;
+    setIncoming(null);
+    hold(false);
+    schedule(draftRef.current);
+    flush();
+  }, [incoming, hold, schedule, flush]);
 
   // ---- margin: comments anchored to ranges of the text (issue #182, phase 2) ------------------
   const marginHost = useMarginHost();
@@ -235,7 +255,6 @@ export function ManuscriptSheet({
   // The server anchors against `contentMarkdown` only: a LaTeX-only section gets no range comments.
   const anchorsEnabled = !useLatex;
   const section = useSectionComments(projectId, node.id, draft, {
-    mode: view === 'source' && cmView ? 'cm' : 'diff',
     resetKey,
     anchorsEnabled,
   });
@@ -273,7 +292,7 @@ export function ManuscriptSheet({
       if (effects.length > 0) cmView.dispatch({ effects });
     }
     return () => cmView.dom.removeEventListener('compositionend', onCompositionEnd);
-  }, [view, cmView, section.highlights, focusedId, composeTick]);
+  }, [view, cmView, section.highlights, focusedId, composeTick, pushTick]);
 
   // The editor reports where tracked ranges went after each edit. A replace-all from outside says
   // nothing about that: the anchors are re-resolved from their quotes instead (`resetKey`).
@@ -281,6 +300,8 @@ export function ManuscriptSheet({
   const handleHighlightsMapped = useCallback(
     (ranges: Map<string, { start: number; end: number } | null>, external: boolean) => {
       if (!external) reportMapped(ranges);
+      // The replace collapsed every tracked range: push the freshly resolved ones once it has landed.
+      else setPushTick((tick) => tick + 1);
     },
     [reportMapped],
   );
@@ -327,8 +348,17 @@ export function ManuscriptSheet({
       applyServerContent: adoptServerContent,
       // eslint-disable-next-line react-hooks/refs
       hasUnsavedEdits,
+      flushEdits,
     }),
-    [projectId, node.id, me?.id, restoreEditorFocus, adoptServerContent, hasUnsavedEdits],
+    [
+      projectId,
+      node.id,
+      me?.id,
+      restoreEditorFocus,
+      adoptServerContent,
+      hasUnsavedEdits,
+      flushEdits,
+    ],
   );
 
   const startComment = useCallback(
@@ -449,8 +479,11 @@ export function ManuscriptSheet({
           <Info className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="min-w-0 flex-1">
             This section was changed elsewhere (another editor, or an accepted suggestion). Your
-            unsaved edits are kept; saving them will overwrite that change.
+            unsaved edits are kept and nothing is saved until you choose.
           </span>
+          <Button type="button" size="xs" variant="outline" onClick={keepMine}>
+            Keep mine
+          </Button>
           <Button
             type="button"
             size="xs"

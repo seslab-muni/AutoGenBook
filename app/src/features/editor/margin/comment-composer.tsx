@@ -1,7 +1,8 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { useMarginStore } from './margin-store';
 import { problemMessage } from './errors';
 
 export const MAX_COMMENT_LENGTH = 20000;
@@ -12,6 +13,11 @@ interface CommentComposerProps {
   placeholder?: string;
   submitLabel?: string;
   initialValue?: string;
+  /**
+   * Where the unsent text is kept in the margin store (`nodeId:scope`), so it survives this
+   * composer unmounting. Cleared on a successful send and on cancel.
+   */
+  draftKey?: string;
   autoFocus?: boolean;
   /**
    * Sends the text. The composer stays open, keeping the text, while this runs and again if it
@@ -31,17 +37,26 @@ export function CommentComposer({
   placeholder = 'Write a comment… Markdown is supported.',
   submitLabel = 'Comment',
   initialValue = '',
+  draftKey,
   autoFocus = true,
   onSubmit,
   onCancel,
 }: CommentComposerProps) {
   const [value, setValue] = useState(initialValue);
+  const setDraftText = useMarginStore((state) => state.setDraftText);
+  const clearDraftText = useMarginStore((state) => state.clearDraftText);
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
   const hintId = useId();
   const errorId = useId();
   const blank = value.trim().length === 0;
+  // Opening on existing text (an edit, a restored draft): the caret goes to the end, not the start.
+  useEffect(() => {
+    const element = textarea.current;
+    if (element && autoFocus) element.setSelectionRange(element.value.length, element.value.length);
+  }, [autoFocus]);
 
   async function submit() {
     if (blank || inFlight.current) return;
@@ -50,6 +65,7 @@ export function CommentComposer({
     setError(null);
     try {
       await onSubmit(value.trim());
+      if (draftKey) clearDraftText(draftKey);
     } catch (failure) {
       setError(problemMessage(failure));
       inFlight.current = false;
@@ -58,10 +74,16 @@ export function CommentComposer({
     // On success the caller unmounts this composer; there is nothing left to reset.
   }
 
+  function cancel() {
+    if (draftKey) clearDraftText(draftKey);
+    onCancel();
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <Textarea
         // The composer opens on a deliberate user action (Comment / Reply / Edit), so moving focus to it is the point.
+        ref={textarea}
         autoFocus={autoFocus}
         aria-label={label}
         aria-describedby={error ? `${hintId} ${errorId}` : hintId}
@@ -71,7 +93,10 @@ export function CommentComposer({
         value={value}
         readOnly={busy}
         className="min-h-16 bg-background text-sm"
-        onChange={(event) => setValue(event.target.value)}
+        onChange={(event) => {
+          setValue(event.target.value);
+          if (draftKey) setDraftText(draftKey, event.target.value);
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
@@ -79,7 +104,7 @@ export function CommentComposer({
           } else if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
-            if (!busy) onCancel();
+            if (!busy) cancel();
           }
         }}
       />
@@ -93,7 +118,7 @@ export function CommentComposer({
           Ctrl+Enter to send · Esc to cancel
         </span>
         <div className="flex gap-1.5">
-          <Button type="button" variant="ghost" size="xs" onClick={onCancel} disabled={busy}>
+          <Button type="button" variant="ghost" size="xs" onClick={cancel} disabled={busy}>
             Cancel
           </Button>
           <Button type="button" size="xs" onClick={() => void submit()} disabled={blank || busy}>

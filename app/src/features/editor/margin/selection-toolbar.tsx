@@ -15,10 +15,13 @@ interface SelectionToolbarProps {
   containerWidth: number;
   containerHeight?: number;
   onComment: () => void;
-  /** `Prompt…` and the quick chips (phase 4); see `flags.ts`. Off: only `Comment` renders. */
+  /**
+   * `Prompt…` and the quick chips (phase 4); see `flags.ts`. Each renders only with the flag on *and*
+   * its handler supplied; with neither, only `Comment` renders.
+   */
   copilotActions?: boolean;
-  onPrompt?: () => void;
-  onChip?: (chip: string) => void;
+  onPrompt?: (() => void) | undefined;
+  onChip?: ((chip: string) => void) | undefined;
 }
 
 /**
@@ -70,18 +73,20 @@ export function SelectionToolbar({
         <MessageSquarePlus />
         Comment
       </Button>
-      {copilotActions ? (
+      {copilotActions && onPrompt ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="text-background hover:bg-background/15 hover:text-background"
+          onClick={onPrompt}
+        >
+          <Sparkles />
+          Prompt…
+        </Button>
+      ) : null}
+      {copilotActions && onChip ? (
         <>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="text-background hover:bg-background/15 hover:text-background"
-            onClick={onPrompt}
-          >
-            <Sparkles />
-            Prompt…
-          </Button>
           {QUICK_CHIPS.map((chip) => (
             <Button
               key={chip}
@@ -89,7 +94,7 @@ export function SelectionToolbar({
               variant="ghost"
               size="xs"
               className="text-background hover:bg-background/15 hover:text-background"
-              onClick={() => onChip?.(chip)}
+              onClick={() => onChip(chip)}
             >
               {chip}
             </Button>

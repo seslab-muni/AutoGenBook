@@ -24,6 +24,17 @@ export interface MarginCardContext {
   applyServerContent: (markdown: string) => void;
   /** True while the editor holds edits the server has not seen (an Accept should warn instead of clobbering them). */
   hasUnsavedEdits: () => boolean;
+  /**
+   * Saves what is pending and resolves once nothing is pending or in flight (immediately when there
+   * is nothing). Rejects if the save fails, or while saving is on hold for an unresolved conflict
+   * with a change from elsewhere. An Accept awaits this before asking the server to rewrite the text.
+   */
+  flushEdits: () => Promise<void>;
+  /**
+   * `Send to Copilot` on a thread (phase 4). The button renders only when the copilot flag is on
+   * *and* this is supplied, so flipping the flag can never ship a dead button.
+   */
+  onSendToCopilot?: ((thread: MarginThread) => void) | undefined;
 }
 
 export interface MarginCardPartProps {

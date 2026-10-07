@@ -8,6 +8,7 @@ import { renderWithProviders } from '@/test/component-test-utils';
 
 import type { MarginCardContext } from './card-registry';
 import { MarginCard } from './margin-card';
+import { useMarginStore } from './margin-store';
 import { makeComment, makeThread } from './test-helpers';
 
 const CTX: MarginCardContext = {
@@ -18,6 +19,7 @@ const CTX: MarginCardContext = {
   restoreEditorFocus: vi.fn(),
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
+  flushEdits: () => Promise.resolve(),
 };
 
 /** Seeds the mock API with a thread (so the real mutations have rows to act on) and renders its card. */
@@ -63,6 +65,7 @@ function renderCard(
 
 beforeEach(() => {
   CTX.restoreEditorFocus = vi.fn();
+  useMarginStore.setState({ drafts: {} });
 });
 
 describe('comment card', () => {
@@ -100,13 +103,74 @@ describe('comment card', () => {
     });
   });
 
-  it('cancels a reply with Escape and returns focus to the text', async () => {
+  it('cancels a reply with Escape and returns focus to the Reply button', async () => {
     const user = userEvent.setup();
     renderCard();
     await user.click(screen.getByRole('button', { name: 'Reply' }));
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('textbox', { name: 'Reply' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reply' })).toHaveFocus());
+  });
+
+  it('returns focus to the Reply button after a reply is sent', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('button', { name: 'Reply' }));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Reply' }),
+      'ok{Control>}{Enter}{/Control}',
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reply' })).toHaveFocus());
+  });
+
+  it('returns focus to the Edit button after an edit is saved', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('button', { name: /^Edit comment by/ }));
+    const box = screen.getByRole('textbox', { name: /^Edit comment by/ });
+    expect((box as HTMLTextAreaElement).selectionStart).toBe(
+      (box as HTMLTextAreaElement).value.length,
+    );
+    await user.type(box, '!{Control>}{Enter}{/Control}');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Edit comment by/ })).toHaveFocus(),
+    );
+  });
+
+  it('keeps focus on the card after a reply is deleted, and on the Delete button after Escape in the dialog', async () => {
+    const user = userEvent.setup();
+    renderCard({ replies: [{ bodyMarkdown: 'my reply' }] });
+    const card = screen.getByRole('region', { name: /^Comment by/ });
+    const deletes = screen.getAllByRole('button', { name: /^Delete comment by/ });
+    await user.click(deletes[1]!);
+    await waitFor(() => expect(db.comments.has('reply-0')).toBe(false));
+    await waitFor(() => expect(card).toHaveFocus());
+
+    const rootDelete = screen.getAllByRole('button', { name: /^Delete comment by/ })[0]!;
+    await user.click(rootDelete);
+    await screen.findByRole('alertdialog');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(rootDelete).toHaveFocus());
+  });
+
+  it('sends focus back to the text when resolving hides the card, and when a thread is deleted', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('button', { name: 'Resolve' }));
     expect(CTX.restoreEditorFocus).toHaveBeenCalled();
+  });
+
+  it('keeps an unsent reply when the card unmounts, and reopens on it', async () => {
+    const user = userEvent.setup();
+    const first = renderCard();
+    await user.click(screen.getByRole('button', { name: 'Reply' }));
+    await user.type(screen.getByRole('textbox', { name: 'Reply' }), 'half written');
+    first.unmount();
+    renderCard();
+    expect(screen.getByRole('textbox', { name: 'Reply' })).toHaveValue('half written');
+    // Cancelling is explicit: the text is dropped.
+    await user.keyboard('{Escape}');
+    expect(useMarginStore.getState().drafts).toEqual({});
   });
 
   it('resolves and reopens', async () => {
@@ -176,12 +240,18 @@ describe('comment card', () => {
     expect(screen.queryByRole('button', { name: /^Delete comment/ })).not.toBeInTheDocument();
   });
 
-  it('hides Send to Copilot until the copilot flag is on', () => {
-    const { unmount } = renderCard();
+  it('shows Send to Copilot only with the flag on AND a handler', async () => {
+    const user = userEvent.setup();
+    const first = renderCard();
     expect(screen.queryByRole('button', { name: 'Send to Copilot' })).not.toBeInTheDocument();
-    unmount();
-    renderCard({ ctx: { copilotActions: true } });
-    expect(screen.getByRole('button', { name: 'Send to Copilot' })).toBeInTheDocument();
+    first.unmount();
+    const second = renderCard({ ctx: { copilotActions: true } });
+    expect(screen.queryByRole('button', { name: 'Send to Copilot' })).not.toBeInTheDocument();
+    second.unmount();
+    const onSendToCopilot = vi.fn();
+    renderCard({ ctx: { copilotActions: true, onSendToCopilot } });
+    await user.click(screen.getByRole('button', { name: 'Send to Copilot' }));
+    expect(onSendToCopilot).toHaveBeenCalledWith(expect.objectContaining({ id: 'root-1' }));
   });
 
   it('renders suggestion and review cards read-only instead of dropping them', () => {

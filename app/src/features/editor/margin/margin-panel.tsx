@@ -5,21 +5,21 @@ import {
   useMemo,
   useRef,
   useState,
+  type TouchEvent,
   type WheelEvent,
 } from 'react';
 import { CheckCheck, MessageSquarePlus } from 'lucide-react';
 
-import { useCreateCommentMutation } from '@/api/queries/comments';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { TextRange } from '@/features/editor/lib/anchors';
 import { cn } from '@/lib/utils';
 import type { MarginCardContext } from './card-registry';
-import { CommentComposer } from './comment-composer';
+import { COMPOSER_KINDS } from './composer-registry';
 import type { AnchorMeasure, MarginGeometry } from './geometry';
 import { MarginCard } from './margin-card';
-import { layoutMargin, type LayoutItem } from './margin-layout';
+import { extraBottom, layoutMargin, type LayoutItem } from './margin-layout';
 import { DRAFT_ID, useMarginStore, type ComposerDraft } from './margin-store';
 import { isClosed, type MarginFilter, type MarginThread } from './threads';
 
@@ -120,9 +120,6 @@ export function MarginPanel({
   const setShowResolved = useMarginStore((state) => state.setShowResolved);
   const focus = useMarginStore((state) => state.focus);
   const openComposer = useMarginStore((state) => state.openComposer);
-  const closeComposer = useMarginStore((state) => state.closeComposer);
-  // Composers close only once the server accepted the text: no optimistic rows for them.
-  const create = useCreateCommentMutation(ctx.projectId, ctx.nodeId, { optimistic: false });
 
   const closedCount = useMemo(() => threads.filter(isClosed).length, [threads]);
 
@@ -141,9 +138,7 @@ export function MarginPanel({
       ...visible
         .filter((thread) => thread.range)
         .map((thread) => ({ id: thread.id, start: thread.range!.start })),
-      ...(composer?.kind === 'comment' && composerRange
-        ? [{ id: DRAFT_ID, start: composerRange.start }]
-        : []),
+      ...(composer && composerRange ? [{ id: DRAFT_ID, start: composerRange.start }] : []),
     ],
     [visible, composer, composerRange],
   );
@@ -158,7 +153,21 @@ export function MarginPanel({
   const measure = useFrameScheduler(() => {
     if (!geometry) return;
     const next = geometry.measure(anchored);
-    setMeasures((previous) => (sameMeasures(previous, next) ? previous : next));
+    setMeasures((previous) => {
+      // CodeMirror keeps revising its height estimate for lines it has not rendered, which moves
+      // every far-away anchor a little on each viewport change. Re-laying out (and re-rendering)
+      // 150 cards for that is wasted work nobody can see: anchors well away from the viewport keep
+      // their last measure until the text is scrolled near them.
+      const far = 3 * geometry.viewportHeight();
+      const here = geometry.scrollTop();
+      for (const [id, measure] of next) {
+        const before = previous.get(id);
+        if (before && Math.abs(before.y - here) > far && Math.abs(measure.y - here) > far) {
+          next.set(id, before);
+        }
+      }
+      return sameMeasures(previous, next) ? previous : next;
+    });
     if (viewport.current) {
       laneOffset.current =
         geometry.scrollEl.getBoundingClientRect().top -
@@ -217,7 +226,7 @@ export function MarginPanel({
   // ---- layout -------------------------------------------------------------------------
   const ordered = useMemo(() => {
     const items: { id: string; draft: boolean; thread?: MarginThread; placed: boolean }[] = [];
-    if (composer?.kind === 'comment' && composer.anchor === null) {
+    if (composer && composer.anchor === null) {
       items.push({ id: DRAFT_ID, draft: true, placed: false });
     }
     for (const thread of visible) {
@@ -229,7 +238,7 @@ export function MarginPanel({
         items.push({ id: thread.id, draft: false, thread, placed: measures.has(thread.id) });
       }
     }
-    if (composer?.kind === 'comment' && composer.anchor !== null) {
+    if (composer && composer.anchor !== null) {
       items.push({ id: DRAFT_ID, draft: true, placed: measures.has(DRAFT_ID) });
     }
     return items;
@@ -255,11 +264,23 @@ export function MarginPanel({
     return bottom + 24;
   }, [tops]);
 
-  // Cards stacked below the last line must stay reachable: let the text pane scroll that far.
+  // Cards stacked below the last line must stay reachable: let the text pane scroll that far. The
+  // content height is not fixed (CodeMirror revises its estimate for lines it has not rendered, a
+  // late image or KaTeX reflows), so it is recomputed whenever the geometry says the text moved.
+  const extentRef = useRef(extent);
+  useEffect(() => {
+    extentRef.current = extent;
+  }, [extent]);
   useEffect(() => {
     if (!geometry) return undefined;
-    geometry.setExtraBottom(Math.max(0, Math.ceil(extent - geometry.contentHeight())));
-    return () => geometry.setExtraBottom(0);
+    const apply = () =>
+      geometry.setExtraBottom(extraBottom(extentRef.current, geometry.contentHeight()));
+    apply();
+    const stop = geometry.subscribe(apply);
+    return () => {
+      stop();
+      geometry.setExtraBottom(0);
+    };
   }, [geometry, extent]);
 
   // ---- scroll: the lane follows the text pane, never the other way round ---------------------
@@ -277,6 +298,21 @@ export function MarginPanel({
       const unit =
         event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? geometry.viewportHeight() : 1;
       geometry.scrollBy(event.deltaY * unit);
+    },
+    [geometry],
+  );
+
+  // A touch drag over the lane scrolls the text pane, the way a wheel does.
+  const touchY = useRef<number | null>(null);
+  const handleTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    touchY.current = event.touches[0]?.clientY ?? null;
+  }, []);
+  const handleTouchMove = useCallback(
+    (event: TouchEvent<HTMLDivElement>) => {
+      const y = event.touches[0]?.clientY;
+      if (!geometry || y === undefined || touchY.current === null) return;
+      geometry.scrollBy(touchY.current - y);
+      touchY.current = y;
     },
     [geometry],
   );
@@ -374,8 +410,10 @@ export function MarginPanel({
         ref={viewport}
         role="region"
         aria-label="Margin cards"
-        className="relative min-h-0 flex-1 overflow-hidden"
+        className="relative min-h-0 flex-1 touch-none overflow-hidden"
         onWheel={handleWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
         onScroll={handleLaneScroll}
       >
         {error ? (
@@ -401,26 +439,16 @@ export function MarginPanel({
           style={{ height: extent }}
         >
           {ordered.map((item) => {
-            if (item.draft && composer?.kind === 'comment') {
+            if (item.draft && composer) {
+              const { Card } = COMPOSER_KINDS[composer.kind];
               return (
-                <DraftCard
+                <Card
                   key={DRAFT_ID}
+                  draft={composer}
+                  ctx={ctx}
                   register={registerCard}
                   top={tops.map.get(DRAFT_ID)}
                   quote={composer.anchor ? composerQuote : null}
-                  onCancel={() => {
-                    closeComposer();
-                    ctx.restoreEditorFocus();
-                  }}
-                  onSubmit={async (text) => {
-                    const comment = await create.mutateAsync({
-                      bodyMarkdown: text,
-                      anchor: composer.anchor,
-                    });
-                    closeComposer();
-                    focus(comment.id);
-                    ctx.restoreEditorFocus();
-                  }}
                 />
               );
             }
@@ -441,43 +469,5 @@ export function MarginPanel({
         </div>
       </div>
     </aside>
-  );
-}
-
-function DraftCard({
-  top,
-  quote,
-  register,
-  onSubmit,
-  onCancel,
-}: {
-  top: number | undefined;
-  quote: string | null;
-  register: (id: string, element: HTMLElement | null) => void;
-  onSubmit: (text: string) => Promise<void>;
-  onCancel: () => void;
-}) {
-  const ref = useCallback((element: HTMLElement | null) => register(DRAFT_ID, element), [register]);
-  return (
-    <section
-      ref={ref}
-      aria-label="New comment"
-      data-kind="draft"
-      data-focused
-      className={cn(
-        '@container absolute inset-x-3 rounded-lg border border-ring bg-card p-3 text-card-foreground shadow-md',
-        top === undefined && 'invisible',
-      )}
-      style={{ top: top ?? 0 }}
-    >
-      {quote ? (
-        <blockquote className="mb-2 line-clamp-3 border-l-2 pl-2 text-xs text-muted-foreground italic">
-          {quote}
-        </blockquote>
-      ) : (
-        <p className="mb-2 text-xs text-muted-foreground">On the whole section</p>
-      )}
-      <CommentComposer label="New comment" onSubmit={onSubmit} onCancel={onCancel} />
-    </section>
   );
 }
