@@ -332,9 +332,36 @@ export function MarginPanel({
     threadsRef.current = threads;
   }, [threads]);
 
+  // A focused card the lane has pushed out of sight (stacking moved it, or the text pane only just
+  // got the extra space to reach it) is scrolled into view once the layout has settled.
+  const revealRef = useRef<{ id: string; attempts: number } | null>(null);
+  const [revealVersion, setRevealVersion] = useState(0);
+  useEffect(() => {
+    const pending = revealRef.current;
+    if (!pending || !geometry) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const element = elements.current.get(pending.id);
+      const lane = viewport.current;
+      if (!element || !lane || revealRef.current !== pending) return;
+      const box = element.getBoundingClientRect();
+      const view = lane.getBoundingClientRect();
+      if (box.bottom > view.bottom - 8) geometry.scrollBy(box.bottom - view.bottom + 24);
+      else if (box.top < view.top + 8) geometry.scrollBy(box.top - view.top - 24);
+      else {
+        revealRef.current = null;
+        return;
+      }
+      pending.attempts += 1;
+      if (pending.attempts >= 6) revealRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [tops, extent, geometry, revealVersion]);
+
   const handleFocusCard = useCallback(
     (id: string) => {
       focus(id);
+      revealRef.current = { id, attempts: 0 };
+      setRevealVersion((version) => version + 1);
       const thread = threadsRef.current.find((candidate) => candidate.id === id);
       if (thread?.range) geometry?.reveal(id, thread.range.start);
     },

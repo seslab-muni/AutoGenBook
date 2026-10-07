@@ -220,6 +220,39 @@
  * at least 3:1 against the page, over a fill light enough that the text on it keeps 4.5:1. The
  * focused highlight gets a stronger fill and a thicker line. Values were measured, both themes.
  */
+/* Registered, so each fill is resolved against its own surface where it is declared and inherited as a
+ * plain colour: `::highlight()` does not resolve a relative colour against that surface itself. */
+@property --anchor-comment-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-suggestion-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-review-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-draft-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-resolved-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-focused-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+
 :root {
   --anchor-comment-bg: oklch(0.9 0.1 95 / 0.55);
   --anchor-comment-line: oklch(0.5 0.13 70);
@@ -231,22 +264,27 @@
   --anchor-draft-line: oklch(0.45 0.18 266);
   --anchor-resolved-bg: oklch(0.93 0 0 / 0.5);
   --anchor-resolved-line: oklch(0.5 0.02 250);
-  --anchor-focused-bg: oklch(0.86 0.1 90 / 0.55);
+  --anchor-focused-bg: oklch(0.88 0.09 90 / 0.5);
 }
 .dark {
-  /* Same lightness as the page (the CodeMirror dark theme's #282c34 is about 0.3), only the hue
-   * moves: tokens and links on a highlight keep the contrast they have off it. */
-  --anchor-comment-bg: oklch(0.3 0.07 85 / 0.7);
+  /* The fill keeps the lightness of the surface it sits on (the card in Write, CodeMirror's dark
+   * background in Source) and only moves hue and chroma, so tokens and links on a highlight keep
+   * the contrast they have off it. */
+  --anchor-surface: var(--card);
+  --anchor-comment-bg: oklch(from var(--anchor-surface) calc(l + 0.03) 0.12 85 / 0.9);
   --anchor-comment-line: oklch(0.85 0.15 90);
-  --anchor-suggestion-bg: oklch(0.3 0.08 265 / 0.7);
+  --anchor-suggestion-bg: oklch(from var(--anchor-surface) calc(l + 0.03) 0.13 265 / 0.9);
   --anchor-suggestion-line: oklch(0.8 0.12 265);
-  --anchor-review-bg: oklch(0.3 0.08 20 / 0.7);
+  --anchor-review-bg: oklch(from var(--anchor-surface) calc(l + 0.03) 0.13 20 / 0.9);
   --anchor-review-line: oklch(0.82 0.12 20);
-  --anchor-draft-bg: oklch(0.3 0.06 265 / 0.7);
+  --anchor-draft-bg: oklch(from var(--anchor-surface) calc(l + 0.025) 0.1 265 / 0.9);
   --anchor-draft-line: oklch(0.8 0.12 265);
-  --anchor-resolved-bg: oklch(0.3 0 0 / 0.7);
+  --anchor-resolved-bg: oklch(from var(--anchor-surface) calc(l + 0.04) 0 0 / 0.9);
   --anchor-resolved-line: oklch(0.78 0.02 250);
-  --anchor-focused-bg: oklch(0.33 0.09 90 / 0.8);
+  --anchor-focused-bg: oklch(from var(--anchor-surface) calc(l + 0.05) 0.16 90 / 0.95);
+}
+.dark .cm-editor {
+  --anchor-surface: #282c34;
 }
 
 @layer components {
