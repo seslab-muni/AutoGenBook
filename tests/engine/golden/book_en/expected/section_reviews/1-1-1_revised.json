@@ -13,17 +13,6 @@
    "type": "coverage"
   },
   {
-   "description": "Section 1-1-1 reads as a whole-section remark.",
-   "end": null,
-   "quote": "",
-   "replace_from": "",
-   "replace_to": "",
-   "required_fix": "Tighten the prose.",
-   "severity": "minor",
-   "start": null,
-   "type": "style"
-  },
-  {
    "description": "Sections 1-1-1 and 1-1-2 both introduce the approach.",
    "required_fix": "Keep the introduction in 1-1-1 and refer back to it in 1-1-2.",
    "severity": "minor",

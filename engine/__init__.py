@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["EventSink", "ReviseParams", "ReviseRequest", "ReviseResult", "RunConfig", "RunResult", "SectionBrief", "revise", "run"]
+__all__ = [
+    "EventSink", "ReviseClientPool", "ReviseParams", "ReviseRequest", "ReviseResult", "ReviseRetrieval", "RunConfig",
+    "RunResult", "SectionBrief", "interactive_llm_settings", "load_revision_retrieval", "revise", "run",
+]
 __version__ = "0.1.0"
 
 
@@ -36,7 +39,10 @@ def __getattr__(name: str) -> Any:  # lazy, so `import engine.spec` stays light
         from engine import runner
 
         return getattr(runner, name)
-    if name in {"revise", "ReviseRequest", "ReviseParams", "ReviseResult", "ReviseRetrieval", "SectionBrief"}:
+    if name in {
+        "revise", "ReviseRequest", "ReviseParams", "ReviseResult", "ReviseRetrieval", "SectionBrief",
+        "ReviseClientPool", "interactive_llm_settings", "load_revision_retrieval",
+    }:
         from engine import revision
 
         return getattr(revision, name)

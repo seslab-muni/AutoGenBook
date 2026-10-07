@@ -20,6 +20,7 @@ checks) goes through `self.http`, whose transport can be injected
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 import time
 from dataclasses import dataclass
@@ -102,6 +103,19 @@ class LLMClient:
         self._no_temperature: set[str] = set()
         self._no_stream_options: set[str] = set()
         self._no_reasoning_effort: set[str] = set()
+
+    _shared = False
+
+    def fork(self, ledger: UsageLedger, sink: EventSink, settings: LLMSettings | None = None) -> "LLMClient":
+        """A view of this client with its own usage ledger, event sink and
+        (optionally) settings, sharing the HTTP client, limiter and the
+        per-model structured-output capabilities, so one probe per model serves
+        every caller. `aclose()` on the view closes nothing."""
+        clone = copy.copy(self)
+        clone.ledger, clone.sink, clone._shared = ledger, sink, True
+        if settings is not None:
+            clone.settings = settings
+        return clone
 
     # ------------------------------------------------------------ plumbing
     def _on_limit_change(self, old: int, new: int, reason: str) -> None:
@@ -524,6 +538,8 @@ class LLMClient:
                                 usage_of=lambda _data: (0, 0, 0, cost["value"]))
 
     async def aclose(self) -> None:
+        if self._shared:
+            return
         for client in self._clients.values():
             try:
                 await client.close()

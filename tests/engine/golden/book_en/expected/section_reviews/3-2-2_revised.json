@@ -13,17 +13,6 @@
    "type": "coverage"
   },
   {
-   "description": "Section 3-2-2 reads as a whole-section remark.",
-   "end": null,
-   "quote": "",
-   "replace_from": "",
-   "replace_to": "",
-   "required_fix": "Tighten the prose.",
-   "severity": "minor",
-   "start": null,
-   "type": "style"
-  },
-  {
    "description": "Section 3-2-2 uses a synonym instead of the glossary term.",
    "required_fix": "Use 'fake term'.",
    "severity": "minor",

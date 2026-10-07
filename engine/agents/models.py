@@ -111,6 +111,18 @@ class ReviewIssue(BaseModel):
     replace_from: str = Field("", description="When the fix is a literal replacement: the exact text to replace (inside `quote`)")
     replace_to: str = Field("", description="When the fix is a literal replacement: the exact replacement text")
 
+    @field_validator("quote", "replace_from", "replace_to", mode="before")
+    @classmethod
+    def _text(cls, value: Any) -> str:
+        """Providers without strict schemas answer `null` for an unused field."""
+        return value if isinstance(value, str) else ""
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _engine_owned(cls, value: Any) -> None:
+        """Offsets are written by the engine only; whatever a model sends is dropped."""
+        return None
+
     @field_validator("severity", mode="before")
     @classmethod
     def _severity(cls, value: Any) -> str:
@@ -138,6 +150,8 @@ class SectionReview(BaseModel):
             for name in ("quote", "replace_from", "replace_to"):
                 if not issue.get(name):
                     issue.pop(name, None)
+            if issue.get("replace_from"):  # "replace X with nothing" keeps its empty target
+                issue["replace_to"] = issue.get("replace_to", "")
         return data
 
 

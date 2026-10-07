@@ -13,25 +13,25 @@
   },
   {
    "description": "Section 3-2-1 says 'generated' where the glossary has another term.",
-   "end": 3657,
+   "end": 3381,
    "quote": "Fake generated content for Topic 3.2, part 1 (3-2-1), part 7: yet in careful how.",
    "replace_from": "generated",
    "replace_to": "produced",
    "required_fix": "Use the glossary term.",
    "severity": "minor",
-   "start": 3576,
+   "start": 3300,
    "type": "terminology"
   },
   {
-   "description": "Section 3-2-1 reads as a whole-section remark.",
+   "description": "Section 3-2-1 repeats itself in its second paragraph.",
    "end": null,
-   "quote": "",
+   "quote": "account part about connects and precise presented on shows explaining who of",
    "replace_from": "",
    "replace_to": "",
-   "required_fix": "Tighten the prose.",
+   "required_fix": "Delete the repeated paragraph.",
    "severity": "minor",
    "start": null,
-   "type": "style"
+   "type": "redundancy"
   }
  ],
  "ok_to_keep": false,

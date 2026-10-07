@@ -601,6 +601,7 @@ class BookRun:
             node = graph.nodes[key]
             locked = self._materialize_lock(key, node, lock_data.get(key))
             if locked is not None:
+                self._anchor_reviews(key)  # review files left by an earlier run must index the lock's text
                 self.locked.add(key)
                 self.snapshot[key] = locked
                 changed = True
@@ -1001,11 +1002,31 @@ class BookRun:
                 continue
             touched = False
             for issue in data.get("issues") or []:
-                if not isinstance(issue, dict) or not str(issue.get("quote") or "").strip():
+                if not isinstance(issue, dict):
                     continue
-                anchor = resolve_quote(text, str(issue["quote"]))
-                issue["quote"], issue["start"], issue["end"] = anchor["quote"], anchor["start"], anchor["end"]
+                quote = issue.get("quote")
+                if not (isinstance(quote, str) and quote.strip()):
+                    if issue.get("start") is not None or issue.get("end") is not None:
+                        issue["start"] = issue["end"] = None  # never keep offsets of another text
+                        touched = True
+                    continue
+                anchor = resolve_quote(text, quote)
                 touched = True
+                if anchor["start"] is None:
+                    issue["start"] = issue["end"] = None
+                    continue
+                # The quote becomes the text actually matched, so that
+                # text[start:end] == quote. A literal replacement pair is kept
+                # only if it still applies to that text.
+                matched = anchor["quote"]
+                source = str(issue.get("replace_from") or "")
+                if source and source not in matched:
+                    inner = resolve_quote(matched, source, fuzzy=False)
+                    if inner["start"] is None:
+                        issue["replace_from"] = issue["replace_to"] = ""
+                    else:
+                        issue["replace_from"] = inner["quote"]
+                issue["quote"], issue["start"], issue["end"] = matched, anchor["start"], anchor["end"]
             if touched:
                 atomic_write_json(review_path, data)
 

@@ -10,17 +10,6 @@
    "severity": "minor",
    "start": 0,
    "type": "coverage"
-  },
-  {
-   "description": "Section 2-1-2 reads as a whole-section remark.",
-   "end": null,
-   "quote": "",
-   "replace_from": "",
-   "replace_to": "",
-   "required_fix": "Tighten the prose.",
-   "severity": "minor",
-   "start": null,
-   "type": "style"
   }
  ],
  "ok_to_keep": true,

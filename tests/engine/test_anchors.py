@@ -6,7 +6,15 @@ import time
 
 import pytest
 
-from engine.util.anchors import CONTEXT, make_anchor, resolve_anchor, resolve_quote
+from engine.util.anchors import (
+    CONTEXT,
+    LEVELS,
+    make_anchor,
+    resolve_anchor,
+    resolve_anchor_detailed,
+    resolve_quote,
+    resolve_quote_detailed,
+)
 
 EMOJI = "\N{GRINNING FACE}"
 MATH_A = "\N{MATHEMATICAL DOUBLE-STRUCK CAPITAL A}"
@@ -205,8 +213,10 @@ def test_resolve_quote_exact_and_whitespace() -> None:
 
 def test_resolve_quote_first_occurrence_or_context() -> None:
     text = "Twice. It repeats. Then more. It repeats. End."
-    assert resolve_quote(text, "It repeats.")["start"] == text.index("It repeats.")
+    assert resolve_quote(text, "It repeats.")["start"] is None  # short and ambiguous: orphan, not a guess
     assert resolve_quote(text, "It repeats.", prefix="Then more. ")["start"] == text.rindex("It repeats.")
+    long = "Twice over. This sentence is long enough to count as a quote. Then more. This sentence is long enough to count as a quote. End."
+    assert resolve_quote(long, "This sentence is long enough to count as a quote.")["start"] == long.index("This sentence")  # same text: first
 
 
 @pytest.mark.parametrize(
@@ -263,7 +273,7 @@ def test_resolve_quote_emphasis_in_text_with_astral_prefix() -> None:
     text = f"{EMOJI}{EMOJI} Then **the {MATH_A}-module** is *free* of rank two."
     r = resolve_quote(text, f"the {MATH_A}-module is free of rank two")
     _check(text, r)
-    assert r["start"] == text.index("the ")
+    assert r["start"] == text.index("**the")  # the match does not stop inside the opening `**`
     assert r["end"] == len(text) - 1
 
 
@@ -297,3 +307,183 @@ def test_performance_many_repeated_seed_hits() -> None:
     t0 = time.perf_counter()
     resolve_anchor(big, anchor)
     assert time.perf_counter() - t0 < 2.0
+
+
+# ============================================================ review round 1
+def _detail(text: str, quote: str, **kw):
+    anchor, level = resolve_quote_detailed(text, quote, **kw)
+    assert level in LEVELS
+    return anchor, level
+
+
+@pytest.mark.parametrize(
+    "text, quote",
+    [
+        ("the cat sat on the mat", '"a"'),
+        ("the party was great", "'art'"),
+        ("born in 2015, died in 2019", "5."),
+        ("This was a test of things", "is"),
+        ("It was a long day. It was a bad day.", "It ... a"),
+        ("Alpha beta gamma delta. Epsilon zeta eta theta. Iota kappa lambda mu.", "Alpha beta gamma ... lambda mu"),
+    ],
+)
+def test_resolve_quote_has_no_false_positives_on_short_or_weak_quotes(text: str, quote: str) -> None:
+    anchor, level = _detail(text, quote)
+    assert anchor["start"] is None and level == "orphan", anchor
+
+
+def test_short_quote_needs_word_boundaries_and_a_single_occurrence() -> None:
+    assert resolve_quote("The mouse sat. It is fine here.", "mouse")["start"] == 4
+    assert resolve_quote("The mouse and the other mouse.", "mouse")["start"] is None  # two words: ambiguous
+    assert resolve_quote("The mouse and the other mouse.", "mouse", prefix="other ")["start"] == 24
+    assert resolve_quote("mousetrap theory", "mouse")["start"] is None  # inside a word
+    assert resolve_quote("The cat sat on it.", "cat")["start"] is None  # three characters, nothing to vouch for the place
+    assert resolve_quote("The cat sat on it.", "cat", prefix="The ")["start"] == 4
+
+
+def test_ellipsis_paraphrase_does_not_swallow_a_long_span() -> None:
+    filler = "Some unrelated sentence about nothing in particular. " * 25
+    text = f"The generators of the stabilizer group {filler}and so the code space is nontrivial."
+    anchor, _ = _detail(text, "The generators of the stabilizer group ... then the code space is trivial")
+    assert anchor["start"] is None
+    ok, level = _detail(text, "The generators of the stabilizer group ... and so the code space is nontrivial.")
+    assert ok["start"] is None  # 1300 characters elided: more than a quote may stand for
+
+
+def test_stored_offsets_without_context_agreement_do_not_pin_a_wrong_duplicate() -> None:
+    text = "x = 1\nx = 2\nx = 3\n"
+    start = text.index("x = 2")
+    anchor = make_anchor(text, start, start + 1)  # the `x` of line 2
+    edited = text.replace("x = 1\n", "")
+    assert edited[start:start + 1] == "x"  # the stored offsets point at an `x` ... of line 3's neighbour
+    r, level = resolve_anchor_detailed(edited, anchor)
+    assert r["start"] == edited.index("x = 2") and level == "exact"
+
+
+def test_stored_offsets_pick_the_right_sentence_when_the_text_before_changed() -> None:
+    text = "Intro. The model is good for small inputs. Middle part. The model is bad for large inputs. End."
+    quote = "The model is"
+    start = text.rindex(quote)
+    anchor = make_anchor(text, start, start + len(quote))
+    edited = text.replace("Intro. ", "Intro. A short added remark here. ", 1).replace("The model is good for small inputs. ", "")
+    r = resolve_anchor(edited, anchor)
+    assert r["start"] == edited.rindex(quote) and edited[r["end"]:].startswith(" bad")
+
+
+def test_stored_offsets_are_trusted_when_context_agrees_or_quote_is_unique() -> None:
+    text = "One line.\nSame words appear here today.\nSame words appear here today.\n"
+    start = text.rindex("Same words appear here today.")
+    a = make_anchor(text, start, start + len("Same words appear here today."))
+    r, level = resolve_anchor_detailed(text, a)
+    assert (r["start"], level) == (start, "stored")
+
+
+def test_levels_are_reported() -> None:
+    a = make_anchor(TEXT, *_span(TEXT, SENTENCE))
+    assert resolve_anchor_detailed(TEXT, a)[1] == "stored"
+    assert resolve_anchor_detailed("Pre. " + TEXT, a)[1] == "exact"
+    assert resolve_anchor_detailed(TEXT.replace("must pairwise", "must\n pairwise"), a)[1] == "whitespace"
+    assert resolve_anchor_detailed(TEXT.replace("must pairwise commute", "must always pairwise commute"), a)[1] == "fuzzy"
+    assert resolve_anchor_detailed("unrelated text only", a)[1] == "orphan"
+    assert resolve_quote_detailed(TEXT, f"{LDQ}{SENTENCE}{RDQ}")[1] == "tolerant"
+    assert resolve_quote_detailed(TEXT, SENTENCE)[1] == "exact"
+
+
+def test_nfc_and_nfd_texts_match_with_offsets_in_the_original() -> None:
+    nfd = "Cafe\N{COMBINING ACUTE ACCENT} culture has a long history in the old town."
+    nfc = "Caf\N{LATIN SMALL LETTER E WITH ACUTE} culture has a long history in the old town."
+    r, level = resolve_anchor_detailed(nfd, {"quote": nfc, "prefix": "", "suffix": "", "start": None, "end": None})
+    assert level == "tolerant" and (r["start"], r["end"]) == (0, len(nfd.split(" has")[0]) + len(" has a long history in the old town."))
+    _check(nfd, r)
+    r2 = resolve_anchor(nfc, {"quote": nfd, "prefix": "", "suffix": "", "start": None, "end": None})
+    _check(nfc, r2)
+
+
+@pytest.mark.parametrize("bad", [True, 3.0, "3", -1, 10**9, None])
+def test_non_int_or_out_of_range_offsets_are_ignored(bad) -> None:
+    a = make_anchor(TEXT, *_span(TEXT, SENTENCE))
+    r = resolve_anchor("Pre. " + TEXT, {**a, "start": bad, "end": bad})
+    _check("Pre. " + TEXT, r)
+
+
+def test_markers_next_to_a_tolerant_match_are_not_split() -> None:
+    text = "Intro text. This is **very important** for the reader. More text follows."
+    r = resolve_quote(text, "This is very important for the reader.")
+    _check(text, r)
+    assert r["quote"] == "This is **very important** for the reader."
+    text2 = "Use the **foo_bar** helper and the foo_bar_baz name."
+    r2 = resolve_quote(text2, "Use the foo_bar helper and")
+    assert r2["quote"] == "Use the **foo_bar** helper and"
+    assert resolve_quote(text2, "the foo_bar_baz name")["quote"] == "the foo_bar_baz name"
+
+
+def test_fuzzy_span_stays_close_to_the_quote_and_on_word_boundaries() -> None:
+    sentence = "Each stabilizer generator measures one parity check of the encoded block and reports a single syndrome bit."
+    text = "Opening words precede it. " + sentence + " Closing words follow it directly after."
+    edited = text.replace("measures one parity", "measures exactly one parity")
+    a = make_anchor(text, *_span(text, sentence))
+    r, level = resolve_anchor_detailed(edited, a)
+    assert level == "fuzzy"
+    _check(edited, r)
+    assert r["quote"].startswith("Each stabilizer") and r["quote"].endswith("syndrome bit.")
+    assert abs(len(r["quote"]) - len(sentence)) <= 12
+
+
+def test_fuzzy_refuses_between_equally_similar_siblings() -> None:
+    text = "\n\n".join(f"Theorem {i}. Let G be a finite group of order {i * 7} acting on a set X freely." for i in (1, 2, 3, 4))
+    quote = "Theorem 9. Let G be a finite group of order 63 acting on a set X freely."
+    assert resolve_quote(text, quote)["start"] is None
+
+
+def test_long_quote_is_anchored_by_head_and_tail() -> None:
+    import random
+
+    rng = random.Random(5)
+    words = [f"term{rng.randrange(10**4)}" for _ in range(900)]
+    long_quote = " ".join(words[:500]) + "."  # > 2000 characters, no repetition
+    assert len(long_quote) > 2000
+    text = "Header paragraph.\n\n" + long_quote + "\n\nFooter paragraph."
+    a = make_anchor(text, *_span(text, long_quote))
+    edited = "New first line.\n\n" + text.replace(words[250], words[250] + " inserted words", 1)
+    r, level = resolve_anchor_detailed(edited, a)
+    assert level == "fuzzy" and r["start"] == len("New first line.\n\nHeader paragraph.\n\n")
+    assert abs((r["end"] - r["start"]) - len(long_quote)) < 100
+    assert resolve_anchor(text.replace(long_quote[:300], "X" * 300), a)["start"] is None  # the head is gone
+
+
+def test_periodic_text_cannot_fake_a_head_and_tail_match() -> None:
+    para = "Stabilizer formalism makes every Clifford operation easy to track through conjugation and so on. " * 30
+    long_quote = para[:2800]
+    text = "Header paragraph.\n\n" + long_quote + "\n\nFooter paragraph."
+    a = make_anchor(text, *_span(text, long_quote))
+    head_edited = text.replace("easy to track", "simple to track", 3)  # destroys the head; later periods look alike
+    assert resolve_anchor(head_edited, a)["start"] is None
+
+
+def test_repeated_text_beyond_the_scan_cap_is_never_silently_wrong() -> None:
+    text = "ab " * 3000
+    a = {"quote": "ab ab ab ab", "prefix": "", "suffix": "", "start": 3000, "end": 3000 + 11}
+    r = resolve_anchor(text, a)
+    assert r["start"] is not None and abs(r["start"] - 3000) < 12  # a window around the stored offset
+    assert resolve_quote(text, "ab ab ab ab")["start"] is None  # nothing singles one out
+    assert resolve_anchor(text, {**a, "start": None, "end": None})["start"] is None
+
+
+def test_two_kb_quote_in_a_hundred_kb_section_is_fast() -> None:
+    import random
+
+    rng = random.Random(3)
+    vocab = [f"w{rng.randrange(10**5)}" for _ in range(4000)]
+    text = "\n\n".join(" ".join(rng.choice(vocab) for _ in range(120)) + "." for _ in range(130))
+    assert len(text) > 90_000
+    start = text.index("\n\n", 50_000) + 2
+    quote = text[start:start + 2000]
+    a = make_anchor(text, start, start + 2000)
+    for variant in (
+        "Lead sentence. " + text,                                                # exact
+        text.replace(quote[100:110], "ZZZZZ", 1),                                # edit inside the quote
+        text.replace(quote[:40], "Q" * 40, 1),                                   # head destroyed
+    ):
+        t0 = time.perf_counter()
+        resolve_anchor(variant, a)
+        assert time.perf_counter() - t0 < 1.0

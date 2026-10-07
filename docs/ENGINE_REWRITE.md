@@ -356,42 +356,89 @@ fields and an entry point.
 
 **Anchors.** `engine/util/anchors.py` (pure stdlib; the API imports it too) implements the W3C
 text-quote selector `{quote, prefix, suffix, start, end}` over a section's Markdown source.
-Offsets are **Unicode code points** (Python `str` indices), `end` exclusive, `prefix`/`suffix` up to
-32 code points, `start`/`end` both `null` = orphaned. `make_anchor(text, start, end)`,
-`resolve_anchor(text, anchor)` (stored offsets, exact match with prefix/suffix/distance
-disambiguation, whitespace-normalised match, bounded fuzzy match with a similarity threshold,
-orphan) and `resolve_quote(text, quote)` (the same ladder without offsets, plus tolerance for what
-LLMs change when quoting: curly vs straight quotes, non-breaking hyphens and spaces, zero-width
-characters, Markdown emphasis and code markers, surrounding quote marks or ellipses, an ellipsis
-for elided text). A found anchor's `quote` is the text actually matched, so
-`text[start:end] == quote` always holds.
+Offsets are **Unicode code points** (Python `str` indices), `end` exclusive, `prefix`/`suffix` up
+to 32 code points, `start`/`end` both `null` = orphaned; offsets that are not plain ints are
+ignored. The rule throughout: **a false-positive match is worse than an orphan**.
+
+* `make_anchor(text, start, end)`; `resolve_anchor(text, anchor)`; `resolve_quote(text, quote,
+  *, prefix="", suffix="", fuzzy=True)`; and `resolve_anchor_detailed` / `resolve_quote_detailed`
+  returning `(anchor, level)` with level in `stored | exact | whitespace | tolerant | fuzzy |
+  orphan` (the anchor shape never changes).
+* Ladder: stored offsets (trusted only if the quote is unique or the stored prefix/suffix agree
+  there) -> exact (several: context agreement, then distance to the stored start) -> whitespace
+  -> NFC -> (`resolve_quote` only) typographic tolerance: curly vs straight quotes, dashes,
+  non-breaking spaces, zero-width characters, Markdown `*`/`_`/backtick markers (the span is
+  widened over adjacent delimiters), surrounding quote marks and ellipses, an ellipsis for elided
+  text (each segment at least 12 characters, total span at most 4x the quote + 200, exactly one
+  chain) -> bounded fuzzy match -> orphan.
+* Short quotes (under 12 characters and 3 words) must sit on word boundaries and be singled out
+  by context or by being the only occurrence; under 4 characters they need context or a stored
+  offset; a repeated quote shorter than 30 characters with no evidence is orphaned. Occurrence
+  scans are capped at 2000; beyond that only a window around the stored offset is searched.
+* Fuzzy: quotes of 20-600 characters are aligned with `difflib` in a few regions around seed hits
+  and the stored offset; the span must be within 15 % of the quote's length, snap outward to word
+  boundaries and reach similarity 0.8 (anchors) / 0.85 (quotes); several about-equally similar
+  places (siblings such as "Theorem 1." / "Theorem 2.") are refused unless context or the stored
+  offset decides. Longer quotes are anchored by their first and last 200 characters (both must
+  match exactly, at a distance within 5 % of the quote's length).
+* A found anchor's `quote` is the text actually matched, so `text[start:end] == quote`.
 
 **Anchored review issues.** `ReviewIssue` gains `quote` (verbatim span, one sentence or less),
 `start`, `end` and the optional literal-replacement pair `replace_from`/`replace_to`. The model
-supplies only `quote` and the replacement pair (`start`/`end` are hidden from its schema). The
-engine resolves each quote with `resolve_quote` against the section file as it lies on disk and
-writes the offsets into `section_reviews/<key>.json` and `<key>_revised.json`. This runs after
-every write of `sections/<key>.md` (`BookRun._anchor_reviews`, from `_finish_leaf` and the
-consistency patch), so the offsets always index the final text, not the draft that was reviewed:
-a quote that no longer occurs gets `start`/`end` `null`. The offsets index the whole file
+supplies only `quote` and the pair (`start`/`end` are hidden from its schema, `null` or non-string
+values are coerced to `""`, and offsets a model sends anyway are dropped). The engine resolves
+each quote with `resolve_quote` against the section file as it lies on disk and writes the offsets
+into `section_reviews/<key>.json` and `<key>_revised.json`. This runs after every write of
+`sections/<key>.md` (`BookRun._anchor_reviews`: generation, the consistency patch, and the
+re-materialisation of a content lock), so the offsets always index the final text, not the draft
+that was reviewed. A quote that no longer occurs gets `null` offsets; so does every issue without
+a quote (offsets of another text are never kept). The quote is rewritten to the matched text; a
+`replace_from`/`replace_to` pair is kept only if `replace_from` still occurs in it (adjusted to
+the text's spelling), otherwise both are cleared. The offsets index the whole file
 (`sections/<key>.md` has no header or front matter; `api/application/graph_import.py` reads it
 unchanged into `content_markdown`). Consistency findings and the removed-citation note carry no
-quote and stay unanchored.
+quote and stay unanchored. The full-run reviser sees the review without offsets and without empty
+optional fields (`SectionReview.for_reviser`), so its prompt is unchanged for quote-less issues.
 
 **`engine.revise(request, sink) -> ReviseResult`** (`engine/revision.py`, exported next to
 `engine.run`) revises one section's existing text in-process: no run directory, no
 `structure_graph.json`, no queue, no files. `ReviseRequest` carries the body, the free-text
 instruction, typed `ReviseParams` (`more_proofs`, `more_examples`, `more_rigorous`, `shorter`,
 `longer`, `cite_sources`, `fix_issues`, `address_comments`; rendered into the prompt
-deterministically), a `SectionBrief` (the chapter options), `LLMSettings` and an optional
-prebuilt `KnowledgeBase`. `scope="section"` asks for the whole revised body and diffs it;
-`scope="range"` resolves the anchor first (an orphaned anchor raises `AnchorOrphaned`), asks only
-for the replacement of that range, splices it in and verifies the text outside is unchanged.
-`ReviseResult` holds `replacement_markdown` (the full new body), `original_markdown`, `hunks`
-(`{start, end, removed, added}` over the original in code points; word-level), `summary`,
-`changes_made` and the usage totals. Progress goes to the `EventSink` as stages `retrieve`,
-`revise` and `diff`. Prompts: `prompts/book/copilot_reviser.md` (section) and `copilot_range.md`
-(range); the full-run `reviser.md` is only extended by one clause about the optional issue fields.
+deterministically), a `SectionBrief` (the chapter options), `LLMSettings`, an optional
+`ReviseRetrieval` (a saved `KnowledgeBase`; lexical search off the event loop) and
+`allow_fuzzy_anchor`.
+
+* `scope="section"`: the model returns the whole revised body; it is diffed against the original
+  (`engine/util/textdiff.py`: hierarchical line/sentence/word diff with a patience fallback and a
+  time budget; hunks are code-point offsets over the original and always reproduce the revision).
+  A body that shrinks below half without `shorter` adds a warning (`ReviseResult.warnings`).
+* `scope="range"`: the anchor is resolved first; only `stored`/`exact`/`whitespace` matches are
+  accepted unless `allow_fuzzy_anchor` (otherwise `AnchorOrphaned`). The model returns only the
+  replacement; the engine strips a head/tail that echoes the surrounding text, rejects a
+  replacement that repeats 200+ characters from outside the range, one that echoes the section
+  marker, or one implausibly long, then splices it in and verifies the outside is unchanged. An
+  empty replacement deletes the range (seam whitespace tidied, reported in `warnings`).
+* A code fence the model wraps around everything is removed unless the original is itself fenced;
+  CRLF line endings are kept; with a knowledge base, `\cite{}` forms become `[key]` and keys that
+  are new and unknown are dropped (known = the whole original section).
+* Prompts (`prompts/book/copilot_reviser.md`, `copilot_range.md`) put every user-supplied block
+  between per-call random delimiters and say that only the request and requirements blocks are
+  instructions; issue and comment texts are rendered on one line. The full-run `reviser.md` is
+  untouched.
+* Errors: `InputError` for a bad request; everything else is a `ReviseError` carrying `.usage`:
+  `AnchorOrphaned`, `ReviseConfigError` (no API key), `ReviseAuthError`, `ReviseRateLimited`,
+  `ReviseTimeout`, `ReviseProviderError`, `ReviseUnusableOutput`.
+* Events: stages `retrieve`, `revise`, `diff` (payload `{"phase": ...}`). Cancellation closes the
+  client and stops the diff worker.
+
+*Integration helpers.* `ReviseClientPool` shares the HTTP client, limiter and the per-model
+structured-output probe between calls (`await pool.revise(request, sink)`; one pool per API
+process and event loop, not thread-safe; each call keeps its own usage). `interactive_llm_settings`
+builds `LLMSettings` with the full run's environment parsing (`config.llm_settings_from_env`) and
+interactive defaults (90 s, one retry; overridable per project). `await load_revision_retrieval(
+work_dir)` loads the index a run saved under `<work_dir>/out/.kb_cache` (never builds, returns
+`None` when absent) with the citation index prebuilt, cached per index file.
 
 ## 5. Testing strategy
 

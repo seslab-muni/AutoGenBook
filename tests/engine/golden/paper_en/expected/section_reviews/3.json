@@ -21,17 +21,6 @@
    "severity": "minor",
    "start": 3587,
    "type": "terminology"
-  },
-  {
-   "description": "Section 3 reads as a whole-section remark.",
-   "end": null,
-   "quote": "",
-   "replace_from": "",
-   "replace_to": "",
-   "required_fix": "Tighten the prose.",
-   "severity": "minor",
-   "start": null,
-   "type": "style"
   }
  ],
  "ok_to_keep": false,
