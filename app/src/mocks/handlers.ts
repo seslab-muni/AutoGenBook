@@ -1,10 +1,13 @@
 import { http, HttpResponse, sse } from 'msw';
 
+import { resolveAnchor } from '@/features/editor/lib/anchors';
 import { claimNextQueued, driveFakeRun } from './fakeRun';
 import { db, stripProjectId, type ProjectRow } from './db';
 import { DEFAULT_MOCK_LLM_MODEL, MOCK_MODELS, MOCK_USER, MOCK_USER_PASSWORD } from './fixtures';
 import { notFound, problemResponse } from './problem';
 import type {
+  Comment,
+  CommentCreate,
   ExportRequest,
   FileDto,
   HealthStatus,
@@ -659,6 +662,31 @@ const sourceHandlers = [
 // outline
 // ---------------------------------------------------------------------------
 
+/** Stands in for the API's re-anchoring on every `contentMarkdown` PATCH. */
+function reanchorComments(nodeId: string, content: string): void {
+  for (const comment of db.comments.values()) {
+    if (comment.nodeId !== nodeId || comment.parentId !== null || !comment.anchor) continue;
+    if (comment.kind === 'suggestion' && comment.status !== 'pending') continue;
+    const resolved = resolveAnchor(content, comment.anchor);
+    const orphaned = resolved.start === null;
+    const status =
+      comment.status === 'resolved'
+        ? 'resolved'
+        : comment.kind === 'comment' || comment.kind === 'review'
+          ? orphaned
+            ? 'orphaned'
+            : 'open'
+          : comment.status;
+    const next = { ...comment, anchor: resolved, status, updatedAt: db.now() };
+    db.comments.set(comment.id, next);
+    for (const reply of db.comments.values()) {
+      if (reply.threadId === comment.id && reply.id !== comment.id) {
+        db.comments.set(reply.id, { ...reply, anchor: resolved, status });
+      }
+    }
+  }
+}
+
 const outlineHandlers = [
   http.get('*/api/v1/projects/:projectId/outline', ({ params, request }) => {
     const projectId = params.projectId as string;
@@ -756,7 +784,7 @@ const outlineHandlers = [
     const node = db.outlineNodes.get(params.nodeId as string);
     if (!node || node.projectId !== params.projectId)
       return notFound('Outline node', new URL(request.url).pathname);
-    return HttpResponse.json(stripProjectId(node));
+    return HttpResponse.json(db.withCommentCounts(stripProjectId(node)));
   }),
 
   http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async ({ params, request }) => {
@@ -805,7 +833,8 @@ const outlineHandlers = [
       updatedAt: db.now(),
     };
     db.outlineNodes.set(node.id, updated);
-    return HttpResponse.json(stripProjectId(updated));
+    if (body.contentMarkdown != null) reanchorComments(node.id, updated.contentMarkdown);
+    return HttpResponse.json(db.withCommentCounts(stripProjectId(updated)));
   }),
 
   http.delete('*/api/v1/projects/:projectId/outline/:nodeId', ({ params, request }) => {
@@ -1189,6 +1218,211 @@ const runHandlers = [
   }),
 ];
 
+// ---------------------------------------------------------------------------
+// comments (margin cards, issue #182)
+// ---------------------------------------------------------------------------
+
+/** Whole threads (root first, replies oldest first), ordered by root creation, optionally filtered like the API. */
+function threadRows(rows: Comment[], url: URL): Comment[] {
+  const kind = url.searchParams.get('kind');
+  const status = url.searchParams.get('status');
+  const roots = rows
+    .filter((row) => row.parentId === null)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const out: Comment[] = [];
+  for (const root of roots) {
+    const thread = rows
+      .filter((row) => row.threadId === root.id)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    if (kind && !thread.some((row) => row.kind === kind)) continue;
+    if (status) {
+      const subject = kind ? thread.filter((row) => row.kind === kind) : [root];
+      if (!subject.some((row) => row.status === status)) continue;
+    }
+    out.push(...thread);
+  }
+  return out;
+}
+
+function commentPage(rows: Comment[]): Page<Comment> {
+  const items = rows;
+  return {
+    items,
+    total: items.filter((row) => row.parentId === null).length,
+    limit: items.length,
+    offset: 0,
+  };
+}
+
+function projectNode(projectId: string, nodeId: string) {
+  const node = db.outlineNodes.get(nodeId);
+  return node && node.projectId === projectId ? node : undefined;
+}
+
+const commentHandlers = [
+  http.get('*/api/v1/projects/:projectId/comments', ({ params, request }) => {
+    const projectId = params.projectId as string;
+    if (!db.projects.has(projectId)) return notFound('Project', new URL(request.url).pathname);
+    const rows = [...db.comments.values()].filter((row) => row.projectId === projectId);
+    return HttpResponse.json(commentPage(threadRows(rows, new URL(request.url))));
+  }),
+
+  http.get('*/api/v1/projects/:projectId/outline/:nodeId/comments', ({ params, request }) => {
+    const node = projectNode(params.projectId as string, params.nodeId as string);
+    if (!node) return notFound('Outline node', new URL(request.url).pathname);
+    const rows = [...db.comments.values()].filter((row) => row.nodeId === node.id);
+    return HttpResponse.json(commentPage(threadRows(rows, new URL(request.url))));
+  }),
+
+  http.post(
+    '*/api/v1/projects/:projectId/outline/:nodeId/comments',
+    async ({ params, request }) => {
+      const instance = new URL(request.url).pathname;
+      const node = projectNode(params.projectId as string, params.nodeId as string);
+      if (!node) return notFound('Outline node', instance);
+      const body = (await request.json()) as CommentCreate;
+      if (!body.bodyMarkdown || !body.bodyMarkdown.trim()) {
+        return problemResponse(
+          422,
+          'Validation Failed',
+          instance,
+          'bodyMarkdown must not be blank',
+        );
+      }
+      const now = db.now();
+      const id = db.nextId();
+      if (body.parentId) {
+        const parent = db.comments.get(body.parentId);
+        if (!parent || parent.nodeId !== node.id) return notFound('Comment', instance);
+        if (parent.kind === 'suggestion') {
+          return problemResponse(
+            409,
+            'Conflict',
+            instance,
+            'replies under a suggestion are not allowed',
+          );
+        }
+        const root = db.comments.get(parent.threadId) ?? parent;
+        const status =
+          root.status === 'resolved'
+            ? root.anchor && root.anchor.start == null
+              ? 'orphaned'
+              : 'open'
+            : root.status;
+        if (status !== root.status) {
+          for (const row of db.comments.values()) {
+            if (row.threadId === root.id)
+              db.comments.set(row.id, { ...row, status, updatedAt: now });
+          }
+        }
+        const reply: Comment = {
+          id,
+          projectId: node.projectId,
+          nodeId: node.id,
+          kind: 'comment',
+          authorId: MOCK_USER.id,
+          authorName: MOCK_USER.displayName,
+          anchor: root.anchor,
+          status,
+          threadId: root.id,
+          parentId: root.id,
+          bodyMarkdown: body.bodyMarkdown,
+          payload: {},
+          createdAt: now,
+          updatedAt: now,
+          editedAt: null,
+        };
+        db.comments.set(id, reply);
+        return HttpResponse.json(reply, { status: 201 });
+      }
+      let anchor: Comment['anchor'] = null;
+      let status: Comment['status'] = 'open';
+      if (body.anchor) {
+        const resolved = resolveAnchor(node.contentMarkdown, body.anchor);
+        anchor = resolved;
+        if (resolved.start === null) status = 'orphaned';
+      }
+      const comment: Comment = {
+        id,
+        projectId: node.projectId,
+        nodeId: node.id,
+        kind: 'comment',
+        authorId: MOCK_USER.id,
+        authorName: MOCK_USER.displayName,
+        anchor,
+        status,
+        threadId: id,
+        parentId: null,
+        bodyMarkdown: body.bodyMarkdown,
+        payload: {},
+        createdAt: now,
+        updatedAt: now,
+        editedAt: null,
+      };
+      db.comments.set(id, comment);
+      return HttpResponse.json(comment, { status: 201 });
+    },
+  ),
+
+  http.patch('*/api/v1/comments/:commentId', async ({ params, request }) => {
+    const instance = new URL(request.url).pathname;
+    const comment = db.comments.get(params.commentId as string);
+    if (!comment) return notFound('Comment', instance);
+    if (comment.authorId !== MOCK_USER.id || comment.kind !== 'comment') {
+      return problemResponse(403, 'Forbidden', instance, 'only the author can edit a comment');
+    }
+    const body = (await request.json()) as { bodyMarkdown: string };
+    if (!body.bodyMarkdown.trim()) {
+      return problemResponse(422, 'Validation Failed', instance, 'bodyMarkdown must not be blank');
+    }
+    const now = db.now();
+    const updated = { ...comment, bodyMarkdown: body.bodyMarkdown, editedAt: now, updatedAt: now };
+    db.comments.set(comment.id, updated);
+    return HttpResponse.json(updated);
+  }),
+
+  http.delete('*/api/v1/comments/:commentId', ({ params, request }) => {
+    const instance = new URL(request.url).pathname;
+    const comment = db.comments.get(params.commentId as string);
+    if (!comment) return notFound('Comment', instance);
+    if (comment.authorId !== null && comment.authorId !== MOCK_USER.id) {
+      return problemResponse(403, 'Forbidden', instance, 'only the author can delete a comment');
+    }
+    for (const row of [...db.comments.values()]) {
+      if (row.id === comment.id || (comment.parentId === null && row.threadId === comment.id)) {
+        db.comments.delete(row.id);
+      }
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post('*/api/v1/comments/:commentId/resolve', async ({ params, request }) => {
+    const instance = new URL(request.url).pathname;
+    const comment = db.comments.get(params.commentId as string);
+    if (!comment) return notFound('Comment', instance);
+    if (comment.parentId !== null || comment.kind === 'suggestion') {
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'only a comment or review thread can be resolved',
+      );
+    }
+    const body = (await request.json().catch(() => ({}))) as { resolved?: boolean };
+    const resolved = body.resolved ?? true;
+    const now = db.now();
+    const status: Comment['status'] = resolved
+      ? 'resolved'
+      : comment.anchor && comment.anchor.start == null
+        ? 'orphaned'
+        : 'open';
+    for (const row of [...db.comments.values()]) {
+      if (row.threadId === comment.id) db.comments.set(row.id, { ...row, status, updatedAt: now });
+    }
+    return HttpResponse.json(db.comments.get(comment.id));
+  }),
+];
+
 const streamHandler = sse<Record<'log' | 'stage' | 'section' | 'done', RunEvent>>(
   '*/api/v1/runs/:runId/events/stream',
   ({ params, client, request }) => {
@@ -1223,6 +1457,7 @@ export const handlers = [
   ...projectHandlers,
   ...sourceHandlers,
   ...outlineHandlers,
+  ...commentHandlers,
   ...runHandlers,
   streamHandler,
 ];

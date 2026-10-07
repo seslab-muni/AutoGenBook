@@ -17,6 +17,9 @@ export const projectKeys = {
     [...projectKeys.outline(projectId), format] as const,
   outlineNode: (projectId: string, nodeId: string) =>
     [...projectKeys.outline(projectId), 'node', nodeId] as const,
+  comments: (projectId: string) => [...projectKeys.detail(projectId), 'comments'] as const,
+  nodeComments: (projectId: string, nodeId: string) =>
+    [...projectKeys.comments(projectId), 'node', nodeId] as const,
   runs: (projectId: string) => [...projectKeys.detail(projectId), 'runs'] as const,
 };
 
