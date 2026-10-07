@@ -10,17 +10,24 @@ import remarkMath from 'remark-math';
 import { apiBaseUrl } from '@/api/client';
 import { Callout } from '@/features/editor/components/callout';
 import { CitationChip } from '@/features/editor/components/citation-chip';
-import { normalizeDisplayMath } from '@/features/editor/lib/normalize-display-math';
+import { normalizeDisplayMathMapped } from '@/features/editor/lib/normalize-display-math';
 import type { RagCitation } from '@/features/editor/lib/rag-citation';
+import {
+  rehypeAnchorSource,
+  rehypeMathPositions,
+  type AnchorMark,
+} from '@/features/editor/lib/rehype-anchor-source';
 import { remarkCallouts, remarkCitations } from '@/features/editor/lib/remark-plugins';
 import { mathAwareSchema } from '@/features/editor/lib/sanitize-schema';
 import { cn } from '@/lib/utils';
 
 const REMARK_PLUGINS = [remarkGfm, remarkMath, remarkCitations, remarkCallouts];
-const REHYPE_PLUGINS: NonNullable<React.ComponentProps<typeof Markdown>['rehypePlugins']> = [
-  [rehypeKatex, { output: 'htmlAndMathml', throwOnError: false, strict: false }],
-  [rehypeSanitize, mathAwareSchema],
+type RehypePlugins = NonNullable<React.ComponentProps<typeof Markdown>['rehypePlugins']>;
+const KATEX_PLUGIN: RehypePlugins[number] = [
+  rehypeKatex,
+  { output: 'htmlAndMathml', throwOnError: false, strict: false },
 ];
+const BASE_REHYPE_PLUGINS: RehypePlugins = [KATEX_PLUGIN, [rehypeSanitize, mathAwareSchema]];
 
 /** Absolute/data/protocol-relative URLs pass through; anything else is a run artifact file id. */
 function resolveImageSrc(src: string): string {
@@ -50,6 +57,10 @@ function withoutNode<P extends ExtraProps>(props: P): Omit<P, 'node'> {
  */
 type CitationSpanProps = React.ComponentProps<'span'> &
   ExtraProps & {
+    'data-src-start'?: number;
+    'data-src-end'?: number;
+    'data-anchor-ids'?: string;
+    'data-anchor-kind'?: string;
     citekey?: string;
     citationsById: Map<string, RagCitation>;
     onCitationClick?: ((citeKey: string) => void) | undefined;
@@ -58,8 +69,26 @@ type CitationSpanProps = React.ComponentProps<'span'> &
 function CitationSpan({ citationsById, onCitationClick, ...spanProps }: CitationSpanProps) {
   const { citekey, children, ...rest } = withoutNode(spanProps);
   if (typeof citekey !== 'string') return <span {...rest}>{children}</span>;
+  const chip = (
+    <CitationChip
+      citeKey={citekey}
+      citation={citationsById.get(citekey)}
+      onClick={onCitationClick}
+    />
+  );
+  // `rehypeAnchorSource` tags the chip with its source offsets (and, under a comment, the
+  // highlight); the chip itself renders no children, so the tags go on a wrapper.
+  if (rest['data-src-start'] === undefined) return chip;
   return (
-    <CitationChip citeKey={citekey} citation={citationsById.get(citekey)} onClick={onCitationClick} />
+    <span
+      data-src-start={rest['data-src-start']}
+      data-src-end={rest['data-src-end']}
+      data-anchor-ids={rest['data-anchor-ids']}
+      data-anchor-kind={rest['data-anchor-kind']}
+      className={cn(rest.className)}
+    >
+      {chip}
+    </span>
   );
 }
 
@@ -226,6 +255,12 @@ interface MarkdownViewProps {
   citations?: readonly RagCitation[];
   /** Called with a citekey when its chip is clicked; omit to render chips as inert labels. */
   onCitationClick?: (citeKey: string) => void;
+  /** Comment/suggestion/review ranges to highlight, in UTF-16 offsets over `markdown` (issue #182). */
+  anchorMarks?: readonly AnchorMark[];
+  /** Tag rendered text with its Markdown offsets so a DOM selection can be mapped back (`sourceRangeFromSelection`). */
+  sourceMap?: boolean;
+  /** Fired with the anchor ids under a click on a highlight (innermost first). */
+  onAnchorClick?: (ids: string[]) => void;
   className?: string;
 }
 
@@ -240,6 +275,9 @@ export function MarkdownView({
   markdown,
   citations,
   onCitationClick,
+  anchorMarks,
+  sourceMap = false,
+  onAnchorClick,
   className,
 }: MarkdownViewProps) {
   const citationsById = useMemo(() => {
@@ -253,14 +291,36 @@ export function MarkdownView({
     [citationsById, onCitationClick],
   );
 
+  const normalized = useMemo(() => normalizeDisplayMathMapped(markdown), [markdown]);
+  const rehypePlugins = useMemo<RehypePlugins>(
+    () =>
+      anchorMarks?.length || sourceMap
+        ? [
+            rehypeMathPositions,
+            ...BASE_REHYPE_PLUGINS,
+            [rehypeAnchorSource, { normalized, marks: anchorMarks ?? [], sourceMap }],
+          ]
+        : BASE_REHYPE_PLUGINS,
+    [normalized, anchorMarks, sourceMap],
+  );
+
+  function handleClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (!onAnchorClick || !(event.target instanceof Element)) return;
+    const hit = event.target.closest('[data-anchor-ids]');
+    const ids = hit?.getAttribute('data-anchor-ids')?.split(' ').filter(Boolean);
+    if (ids?.length) onAnchorClick(ids);
+  }
+
   return (
-    <div className={cn('text-sm text-foreground', className)}>
+    // The click handler only maps a click on a highlight to its margin card (which is itself
+    // keyboard reachable); the wrapper is not interactive.
+    <div className={cn('text-sm text-foreground', className)} onClick={handleClick}>
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={components}
       >
-        {normalizeDisplayMath(markdown)}
+        {normalized.text}
       </Markdown>
     </div>
   );

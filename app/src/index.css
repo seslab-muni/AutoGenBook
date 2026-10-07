@@ -209,3 +209,47 @@
     @apply my-4 overflow-x-auto overflow-y-hidden py-1;
   }
 }
+
+/*
+ * Margin-card highlights (issue #182): the text range a comment / suggestion / review card is
+ * anchored to, in both the Source (CodeMirror decoration) and Write (rehype `<mark>`) views.
+ * Colour is never the only cue: each kind also has its own underline style, and the focused one
+ * gains an outline.
+ */
+@layer components {
+  .anchor-mark {
+    color: inherit;
+    cursor: pointer;
+    border-radius: 2px;
+    background-color: color-mix(in oklab, var(--warning) 30%, transparent);
+    text-decoration: underline solid color-mix(in oklab, var(--warning) 80%, transparent) 1px;
+    text-underline-offset: 3px;
+  }
+  .anchor-mark.anchor-suggestion {
+    background-color: color-mix(in oklab, var(--primary) 18%, transparent);
+    text-decoration: underline dashed color-mix(in oklab, var(--primary) 80%, transparent) 1px;
+  }
+  .anchor-mark.anchor-review {
+    background-color: color-mix(in oklab, var(--destructive) 16%, transparent);
+    text-decoration: underline dotted color-mix(in oklab, var(--destructive) 80%, transparent) 2px;
+  }
+  .anchor-mark.anchor-draft {
+    background-color: color-mix(in oklab, var(--primary) 12%, transparent);
+    text-decoration: underline dashed color-mix(in oklab, var(--primary) 80%, transparent) 1px;
+  }
+  .anchor-mark.anchor-resolved {
+    background-color: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
+    text-decoration: none;
+  }
+  .anchor-mark.anchor-focused {
+    background-color: color-mix(in oklab, var(--warning) 55%, transparent);
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+  .anchor-mark.anchor-suggestion.anchor-focused {
+    background-color: color-mix(in oklab, var(--primary) 34%, transparent);
+  }
+  .anchor-mark.anchor-review.anchor-focused {
+    background-color: color-mix(in oklab, var(--destructive) 30%, transparent);
+  }
+}

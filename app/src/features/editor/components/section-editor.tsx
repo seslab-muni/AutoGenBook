@@ -4,7 +4,9 @@ import { stex } from '@codemirror/legacy-modes/mode/stex';
 import type { EditorState, Text } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+
+import { anchorHighlightField, anchorIdsAt } from '@/features/editor/lib/cm-anchor-highlights';
 
 import type { EditorSelection } from '@/stores/editor-selection-store';
 
@@ -25,6 +27,8 @@ interface SectionEditorProps {
   onSelectionChange?: (selection: EditorSelection) => void;
   /** Hands the CodeMirror view to the caller (highlights, selection toolbar) once it exists. */
   onCreateEditor?: (view: EditorView) => void;
+  /** Fired with the anchor ids under a click on a highlighted range (innermost first). Identity may change freely. */
+  onHighlightClick?: (ids: string[]) => void;
   className?: string;
 }
 
@@ -44,12 +48,20 @@ export function SectionEditor({
   theme = 'light',
   onSelectionChange,
   onCreateEditor,
+  onHighlightClick,
   className,
 }: SectionEditorProps) {
+  // Read through a ref so a new callback never reconfigures the editor.
+  const highlightClickRef = useRef(onHighlightClick);
+  useEffect(() => {
+    highlightClickRef.current = onHighlightClick;
+  }, [onHighlightClick]);
+
   const extensions = useMemo(
     () => [
       language === 'latex' ? StreamLanguage.define(stex) : markdownLang(),
       EditorView.lineWrapping,
+      anchorHighlightField,
       EditorView.updateListener.of((update) => {
         if (update.selectionSet || update.docChanged)
           onSelectionChange?.(selectionOf(update.state));
@@ -74,6 +86,10 @@ export function SectionEditor({
 
   function handleCreate(view: EditorView) {
     onSelectionChange?.(selectionOf(view.state));
+    view.dom.addEventListener('click', (event) => {
+      const ids = anchorIdsAt(event.target);
+      if (ids.length > 0) highlightClickRef.current?.(ids);
+    });
     onCreateEditor?.(view);
   }
 

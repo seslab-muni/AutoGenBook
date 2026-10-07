@@ -33,28 +33,60 @@ export function remarkCitations() {
       if (!CITE_PATTERN.test(value)) return;
       CITE_PATTERN.lastIndex = 0;
 
+      // Pieces keep source positions only when the text is its own source (no escapes or
+      // entities); otherwise they stay unpositioned and are skipped by highlights.
+      const origin = node.position?.start.offset;
+      const oneToOne =
+        origin != null &&
+        node.position?.end.offset != null &&
+        node.position.end.offset - origin === value.length;
+      const placed = <T extends PhrasingContent>(piece: T, from: number, to: number): T => {
+        if (!oneToOne || origin == null || !node.position) return piece;
+        const { start, end } = node.position;
+        return {
+          ...piece,
+          position: {
+            start: { line: start.line, column: start.column + from, offset: origin + from },
+            end: { line: end.line, column: start.column + to, offset: origin + to },
+          },
+        };
+      };
       const replacement: PhrasingContent[] = [];
       let lastEnd = 0;
       let match: RegExpExecArray | null;
       while ((match = CITE_PATTERN.exec(value)) !== null) {
         if (match.index > lastEnd) {
-          replacement.push({ type: 'text', value: value.slice(lastEnd, match.index) });
+          replacement.push(
+            placed(
+              { type: 'text', value: value.slice(lastEnd, match.index) },
+              lastEnd,
+              match.index,
+            ),
+          );
         }
         const keys = splitKeys(match[1] ?? match[2] ?? '');
         for (const key of keys) {
-          replacement.push({
-            type: 'text',
-            value: `@${key}`,
-            data: {
-              hName: 'span',
-              hProperties: { citekey: key },
-            },
-          } as unknown as PhrasingContent);
+          replacement.push(
+            placed(
+              {
+                type: 'text',
+                value: `@${key}`,
+                data: {
+                  hName: 'span',
+                  hProperties: { citekey: key },
+                },
+              } as unknown as PhrasingContent,
+              match.index,
+              match.index + match[0].length,
+            ),
+          );
         }
         lastEnd = match.index + match[0].length;
       }
       if (lastEnd < value.length) {
-        replacement.push({ type: 'text', value: value.slice(lastEnd) });
+        replacement.push(
+          placed({ type: 'text', value: value.slice(lastEnd) }, lastEnd, value.length),
+        );
       }
 
       const siblings = parent.children as PhrasingContent[];
