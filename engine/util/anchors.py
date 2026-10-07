@@ -107,7 +107,7 @@ def resolve_anchor_detailed(text: str, anchor: Anchor) -> tuple[Anchor, str]:
             return make_anchor(text, start, end), "stored"
     span, level = _locate(text, quote, prefix, suffix, hint, tolerant=False)
     if span is None:
-        span = _fuzzy(text, quote.strip(), prefix, suffix, hint, FUZZY_THRESHOLD)
+        span = _fuzzy(text, quote.strip(), prefix, suffix, hint, FUZZY_THRESHOLD, require_evidence=True)
         level = "fuzzy"
     if span is None:
         return _orphan(quote, prefix, suffix), "orphan"
@@ -511,11 +511,15 @@ def _extend_markers(text: str, a: int, b: int) -> Span:
 # ------------------------------------------------------------------ fuzzy match
 
 
-def _fuzzy(text: str, quote: str, prefix: str, suffix: str, hint: int | None, threshold: float) -> Span | None:
+def _fuzzy(text: str, quote: str, prefix: str, suffix: str, hint: int | None, threshold: float, *, require_evidence: bool = False) -> Span | None:
     """Diff-match-patch style: align the quote against a few bounded regions
     of the text (around seed hits, and around the stored offset) and accept
     the best span only when it is about as long as the quote and its
-    similarity reaches `threshold`."""
+    similarity reaches `threshold`. A stored anchor (`require_evidence`) is
+    re-attached only where something corroborates the place - a meaningful
+    run of the stored prefix or suffix still around the hit, or the hit lying
+    near where the stored offset predicts - so a merely similar sentence far
+    away is never adopted when the original is gone."""
     n = len(quote)
     if not text or n < MIN_FUZZY_LEN:
         return None
@@ -564,6 +568,8 @@ def _fuzzy(text: str, quote: str, prefix: str, suffix: str, hint: int | None, th
         ratio = SequenceMatcher(None, quote, text[a:b], autojunk=False).ratio()
         if ratio < threshold:
             continue
+        if require_evidence and not _corroborated(text, a, b, prefix, suffix, hint, n):
+            continue
         ctx = _context_score(text, a, b, prefix, suffix) / max(1, len(prefix) + len(suffix))
         dist = abs(a - hint) if hint is not None else 0
         found.append((ratio + 0.15 * ctx, ratio, ctx, dist, a, b))
@@ -579,6 +585,17 @@ def _fuzzy(text: str, quote: str, prefix: str, suffix: str, hint: int | None, th
         if not decided:
             return None
     return _extend_markers(text, best[4], best[5])
+
+
+MIN_CONTEXT_RUN = 12
+
+
+def _corroborated(text: str, a: int, b: int, prefix: str, suffix: str, hint: int | None, n: int) -> bool:
+    if prefix and _common_suffix(text[max(0, a - len(prefix)):a], prefix) >= min(MIN_CONTEXT_RUN, len(prefix)):
+        return True
+    if suffix and _common_prefix(text[b:b + len(suffix)], suffix) >= min(MIN_CONTEXT_RUN, len(suffix)):
+        return True
+    return hint is not None and abs(a - hint) <= max(300, 2 * n)
 
 
 def _best_span(quote: str, text: str, lo: int, hi: int, slack: int) -> Span | None:
