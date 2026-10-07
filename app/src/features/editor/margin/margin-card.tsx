@@ -1,4 +1,4 @@
-import { forwardRef, memo } from 'react';
+import { memo, useCallback } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -8,6 +8,8 @@ import type { MarginThread } from './threads';
 interface MarginCardProps {
   thread: MarginThread;
   ctx: MarginCardContext;
+  /** Hands the card's element to the margin, which observes its height. */
+  register: (id: string, element: HTMLElement | null) => void;
   /** Pixel offset from the top of the margin lane; `undefined` before the first layout. */
   top: number | undefined;
   focused: boolean;
@@ -28,10 +30,11 @@ function describeCard(thread: MarginThread, label: string): string {
  * quoted text, and the kind-specific body from `MARGIN_CARD_KINDS`. A focusable region: Tab
  * reaches it, and focusing anything inside it focuses the card (and so its highlight).
  */
-const MarginCardInner = forwardRef<HTMLElement, MarginCardProps>(function MarginCard(
-  { thread, ctx, top, focused, onFocusCard },
-  ref,
-) {
+function MarginCardInner({ thread, ctx, register, top, focused, onFocusCard }: MarginCardProps) {
+  const ref = useCallback(
+    (element: HTMLElement | null) => register(thread.id, element),
+    [register, thread.id],
+  );
   const { label, icon: Icon, Body } = cardKind(thread.kind);
   const closed = thread.status === 'resolved';
 
@@ -84,7 +87,7 @@ const MarginCardInner = forwardRef<HTMLElement, MarginCardProps>(function Margin
       <Body thread={thread} ctx={ctx} />
     </section>
   );
-});
+}
 
 /**
  * Typing shifts every anchor after the caret, which changes each thread's `range` but nothing a
@@ -95,6 +98,7 @@ export const MarginCard = memo(MarginCardInner, (a, b) => {
   const y = b.thread;
   return (
     a.top === b.top &&
+    a.register === b.register &&
     a.focused === b.focused &&
     a.ctx === b.ctx &&
     a.onFocusCard === b.onFocusCard &&

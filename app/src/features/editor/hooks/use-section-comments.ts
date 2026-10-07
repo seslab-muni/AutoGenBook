@@ -52,7 +52,6 @@ export function useSectionComments(projectId: string, nodeId: string, text: stri
   );
   const draftPositions = useAnchorPositions(draftItems, text);
   const composerRange: TextRange | null = draftPositions.get(DRAFT_ID) ?? null;
-
   const threads = useMemo<MarginThread[]>(
     () =>
       groups.map(([root, ...replies]) => {

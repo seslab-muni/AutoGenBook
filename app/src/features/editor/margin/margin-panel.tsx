@@ -1,12 +1,4 @@
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CheckCheck, MessageSquarePlus } from 'lucide-react';
 
 import { useCreateCommentMutation } from '@/api/queries/comments';
@@ -59,6 +51,7 @@ function useFrameScheduler(callback: () => void): () => void {
   useEffect(
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
     },
     [],
   );
@@ -73,7 +66,10 @@ function useFrameScheduler(callback: () => void): () => void {
 
 function sameMap(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean {
   if (a.size !== b.size) return false;
-  for (const [key, value] of a) if (Math.abs((b.get(key) ?? NaN) - value) > 0.5) return false;
+  for (const [key, value] of a) {
+    const other = b.get(key);
+    if (other === undefined || Math.abs(other - value) > 0.5) return false;
+  }
   return true;
 }
 
@@ -167,20 +163,17 @@ export function MarginPanel({
     };
   }, [commitHeights]);
 
-  const registerCard = useCallback(
-    (id: string) => (element: HTMLElement | null) => {
-      const previous = elements.current.get(id);
-      if (previous && previous !== element) observer.current?.unobserve(previous);
-      if (element) {
-        elements.current.set(id, element);
-        observer.current?.observe(element);
-      } else {
-        elements.current.delete(id);
-        pendingHeights.current.delete(id);
-      }
-    },
-    [],
-  );
+  const registerCard = useCallback((id: string, element: HTMLElement | null) => {
+    const previous = elements.current.get(id);
+    if (previous && previous !== element) observer.current?.unobserve(previous);
+    if (element) {
+      elements.current.set(id, element);
+      observer.current?.observe(element);
+    } else {
+      elements.current.delete(id);
+      pendingHeights.current.delete(id);
+    }
+  }, []);
 
   // ---- layout -------------------------------------------------------------------------
   const ordered = useMemo(() => {
@@ -358,7 +351,7 @@ export function MarginPanel({
               return (
                 <DraftCard
                   key={DRAFT_ID}
-                  ref={registerCard(DRAFT_ID)}
+                  register={registerCard}
                   top={tops.map.get(DRAFT_ID)}
                   quote={composer.anchor ? composerQuote : null}
                   busy={create.isPending}
@@ -386,7 +379,7 @@ export function MarginPanel({
             return (
               <MarginCard
                 key={item.id}
-                ref={registerCard(item.id)}
+                register={registerCard}
                 thread={item.thread}
                 ctx={ctx}
                 top={tops.map.get(item.id)}
@@ -401,16 +394,22 @@ export function MarginPanel({
   );
 }
 
-const DraftCard = forwardRef<
-  HTMLElement,
-  {
-    top: number | undefined;
-    quote: string | null;
-    busy: boolean;
-    onSubmit: (text: string) => void;
-    onCancel: () => void;
-  }
->(function DraftCard({ top, quote, busy, onSubmit, onCancel }, ref) {
+function DraftCard({
+  top,
+  quote,
+  busy,
+  register,
+  onSubmit,
+  onCancel,
+}: {
+  top: number | undefined;
+  quote: string | null;
+  busy: boolean;
+  register: (id: string, element: HTMLElement | null) => void;
+  onSubmit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const ref = useCallback((element: HTMLElement | null) => register(DRAFT_ID, element), [register]);
   return (
     <section
       ref={ref}
@@ -433,4 +432,4 @@ const DraftCard = forwardRef<
       <CommentComposer label="New comment" busy={busy} onSubmit={onSubmit} onCancel={onCancel} />
     </section>
   );
-});
+}

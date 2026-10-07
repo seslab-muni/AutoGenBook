@@ -26,7 +26,7 @@ import { HeaderIconButton } from '@/features/editor/components/header-icon-butto
 import { LockContentButton } from '@/features/editor/components/lock-content-button';
 import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
 import { LazyMarkdownView } from '@/features/editor/components/markdown-view-lazy';
-import { SourcesDrawer } from '@/features/editor/components/sources-drawer';
+import { SourcesDrawer, type SourcesDrawerView } from '@/features/editor/components/sources-drawer';
 import { SectionEditor } from '@/features/editor/components/section-editor';
 import { SectionJumpSelect } from '@/features/editor/components/section-jump-select';
 import { useEffectiveSources } from '@/features/editor/hooks/use-effective-sources';
@@ -97,6 +97,7 @@ export function ManuscriptSheet({
   const [draft, setDraft] = useState(node[field]);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [drawerView, setDrawerView] = useState<SourcesDrawerView>('sources');
   const sourcesButtonRef = useRef<HTMLButtonElement>(null);
   const [optionsFocusSources, setOptionsFocusSources] = useState(false);
   const setSelection = useEditorSelectionStore((state) => state.setSelection);
@@ -156,6 +157,11 @@ export function ManuscriptSheet({
   useWriteSelection(region, draft, view === 'write');
 
   const closeSources = useCallback(() => setSourcesOpen(false), []);
+  // A citation chip opens the sources drawer on its Citations list (where the old right-pane tab went).
+  const handleCitationClick = useCallback(() => {
+    setDrawerView('citations');
+    setSourcesOpen(true);
+  }, []);
 
   function handleCopy() {
     navigator.clipboard
@@ -489,6 +495,7 @@ export function ManuscriptSheet({
                     citations={citations}
                     anchorMarks={section.highlights}
                     sourceMap
+                    onCitationClick={handleCitationClick}
                     onAnchorClick={handleHighlightClick}
                   />
                 )}
@@ -545,6 +552,8 @@ export function ManuscriptSheet({
               : null
           }
           citations={citations}
+          view={drawerView}
+          onViewChange={setDrawerView}
           onChangeScope={() => {
             setSourcesOpen(false);
             setOptionsFocusSources(true);
@@ -565,7 +574,10 @@ export function ManuscriptSheet({
         sourcesButtonRef={sourcesButtonRef}
         sourcesOpen={sourcesOpen}
         sourcesDrawerId={SOURCES_DRAWER_ID}
-        onToggleSources={() => setSourcesOpen((open) => !open)}
+        onToggleSources={() => {
+          if (!sourcesOpen) setDrawerView('sources');
+          setSourcesOpen((open) => !open);
+        }}
         onCloseSources={closeSources}
         showCaret
       />

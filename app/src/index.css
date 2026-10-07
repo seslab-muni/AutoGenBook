@@ -214,7 +214,7 @@
  * Margin-card highlights (issue #182): the text range a comment / suggestion / review card is
  * anchored to, in both the Source (CodeMirror decoration) and Write (rehype `<mark>`) views.
  * Colour is never the only cue: each kind also has its own underline style, and the focused one
- * gains an outline.
+ * gains a stronger fill and a solid ring-coloured underline.
  */
 @layer components {
   .anchor-mark {
@@ -243,8 +243,7 @@
   }
   .anchor-mark.anchor-focused {
     background-color: color-mix(in oklab, var(--warning) 55%, transparent);
-    outline: 2px solid var(--ring);
-    outline-offset: 1px;
+    box-shadow: 0 2px 0 0 var(--ring);
   }
   .anchor-mark.anchor-suggestion.anchor-focused {
     background-color: color-mix(in oklab, var(--primary) 34%, transparent);

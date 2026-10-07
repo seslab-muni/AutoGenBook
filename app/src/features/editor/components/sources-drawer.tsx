@@ -1,11 +1,15 @@
-import { Database } from 'lucide-react';
+import { BookMarked, Database } from 'lucide-react';
 
 import type { Source } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { CitationsPanel } from '@/features/editor/components/citations-panel';
 import type { RagCitation } from '@/features/editor/lib/rag-citation';
 import type { EffectiveSourceScope } from '@/features/outline/source-scope';
 import { SourceTypeTile } from '@/features/sources/components/source-type-tile';
+
+export type SourcesDrawerView = 'sources' | 'citations';
 
 interface SourcesDrawerProps {
   id: string;
@@ -21,6 +25,9 @@ interface SourcesDrawerProps {
   /** The node the scope comes from, when it is an ancestor or the section itself. */
   scopeFromLabel: string | null;
   citations: readonly RagCitation[];
+  /** Which list is showing; the Citations list is what the old right-pane tab held. Defaults to sources. */
+  view?: SourcesDrawerView;
+  onViewChange?: (view: SourcesDrawerView) => void;
   onChangeScope: () => void;
   onClose: () => void;
 }
@@ -48,6 +55,8 @@ export function SourcesDrawer({
   scope,
   scopeFromLabel,
   citations,
+  view = 'sources',
+  onViewChange,
   onChangeScope,
   onClose,
 }: SourcesDrawerProps) {
@@ -72,24 +81,47 @@ export function SourcesDrawer({
       }}
     >
       <div className="flex shrink-0 items-center justify-between gap-3">
-        <span className="flex items-center gap-1.5 font-semibold">
-          <Database className="size-3.5 text-muted-foreground" aria-hidden="true" />
-          Sources for this section
+        <span className="flex items-center gap-2 font-semibold">
+          {view === 'sources' ? (
+            <Database className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          ) : (
+            <BookMarked className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          )}
+          {view === 'sources' ? 'Sources for this section' : 'Citations in this section'}
         </span>
-        <span className="flex items-center gap-2 text-muted-foreground">
-          Scope: {describeScope(scope, scopeFromLabel)}
-          <Button
-            type="button"
-            variant="link"
-            size="xs"
-            className="h-auto p-0"
-            onClick={onChangeScope}
-          >
-            Change scope
-          </Button>
-        </span>
+        <ToggleGroup
+          aria-label="Drawer content"
+          value={view}
+          onValueChange={(next) => onViewChange?.(next as SourcesDrawerView)}
+          className="h-7"
+        >
+          <ToggleGroupItem value="sources" className="px-2 text-xs">
+            Sources
+          </ToggleGroupItem>
+          <ToggleGroupItem value="citations" className="px-2 text-xs">
+            Citations ({citations.length})
+          </ToggleGroupItem>
+        </ToggleGroup>
+        {view === 'sources' ? (
+          <span className="flex items-center gap-2 text-muted-foreground">
+            Scope: {describeScope(scope, scopeFromLabel)}
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto p-0"
+              onClick={onChangeScope}
+            >
+              Change scope
+            </Button>
+          </span>
+        ) : null}
       </div>
-      {error ? (
+      {view === 'citations' ? (
+        <div className="custom-scrollbar -mx-4 min-h-0 overflow-y-auto" tabIndex={0}>
+          <CitationsPanel citations={citations as readonly RagCitation[]} />
+        </div>
+      ) : error ? (
         <p role="alert" className="flex items-center gap-2 text-destructive">
           Couldn&apos;t load this project&apos;s sources.
           <Button type="button" variant="link" size="xs" className="h-auto p-0" onClick={onRetry}>
