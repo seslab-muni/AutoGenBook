@@ -52,11 +52,11 @@ describe('right column', () => {
     expect(await screen.findByRole('tab', { name: 'Review' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Citations' })).not.toBeInTheDocument();
     expect(useUiStore.getState().rightPane).toBe('copilot');
-    await waitFor(() => expect(onMarginHost).toHaveBeenLastCalledWith(null));
+    await waitFor(() => expect(onMarginHost.mock.lastCall?.[0]).toBeNull());
 
     await user.click(screen.getByRole('radio', { name: 'Margin' }));
     expect(screen.queryByRole('tab', { name: 'Review' })).not.toBeInTheDocument();
-    expect(onMarginHost).toHaveBeenLastCalledWith(expect.any(HTMLElement));
+    expect(onMarginHost.mock.lastCall?.[0]).toBeInstanceOf(HTMLElement);
   });
 
   it('shows a hint instead of a slot while no section is selected', () => {

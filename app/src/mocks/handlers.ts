@@ -669,7 +669,7 @@ function reanchorComments(nodeId: string, content: string): void {
     if (comment.kind === 'suggestion' && comment.status !== 'pending') continue;
     const resolved = resolveAnchor(content, comment.anchor);
     const orphaned = resolved.start === null;
-    const status =
+    const status: Comment['status'] =
       comment.status === 'resolved'
         ? 'resolved'
         : comment.kind === 'comment' || comment.kind === 'review'

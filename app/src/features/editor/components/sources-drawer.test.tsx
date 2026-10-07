@@ -107,4 +107,38 @@ describe('SourcesDrawer', () => {
     renderDrawer({ sources: [] });
     expect(screen.getByText(/No sources are attached/)).toBeInTheDocument();
   });
+
+  it('switches to the Citations list (what the old right-pane tab held)', async () => {
+    const user = userEvent.setup();
+    const onViewChange = vi.fn();
+    renderDrawer({ onViewChange });
+    await user.click(screen.getByRole('radio', { name: 'Citations (2)' }));
+    expect(onViewChange).toHaveBeenCalledWith('citations');
+  });
+
+  it('lists the citations, best match first, when that view is active', () => {
+    renderDrawer({
+      view: 'citations',
+      citations: [
+        {
+          id: 'low',
+          sourceDoc: 'Low.pdf',
+          relevanceScore: 0.2,
+          sectionSnippet: 's',
+          pageNumber: 1,
+        },
+        {
+          id: 'high',
+          sourceDoc: 'High.pdf',
+          relevanceScore: 0.9,
+          sectionSnippet: 's',
+          pageNumber: 2,
+        },
+      ],
+    });
+    expect(screen.getByText('Citations in this section')).toBeInTheDocument();
+    const names = screen.getAllByRole('button', { name: /\.pdf/ }).map((b) => b.textContent);
+    expect(names).toEqual(['High.pdf', 'Low.pdf']);
+    expect(screen.queryByRole('list', { name: 'Effective sources' })).not.toBeInTheDocument();
+  });
 });

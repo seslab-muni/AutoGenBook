@@ -17,7 +17,7 @@ function setWidth(width: number) {
       addEventListener: () => {},
       removeEventListener: () => {},
     };
-  }) as typeof window.matchMedia;
+  }) as unknown as typeof window.matchMedia;
 }
 
 function renderLayout() {
@@ -25,7 +25,11 @@ function renderLayout() {
     <StudioLayout
       outlinePane={<div>outline</div>}
       editorPane={<div>editor</div>}
-      copilotPane={<div>right column</div>}
+      copilotPane={
+        <div>
+          right column <button type="button">inside</button>
+        </div>
+      }
     />,
   );
 }
@@ -41,7 +45,7 @@ describe('StudioLayout right column', () => {
   it('sits beside the editor at 1280px and wider', () => {
     setWidth(1280);
     renderLayout();
-    const column = screen.getByText('right column').parentElement!;
+    const column = screen.getByText(/right column/).parentElement!;
     expect(column.className).toContain('w-[376px]');
     expect(column.className).not.toContain('absolute');
   });
@@ -50,17 +54,17 @@ describe('StudioLayout right column', () => {
     const user = userEvent.setup();
     setWidth(1024);
     renderLayout();
-    expect(screen.queryByText('right column')).not.toBeInTheDocument();
+    expect(screen.queryByText(/right column/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Show copilot pane' }));
-    const column = screen.getByText('right column').parentElement!;
+    const column = screen.getByText(/right column/).parentElement!;
     expect(column.className).toContain('absolute');
     expect(screen.getByText('editor')).toBeInTheDocument();
 
     // Escape inside the overlay closes it.
-    await user.click(screen.getByText('right column'));
+    await user.click(screen.getByRole('button', { name: 'inside' }));
     await user.keyboard('{Escape}');
-    expect(screen.queryByText('right column')).not.toBeInTheDocument();
+    expect(screen.queryByText(/right column/)).not.toBeInTheDocument();
     // The persisted wide-screen preference is untouched.
     expect(useUiStore.getState().copilotOpen).toBe(true);
   });

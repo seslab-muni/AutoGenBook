@@ -32,7 +32,7 @@ interface Placed extends AnchorMark {
 function classNames(element: Element): string[] {
   const value = element.properties?.className;
   if (Array.isArray(value)) return value.map(String);
-  return typeof value === 'string' ? value.split(/\s+/) : [];
+  return typeof value === 'string' ? (value as string).split(/\s+/) : [];
 }
 
 /** Elements whose children are rendered output with no source positions of their own (KaTeX, citation chips). */
