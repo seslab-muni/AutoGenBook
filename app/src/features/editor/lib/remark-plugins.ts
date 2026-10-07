@@ -2,6 +2,8 @@ import { toString as mdastToString } from 'mdast-util-to-string';
 import type { Blockquote, PhrasingContent, Root, Text } from 'mdast';
 import { visit } from 'unist-util-visit';
 
+import { alignValueToSource } from './source-map';
+
 /**
  * Remark plugin: turns pandoc-style `[@key]` / `[@key1; @key2]` citation
  * markers and legacy `\cite{key}` / `\cite{key1,key2}` tokens (the format the
@@ -25,7 +27,8 @@ function splitKeys(raw: string): string[] {
 }
 
 export function remarkCitations() {
-  return (tree: Root) => {
+  return (tree: Root, file: { value?: unknown }) => {
+    const source = typeof file.value === 'string' ? file.value : '';
     visit(tree, 'text', (node: Text, index, parent) => {
       if (!parent || index === undefined) return;
       const value = node.value;
@@ -33,28 +36,64 @@ export function remarkCitations() {
       if (!CITE_PATTERN.test(value)) return;
       CITE_PATTERN.lastIndex = 0;
 
+      // Source offsets of each piece, by aligning the text with its source slice (escapes,
+      // entities and block-quote prefixes make them differ); pieces stay unpositioned only when
+      // the alignment fails, and are then skipped by highlights and selection mapping.
+      const origin = node.position?.start.offset;
+      const endOffset = node.position?.end.offset;
+      const map =
+        origin != null && endOffset != null && source
+          ? alignValueToSource(value, source.slice(origin, endOffset))
+          : null;
+      const placed = <T extends PhrasingContent>(piece: T, from: number, to: number): T => {
+        if (!map || origin == null || !node.position || to <= from) return piece;
+        const { start, end } = node.position;
+        const startOffset = origin + map[from]!;
+        const endOfPiece = origin + map[to - 1]! + 1;
+        return {
+          ...piece,
+          position: {
+            start: { line: start.line, column: start.column, offset: startOffset },
+            end: { line: end.line, column: end.column, offset: endOfPiece },
+          },
+        };
+      };
       const replacement: PhrasingContent[] = [];
       let lastEnd = 0;
       let match: RegExpExecArray | null;
       while ((match = CITE_PATTERN.exec(value)) !== null) {
         if (match.index > lastEnd) {
-          replacement.push({ type: 'text', value: value.slice(lastEnd, match.index) });
+          replacement.push(
+            placed(
+              { type: 'text', value: value.slice(lastEnd, match.index) },
+              lastEnd,
+              match.index,
+            ),
+          );
         }
         const keys = splitKeys(match[1] ?? match[2] ?? '');
         for (const key of keys) {
-          replacement.push({
-            type: 'text',
-            value: `@${key}`,
-            data: {
-              hName: 'span',
-              hProperties: { citekey: key },
-            },
-          } as unknown as PhrasingContent);
+          replacement.push(
+            placed(
+              {
+                type: 'text',
+                value: `@${key}`,
+                data: {
+                  hName: 'span',
+                  hProperties: { citekey: key },
+                },
+              } as unknown as PhrasingContent,
+              match.index,
+              match.index + match[0].length,
+            ),
+          );
         }
         lastEnd = match.index + match[0].length;
       }
       if (lastEnd < value.length) {
-        replacement.push({ type: 'text', value: value.slice(lastEnd) });
+        replacement.push(
+          placed({ type: 'text', value: value.slice(lastEnd) }, lastEnd, value.length),
+        );
       }
 
       const siblings = parent.children as PhrasingContent[];

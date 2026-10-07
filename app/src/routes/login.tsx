@@ -42,7 +42,9 @@ function LoginPage() {
 
   const errorMessage =
     loginMutation.isError && loginMutation.error instanceof ApiError
-      ? (loginMutation.error.problem?.detail ?? loginMutation.error.problem?.title ?? 'Sign in failed.')
+      ? (loginMutation.error.problem?.detail ??
+        loginMutation.error.problem?.title ??
+        'Sign in failed.')
       : loginMutation.isError
         ? 'Sign in failed.'
         : null;

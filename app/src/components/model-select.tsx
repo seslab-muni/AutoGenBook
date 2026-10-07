@@ -89,7 +89,9 @@ export const ModelSelect = memo(function ModelSelect({
                         setOpen(false);
                       }}
                     >
-                      <Check className={cn('size-4', model.id === value ? 'opacity-100' : 'opacity-0')} />
+                      <Check
+                        className={cn('size-4', model.id === value ? 'opacity-100' : 'opacity-0')}
+                      />
                       {model.name ?? model.id}
                     </CommandItem>
                   ))}

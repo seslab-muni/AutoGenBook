@@ -75,7 +75,9 @@ describe('apiClient 401 response middleware', () => {
     window.history.pushState({}, '', '/login?redirect=%2Fp%2Fabc');
     const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(undefined);
     server.use(
-      http.get('*/api/v1/auth/me', () => problemResponse(401, 'Not authenticated', '/api/v1/auth/me')),
+      http.get('*/api/v1/auth/me', () =>
+        problemResponse(401, 'Not authenticated', '/api/v1/auth/me'),
+      ),
     );
 
     await expect(unwrap(apiClient.GET('/api/v1/auth/me', {}))).rejects.toThrow();

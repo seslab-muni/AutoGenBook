@@ -12,6 +12,7 @@ import type {
 import { assignPositions, descendantIds, nextOrderIndex } from '@/features/outline/model';
 import { mergeSourceScope } from '@/features/outline/source-scope';
 
+import { COLLABORATION_POLL_MS } from './comments';
 import { projectKeys } from './keys';
 
 type OutlineFlatSnapshot = [readonly unknown[], Page<OutlineNode> | undefined][];
@@ -68,6 +69,8 @@ export const outline = {
   flat: (projectId: string, params: { limit?: number; offset?: number } = {}) =>
     queryOptions({
       queryKey: [...projectKeys.outlineList(projectId, 'flat'), params],
+      // The row badges (open comments, pending suggestions) change when other people act.
+      refetchInterval: COLLABORATION_POLL_MS,
       queryFn: async () => {
         const page = await unwrap(
           apiClient.GET('/api/v1/projects/{project_id}/outline', {
@@ -291,6 +294,13 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
       });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
+      // The server re-anchors the section's comments on every content save (issue #182): pick up
+      // their new positions, and the open/orphaned status that goes with them.
+      if (body.contentMarkdown !== undefined) {
+        void queryClient.invalidateQueries({
+          queryKey: projectKeys.nodeComments(projectId, nodeId),
+        });
+      }
     },
   });
 }

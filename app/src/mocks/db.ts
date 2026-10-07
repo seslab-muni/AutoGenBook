@@ -1,4 +1,5 @@
 import type {
+  Comment,
   FileDto,
   OutlineNode,
   OutlineNodeTree,
@@ -29,6 +30,7 @@ class MockDatabase {
   projects = new Map<string, ProjectRow>();
   sources = new Map<string, Source & { projectId: string }>();
   outlineNodes = new Map<string, OutlineNode & { projectId: string }>();
+  comments = new Map<string, Comment>();
   runs = new Map<string, Run>();
   runEvents = new Map<string, RunEvent[]>();
   runArtifacts = new Map<string, RunArtifact[]>();
@@ -43,6 +45,7 @@ class MockDatabase {
     this.projects.clear();
     this.sources.clear();
     this.outlineNodes.clear();
+    this.comments.clear();
     this.runs.clear();
     this.runEvents.clear();
     this.runArtifacts.clear();
@@ -66,10 +69,32 @@ class MockDatabase {
       .map(stripProjectId);
   }
 
+  /** The badge counts the real API derives from `node_comments` (`openCommentCount`, `pendingSuggestionCount`). */
+  withCommentCounts<T extends OutlineNode>(node: T): T {
+    let open = 0;
+    let pending = 0;
+    for (const comment of this.comments.values()) {
+      if (comment.nodeId !== node.id) continue;
+      if (
+        comment.kind === 'comment' &&
+        comment.parentId === null &&
+        (comment.status === 'open' || comment.status === 'orphaned')
+      )
+        open += 1;
+      if (
+        comment.kind === 'suggestion' &&
+        (comment.status === 'running' || comment.status === 'pending')
+      )
+        pending += 1;
+    }
+    return { ...node, openCommentCount: open, pendingSuggestionCount: pending };
+  }
+
   outlineFlatForProject(projectId: string): OutlineNode[] {
     return [...this.outlineNodes.values()]
       .filter((node) => node.projectId === projectId)
       .map(stripProjectId)
+      .map((node) => this.withCommentCounts(node))
       .sort((a, b) => a.sectionNumber.localeCompare(b.sectionNumber, undefined, { numeric: true }));
   }
 

@@ -94,8 +94,15 @@ and status bar (issue #182): the content-lock button, a Write/Source toggle grou
 generation brief and source scope (`chapter-options-popover.tsx`, which replaced
 the old outline-row Properties sheet), a Copilot button (disabled until
 `ManuscriptSheet` gets `onOpenCopilot`), and a status bar with character/word
-counts, an `N sources` drawer and the Source view's caret position
-(`stores/editor-selection-store.ts`, code-point offsets for phase 2's anchors). See
+counts, an `N sources` drawer (sources and citations) and the caret/selection
+position (`stores/editor-selection-store.ts`, code-point offsets). Phase 2 adds the
+margin workspace: `features/editor/lib/anchors.ts` (text-quote anchors),
+`features/editor/margin/` (cards and their registry, layout, selection layer, the right-column
+Margin/Copilot switch and the narrow-screen side sheet), highlights in both views (CSS Custom
+Highlight API in Write, a CodeMirror field in Source) and outline-row comment badges; `src/test/viewport.ts`
+runs a test at a given screen width;
+`pnpm test` covers them with unit tests, MSW-backed component tests and routed flow
+tests (`margin-flow`, `margin-write` and `margin-editing` `.route.test.tsx`). See
 `docs/WEB_UI.md` for the behaviour.
 
 Routes stay thin: a route module owns params/search-param parsing, loader

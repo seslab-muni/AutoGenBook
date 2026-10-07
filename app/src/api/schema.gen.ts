@@ -328,6 +328,87 @@ export interface paths {
         patch: operations["outline-update_outline_node"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Project Comments
+         * @description Whole threads; `kind`/`status` select thread roots and `limit`/`offset`/
+         *     `total` count roots (each root's replies come along).
+         */
+        get: operations["comments-list_project_comments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/outline/{node_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Node Comments
+         * @description Whole threads of the node, not paged (`total` counts thread roots).
+         */
+        get: operations["comments-list_node_comments"];
+        put?: never;
+        /** Create Node Comment */
+        post: operations["comments-create_node_comment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/comments/{comment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Comment */
+        delete: operations["comments-delete_comment"];
+        options?: never;
+        head?: never;
+        /** Update Comment */
+        patch: operations["comments-update_comment"];
+        trace?: never;
+    };
+    "/api/v1/comments/{comment_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Comment
+         * @description Resolve a thread (`{}` or `{"resolved": true}`) or reopen it
+         *     (`{"resolved": false}`). Only a thread's root can be resolved.
+         */
+        post: operations["comments-resolve_comment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/runs": {
         parameters: {
             query?: never;
@@ -578,6 +659,146 @@ export interface components {
             /** Kb Sources */
             kb_sources?: string[] | null;
         };
+        /** Comment */
+        Comment: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Projectid
+             * Format: uuid
+             */
+            projectId: string;
+            /**
+             * Nodeid
+             * Format: uuid
+             */
+            nodeId: string;
+            kind: components["schemas"]["CommentKind"];
+            /** Authorid */
+            authorId: string | null;
+            /** Authorname */
+            authorName?: string | null;
+            anchor: components["schemas"]["CommentAnchorOut"] | null;
+            status: components["schemas"]["CommentStatus"];
+            /**
+             * Threadid
+             * Format: uuid
+             */
+            threadId: string;
+            /** Parentid */
+            parentId: string | null;
+            /** Bodymarkdown */
+            bodyMarkdown: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Editedat */
+            editedAt?: string | null;
+        };
+        /**
+         * CommentAnchorIn
+         * @description Request anchor: a W3C text-quote selector over the node's
+         *     `contentMarkdown`. `start`/`end` are Unicode code-point offsets (not UTF-16
+         *     units), `end` exclusive; both null = unknown/orphaned. The server
+         *     re-resolves it (`api.application.comment_anchors.resolve_anchor`) and
+         *     refreshes `prefix`/`suffix` from the content.
+         */
+        CommentAnchorIn: {
+            /** Quote */
+            quote: string;
+            /**
+             * Prefix
+             * @default
+             */
+            prefix?: string;
+            /**
+             * Suffix
+             * @default
+             */
+            suffix?: string;
+            /** Start */
+            start?: number | null;
+            /** End */
+            end?: number | null;
+        };
+        /**
+         * CommentAnchorOut
+         * @description Response anchor. Deliberately unable to fail: stored anchors (e.g. from
+         *     a fuzzy re-anchor, which rewrites `quote` to the text actually matched, or
+         *     the reviewer import) always serialise. None of the request rules apply;
+         *     a missing/wrong-typed `quote`/`prefix`/`suffix` becomes `""` and bad or
+         *     partial `start`/`end` degrade to null (orphaned).
+         */
+        CommentAnchorOut: {
+            /**
+             * Quote
+             * @default
+             */
+            quote?: string;
+            /**
+             * Prefix
+             * @default
+             */
+            prefix?: string;
+            /**
+             * Suffix
+             * @default
+             */
+            suffix?: string;
+            /** Start */
+            start?: number | null;
+            /** End */
+            end?: number | null;
+        };
+        /** CommentCreate */
+        CommentCreate: {
+            /** Bodymarkdown */
+            bodyMarkdown: string;
+            anchor?: components["schemas"]["CommentAnchorIn"] | null;
+            /** Parentid */
+            parentId?: string | null;
+        };
+        /**
+         * CommentKind
+         * @enum {string}
+         */
+        CommentKind: "comment" | "suggestion" | "review";
+        /** CommentResolve */
+        CommentResolve: {
+            /**
+             * Resolved
+             * @default true
+             */
+            resolved?: boolean;
+        };
+        /**
+         * CommentStatus
+         * @description Comment and review rows: `open | resolved | orphaned`. Suggestion rows:
+         *     `running` (job in flight, cancellable), `pending` (finished, awaiting
+         *     accept/reject), `accepted`, `rejected`, `failed`, `cancelled`. A DB CHECK
+         *     (`ck_node_comments_kind_status`) enforces the pairing.
+         * @enum {string}
+         */
+        CommentStatus: "open" | "resolved" | "orphaned" | "running" | "pending" | "accepted" | "rejected" | "failed" | "cancelled";
+        /** CommentUpdate */
+        CommentUpdate: {
+            /** Bodymarkdown */
+            bodyMarkdown: string;
+        };
         /**
          * ExportRequestIn
          * @description Request body of `POST /runs/{id}/exports`.
@@ -736,6 +957,16 @@ export interface components {
             /** Sourceids */
             sourceIds: string[];
             /**
+             * Opencommentcount
+             * @default 0
+             */
+            openCommentCount?: number;
+            /**
+             * Pendingsuggestioncount
+             * @default 0
+             */
+            pendingSuggestionCount?: number;
+            /**
              * Createdat
              * Format: date-time
              */
@@ -824,6 +1055,16 @@ export interface components {
             /** Sourceids */
             sourceIds: string[];
             /**
+             * Opencommentcount
+             * @default 0
+             */
+            openCommentCount?: number;
+            /**
+             * Pendingsuggestioncount
+             * @default 0
+             */
+            pendingSuggestionCount?: number;
+            /**
              * Createdat
              * Format: date-time
              */
@@ -906,6 +1147,17 @@ export interface components {
          * @enum {string}
          */
         OutputFormat: "markdown" | "latex" | "pdf";
+        /** Page[Comment] */
+        Page_Comment_: {
+            /** Items */
+            items: components["schemas"]["Comment"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** Page[File] */
         Page_File_: {
             /** Items */
@@ -2466,6 +2718,212 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OutlineNode"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-list_project_comments": {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["CommentKind"] | null;
+                status?: components["schemas"]["CommentStatus"] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Comment_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-list_node_comments": {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["CommentKind"] | null;
+                status?: components["schemas"]["CommentStatus"] | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Comment_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-create_node_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-delete_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-update_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-resolve_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CommentResolve"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
                 };
             };
             /** @description Validation Error */

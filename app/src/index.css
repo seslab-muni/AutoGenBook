@@ -209,3 +209,173 @@
     @apply my-4 overflow-x-auto overflow-y-hidden py-1;
   }
 }
+
+/*
+ * Margin-card highlights (issue #182): the text range a comment / suggestion / review card is
+ * anchored to, in the Source view (CodeMirror mark decorations), the Write view (CSS Custom
+ * Highlight API, or `<mark>`s where it is missing) and on opaque pieces such as math.
+ *
+ * Colour is never the only cue: every kind has its own underline style (comment solid, suggestion
+ * dashed, review dotted, resolved double, the unsent draft wavy), drawn in a line colour that keeps
+ * at least 3:1 against the page, over a fill light enough that the text on it keeps 4.5:1. The
+ * focused highlight gets a stronger fill and a thicker line. Values were measured, both themes.
+ */
+/* Registered, so each fill is resolved against its own surface where it is declared and inherited as a
+ * plain colour: `::highlight()` does not resolve a relative colour against that surface itself. */
+@property --anchor-comment-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-suggestion-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-review-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-draft-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-resolved-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --anchor-focused-bg {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+
+:root {
+  --anchor-comment-bg: oklch(0.9 0.1 95 / 0.55);
+  --anchor-comment-line: oklch(0.5 0.13 70);
+  --anchor-suggestion-bg: oklch(0.88 0.05 265 / 0.5);
+  --anchor-suggestion-line: oklch(0.45 0.18 266);
+  --anchor-review-bg: oklch(0.9 0.05 20 / 0.5);
+  --anchor-review-line: oklch(0.48 0.2 20);
+  --anchor-draft-bg: oklch(0.9 0.04 265 / 0.45);
+  --anchor-draft-line: oklch(0.45 0.18 266);
+  --anchor-resolved-bg: oklch(0.93 0 0 / 0.5);
+  --anchor-resolved-line: oklch(0.5 0.02 250);
+  --anchor-focused-bg: oklch(0.88 0.09 90 / 0.5);
+}
+.dark {
+  /* The fill keeps the lightness of the surface it sits on (the card in Write, CodeMirror's dark
+   * background in Source) and only moves hue and chroma, so tokens and links on a highlight keep
+   * the contrast they have off it. */
+  --anchor-surface: var(--card);
+  --anchor-comment-bg: oklch(from var(--anchor-surface) calc(l + 0.03) 0.12 85 / 0.9);
+  --anchor-comment-line: oklch(0.85 0.15 90);
+  --anchor-suggestion-bg: oklch(from var(--anchor-surface) calc(l + 0.03) 0.13 265 / 0.9);
+  --anchor-suggestion-line: oklch(0.8 0.12 265);
+  --anchor-review-bg: oklch(from var(--anchor-surface) calc(l + 0.03) 0.13 20 / 0.9);
+  --anchor-review-line: oklch(0.82 0.12 20);
+  --anchor-draft-bg: oklch(from var(--anchor-surface) calc(l + 0.025) 0.1 265 / 0.9);
+  --anchor-draft-line: oklch(0.8 0.12 265);
+  --anchor-resolved-bg: oklch(from var(--anchor-surface) calc(l + 0.04) 0 0 / 0.9);
+  --anchor-resolved-line: oklch(0.78 0.02 250);
+  --anchor-focused-bg: oklch(from var(--anchor-surface) calc(l + 0.05) 0.16 90 / 0.95);
+}
+.dark .cm-editor {
+  --anchor-surface: #282c34;
+}
+
+@layer components {
+  .anchor-mark,
+  [data-anchor-hit] {
+    cursor: pointer;
+    border-radius: 2px;
+    background-color: var(--anchor-comment-bg);
+    text-decoration: underline solid var(--anchor-comment-line) 2px;
+    text-underline-offset: 3px;
+  }
+  .anchor-mark.anchor-suggestion,
+  [data-anchor-hit][data-anchor-kind='suggestion'] {
+    background-color: var(--anchor-suggestion-bg);
+    text-decoration: underline dashed var(--anchor-suggestion-line) 2px;
+  }
+  .anchor-mark.anchor-review,
+  [data-anchor-hit][data-anchor-kind='review'] {
+    background-color: var(--anchor-review-bg);
+    text-decoration: underline dotted var(--anchor-review-line) 3px;
+  }
+  .anchor-mark.anchor-draft,
+  [data-anchor-hit][data-anchor-kind='draft'] {
+    background-color: var(--anchor-draft-bg);
+    text-decoration: underline wavy var(--anchor-draft-line) 2px;
+  }
+  .anchor-mark.anchor-resolved,
+  [data-anchor-hit][data-anchor-kind='resolved'] {
+    background-color: var(--anchor-resolved-bg);
+    text-decoration: underline double var(--anchor-resolved-line) 3px;
+  }
+  .anchor-mark.anchor-focused,
+  [data-anchor-hit][data-anchor-focused] {
+    background-color: var(--anchor-focused-bg);
+    text-decoration-thickness: 3px;
+  }
+  /* Opaque pieces (math, citation chips) cannot take a text highlight: tint and ring the block. */
+  [data-anchor-hit] {
+    outline: 2px solid var(--anchor-comment-line);
+    outline-offset: 2px;
+    text-decoration: none;
+  }
+  [data-anchor-hit][data-anchor-kind='suggestion'] {
+    outline-color: var(--anchor-suggestion-line);
+    outline-style: dashed;
+  }
+  [data-anchor-hit][data-anchor-kind='review'] {
+    outline-color: var(--anchor-review-line);
+    outline-style: dotted;
+  }
+  [data-anchor-hit][data-anchor-kind='resolved'] {
+    outline-color: var(--anchor-resolved-line);
+    outline-style: double;
+  }
+  [data-anchor-hit][data-anchor-kind='draft'] {
+    outline-color: var(--anchor-draft-line);
+    outline-style: dashed;
+  }
+  /* Display math is a block: the ring and tint must frame the whole formula, not an inline sliver. */
+  .anchor-math:has(.katex-display)[data-anchor-hit] {
+    display: block;
+  }
+}
+
+/* The CSS Custom Highlight API (Write view). `::highlight()` takes colours and text decorations only. */
+::highlight(anchor-comment) {
+  background-color: var(--anchor-comment-bg);
+  text-decoration: underline solid var(--anchor-comment-line) 2px;
+  text-underline-offset: 3px;
+}
+::highlight(anchor-suggestion) {
+  background-color: var(--anchor-suggestion-bg);
+  text-decoration: underline dashed var(--anchor-suggestion-line) 2px;
+  text-underline-offset: 3px;
+}
+::highlight(anchor-review) {
+  background-color: var(--anchor-review-bg);
+  text-decoration: underline dotted var(--anchor-review-line) 3px;
+  text-underline-offset: 3px;
+}
+::highlight(anchor-draft) {
+  background-color: var(--anchor-draft-bg);
+  text-decoration: underline wavy var(--anchor-draft-line) 2px;
+  text-underline-offset: 3px;
+}
+::highlight(anchor-resolved) {
+  background-color: var(--anchor-resolved-bg);
+  text-decoration: underline double var(--anchor-resolved-line) 3px;
+  text-underline-offset: 3px;
+}
+::highlight(anchor-focused) {
+  background-color: var(--anchor-focused-bg);
+  text-decoration-thickness: 3px;
+}

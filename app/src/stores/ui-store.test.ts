@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_OUTLINE_WIDTH, MAX_OUTLINE_WIDTH, MIN_OUTLINE_WIDTH, useUiStore } from './ui-store';
+import {
+  DEFAULT_OUTLINE_WIDTH,
+  MAX_OUTLINE_WIDTH,
+  MIN_OUTLINE_WIDTH,
+  useUiStore,
+} from './ui-store';
 
 function resetStore() {
   useUiStore.setState({
     outlineOpen: true,
     copilotOpen: true,
+    rightPane: 'margin',
+    rightOverlayOpen: false,
     outlineWidth: DEFAULT_OUTLINE_WIDTH,
     activeModal: null,
   });
@@ -21,6 +28,18 @@ describe('useUiStore', () => {
 
     useUiStore.getState().toggleCopilot();
     expect(useUiStore.getState().copilotOpen).toBe(false);
+  });
+
+  it('shows the margin by default, and the narrow overlay has its own unpersisted state', () => {
+    expect(useUiStore.getState().rightPane).toBe('margin');
+    useUiStore.getState().setRightOverlayOpen(true);
+    expect(useUiStore.getState().rightOverlayOpen).toBe(true);
+    const persisted = JSON.parse(window.localStorage.getItem('autogenbook-ui') ?? '{}') as {
+      state: Record<string, unknown>;
+    };
+    expect(persisted.state).not.toHaveProperty('rightOverlayOpen');
+    // Opening the overlay never touches the wide-screen preference.
+    expect(useUiStore.getState().copilotOpen).toBe(true);
   });
 
   it('opens and closes exactly one modal at a time', () => {
@@ -44,6 +63,7 @@ describe('useUiStore', () => {
     expect(persisted.state).toEqual({
       outlineOpen: false,
       copilotOpen: true,
+      rightPane: 'margin',
       outlineWidth: DEFAULT_OUTLINE_WIDTH,
     });
   });

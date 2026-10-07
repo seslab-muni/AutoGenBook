@@ -11,7 +11,9 @@ import { renderRouterApp } from '@/test/router-test-utils';
 /** MSW defaults to "signed in"; route-level tests that need the logged-out form override this. */
 function simulateLoggedOut(): void {
   server.use(
-    http.get('*/api/v1/auth/me', () => problemResponse(401, 'Not authenticated', '/api/v1/auth/me')),
+    http.get('*/api/v1/auth/me', () =>
+      problemResponse(401, 'Not authenticated', '/api/v1/auth/me'),
+    ),
   );
 }
 
@@ -28,7 +30,9 @@ describe('/login', () => {
     renderRouterApp('/login?redirect=%2Fp%2Fbook-consensus-quantum-2026');
 
     expect(
-      await screen.findByRole('heading', { name: /Distributed Consensus & Quantum Fault Tolerance/i }),
+      await screen.findByRole('heading', {
+        name: /Distributed Consensus & Quantum Fault Tolerance/i,
+      }),
     ).toBeInTheDocument();
   });
 

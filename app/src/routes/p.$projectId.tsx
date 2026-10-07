@@ -18,11 +18,13 @@ import { SourcesDialog } from '@/features/sources/components/sources-dialog';
 
 export interface ProjectSearch {
   node?: string;
-  tab?: 'copilot' | 'citations' | 'review' | 'settings';
+  tab?: 'copilot' | 'review' | 'settings';
 }
 
 type ProjectTab = NonNullable<ProjectSearch['tab']>;
-const TABS: readonly ProjectTab[] = ['copilot', 'citations', 'review', 'settings'];
+// `citations` is gone (the list lives in the editor's sources drawer): an old `?tab=citations` link
+// fails this check like any unknown value and simply opens the studio on its default right pane.
+const TABS: readonly ProjectTab[] = ['copilot', 'review', 'settings'];
 
 function validateSearch(search: Record<string, unknown>): ProjectSearch {
   const result: ProjectSearch = {};

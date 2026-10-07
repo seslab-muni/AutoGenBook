@@ -19,6 +19,7 @@ import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
 import type { OutlineNode } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
 import { StatusBadge } from '@/components/status-badge';
+import { NodeCountBadges } from '@/features/outline/components/node-count-badges';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -333,6 +334,8 @@ function OutlineRowComponent({
             )}
 
             <SourceScopePill node={node} flat={flat} />
+
+            <NodeCountBadges node={node} />
 
             {node.contentLocked ? (
               <span
