@@ -31,6 +31,8 @@ function renderDrawer(overrides: Partial<React.ComponentProps<typeof SourcesDraw
     <SourcesDrawer
       id="drawer"
       sources={[source('s1', 'Gottesman.pdf'), source('s2', 'Knill.pdf', null)]}
+      failedSources={[]}
+      loading={false}
       scope={{ kind: 'selected', own: false, fromNodeId: 'ch', sourceIds: ['s1', 's2'] }}
       scopeFromLabel="§3 Quantum codes"
       citations={CITATIONS}
@@ -50,9 +52,9 @@ describe('SourcesDrawer', () => {
     );
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent('Gottesman.pdf');
-    expect(items[0]).toHaveTextContent('12 chunks · cited 2× here');
+    expect(items[0]).toHaveTextContent('12 chunks · 2 passages cited (last run)');
     expect(items[1]).toHaveTextContent('Knill.pdf');
-    expect(items[1]).toHaveTextContent('not cited yet');
+    expect(items[1]).toHaveTextContent('not cited in last run');
     expect(screen.getByText('Scope: inherited from §3 Quantum codes')).toBeInTheDocument();
   });
 
@@ -61,7 +63,26 @@ describe('SourcesDrawer', () => {
     expect(screen.getByText('Scope: all project sources')).toBeInTheDocument();
   });
 
-  it('offers Change scope and closes on Escape', async () => {
+  it('lists failed sources as not searched and shows a loading state', () => {
+    renderDrawer({ failedSources: [{ ...source('s3', 'Broken.pdf'), status: 'error' }] });
+    expect(screen.getByText('Broken.pdf')).toBeInTheDocument();
+    expect(screen.getByText('Indexing failed, not searched')).toBeInTheDocument();
+  });
+
+  it('shows a loading line instead of the empty message while sources load', () => {
+    renderDrawer({ sources: [], loading: true });
+    expect(screen.getByText('Loading sources…')).toBeInTheDocument();
+    expect(screen.queryByText(/No sources are attached/)).not.toBeInTheDocument();
+  });
+
+  it('ignores Escape that happens outside the drawer', async () => {
+    const user = userEvent.setup();
+    const { onClose } = renderDrawer();
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('offers Change scope and closes on Escape inside the drawer', async () => {
     const user = userEvent.setup();
     const { onChangeScope, onClose } = renderDrawer();
     await user.click(screen.getByRole('button', { name: 'Change scope' }));

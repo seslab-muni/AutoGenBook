@@ -261,8 +261,20 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
     onError: (_error, _body, context) => {
       if (context) restoreFlat(queryClient, context.previous);
     },
-    onSuccess: (node) => {
-      queryClient.setQueryData(projectKeys.outlineNode(projectId, nodeId), node);
+    onSuccess: (node, body) => {
+      // Merge only what this PATCH sent (plus what the server derives from it) over the cached
+      // node: two PATCHes can be in flight at once (an autosave and a lock toggle), and a late
+      // response carrying the other one's older fields must not overwrite them.
+      const touched: (keyof OutlineNode)[] = [...(Object.keys(body) as (keyof OutlineNode)[])];
+      if (body.contentMarkdown !== undefined || body.contentLatex !== undefined) {
+        touched.push('contentLocked', 'actualWords', 'status');
+      }
+      queryClient.setQueryData<OutlineNode>(projectKeys.outlineNode(projectId, nodeId), (old) => {
+        if (!old) return node;
+        const merged: Record<string, unknown> = { ...old, updatedAt: node.updatedAt };
+        for (const key of touched) merged[key] = node[key];
+        return merged as unknown as OutlineNode;
+      });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
     },

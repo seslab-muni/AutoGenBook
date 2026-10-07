@@ -11,9 +11,9 @@ interface HeaderIconButtonProps {
 }
 
 /**
- * An icon-only button in the editor header with a tooltip. A disabled button gets no pointer
- * events, so the tooltip hangs off a focusable wrapper span instead — that keeps the reason it
- * is disabled reachable by hover and by keyboard.
+ * An icon-only button in the editor header with a tooltip. "Disabled" is `aria-disabled`, not the
+ * `disabled` attribute: the button stays focusable and hoverable, so the tooltip that says why it
+ * does nothing is reachable by keyboard and pointer, while a click is a no-op.
  */
 export function HeaderIconButton({
   label,
@@ -26,19 +26,18 @@ export function HeaderIconButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex" tabIndex={disabled ? 0 : undefined}>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label={label}
-            aria-pressed={pressed}
-            disabled={disabled}
-            onClick={onClick}
-          >
-            {children}
-          </Button>
-        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label={label}
+          aria-pressed={pressed}
+          aria-disabled={disabled || undefined}
+          className={disabled ? 'cursor-not-allowed opacity-50' : undefined}
+          onClick={disabled ? undefined : onClick}
+        >
+          {children}
+        </Button>
       </TooltipTrigger>
       <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>

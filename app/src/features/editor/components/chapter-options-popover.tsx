@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, SlidersHorizontal } from 'lucide-react';
 
 import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
 import type { MathLevel, OutlineNode, OutlineNodeUpdate } from '@/api/types';
@@ -26,6 +26,8 @@ interface ChapterOptionsPopoverProps {
   flat: readonly OutlineNode[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Open with focus on the Sources section (scrolled into view) instead of the first field. */
+  focusSources?: boolean;
 }
 
 /**
@@ -40,18 +42,34 @@ export function ChapterOptionsPopover({
   flat,
   open,
   onOpenChange,
+  focusSources = false,
 }: ChapterOptionsPopoverProps) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button type="button" variant="outline" size="sm" className="rounded-full">
-          Chapter options
+          <SlidersHorizontal />
+          <span className="max-xl:sr-only">Chapter options</span>
           <ChevronDown />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"
         aria-label="Chapter options"
+        onOpenAutoFocus={(event) => {
+          if (!focusSources) return;
+          const section =
+            event.currentTarget instanceof HTMLElement
+              ? event.currentTarget.querySelector('[data-sources-section]')
+              : null;
+          const target = section?.querySelector<HTMLElement>(
+            '[role="radio"][aria-checked="true"], [role="radio"]',
+          );
+          if (!target) return;
+          event.preventDefault();
+          target.focus();
+          target.scrollIntoView?.({ block: 'nearest' });
+        }}
         className="custom-scrollbar max-h-[min(36rem,var(--radix-popover-content-available-height))] w-96 max-w-[calc(100vw-2rem)] overflow-y-auto"
       >
         <ChapterOptionsForm projectId={projectId} node={node} flat={flat} />
@@ -122,6 +140,7 @@ function ChapterOptionsForm({
           </span>
         </div>
         <Slider
+          thumbLabels={['Target pages']}
           min={0.5}
           max={30}
           step={0.5}
@@ -140,6 +159,7 @@ function ChapterOptionsForm({
           <span className="text-muted-foreground">{equationDensityLevel}/5</span>
         </div>
         <Slider
+          thumbLabels={['Equation density']}
           min={1}
           max={5}
           step={1}

@@ -89,12 +89,13 @@ scripts/        # standalone Node scripts (currently just check-bundle-budget.mj
 ```
 
 The editor pane (`src/features/editor`) puts a section's controls in its header
-and status bar (issue #182): the content-lock button, a Write/Source switcher
+and status bar (issue #182): the content-lock button, a Write/Source toggle group
 (`stores/editor-store.ts`), a Chapter options popover for the section's
 generation brief and source scope (`chapter-options-popover.tsx`, which replaced
 the old outline-row Properties sheet), a Copilot button (disabled until
 `ManuscriptSheet` gets `onOpenCopilot`), and a status bar with character/word
-counts, an `N sources` drawer and the Source view's caret position. See
+counts, an `N sources` drawer and the Source view's caret position
+(`stores/editor-selection-store.ts`, code-point offsets for phase 2's anchors). See
 `docs/WEB_UI.md` for the behaviour.
 
 Routes stay thin: a route module owns params/search-param parsing, loader

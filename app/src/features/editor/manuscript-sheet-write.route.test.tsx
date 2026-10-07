@@ -73,7 +73,7 @@ describe('Studio editor pane (routed, MSW-backed) — write view and autosave', 
       LONG,
     );
 
-    await user.click(await screen.findByRole('tab', { name: 'Source' }, LONG));
+    await user.click(await screen.findByRole('radio', { name: 'Source' }, LONG));
     const editor = await waitFor(() => {
       const el = document.querySelector('.cm-content');
       if (!el) throw new Error('editor not mounted yet');

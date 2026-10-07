@@ -2,20 +2,23 @@ import { ChevronUp } from 'lucide-react';
 
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
 import { Button } from '@/components/ui/button';
-import type { EditorCaret } from '@/features/editor/components/section-editor';
 import { cn } from '@/lib/utils';
+import { useEditorSelectionStore } from '@/stores/editor-selection-store';
 
 interface EditorStatusBarProps {
   /** Characters (code points) and whitespace-delimited words of the live draft. */
   characters: number;
   words: number;
-  sourceCount: number;
+  /** `null` while the source list is still loading — shows no count rather than a wrong "0". */
+  sourceCount: number | null;
   sourcesOpen: boolean;
   /** `id` of the sources drawer this bar's button controls. */
   sourcesDrawerId: string;
   onToggleSources: () => void;
-  /** `null` hides the caret readout (the Write view has no caret in the Markdown source). */
-  caret: EditorCaret | null;
+  /** Shows the caret readout (Source view only; Write has no caret in the Markdown source). */
+  showCaret: boolean;
+  /** Closes the sources drawer — fired by Escape on the sources button while it is open. */
+  onCloseSources: () => void;
   className?: string;
 }
 
@@ -30,29 +33,41 @@ export function EditorStatusBar({
   sourcesOpen,
   sourcesDrawerId,
   onToggleSources,
-  caret,
+  showCaret,
+  onCloseSources,
   className,
 }: EditorStatusBarProps) {
   return (
     <PaneStatusBar className={cn('justify-between font-mono', className)}>
-      <span className="flex-1">
+      <span className="min-w-0 flex-1 truncate">
         {characters.toLocaleString()} characters · {words.toLocaleString()} words
       </span>
       <Button
         type="button"
         variant="ghost"
         size="xs"
-        className="h-5 font-mono"
+        className="h-5 shrink-0 font-mono"
         aria-expanded={sourcesOpen}
         aria-controls={sourcesDrawerId}
         onClick={onToggleSources}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && sourcesOpen) onCloseSources();
+        }}
       >
-        {sourceCount} {sourceCount === 1 ? 'source' : 'sources'}
+        {sourceCount === null
+          ? 'Sources'
+          : `${sourceCount} ${sourceCount === 1 ? 'source' : 'sources'}`}
         <ChevronUp className={cn('transition-transform', sourcesOpen && 'rotate-180')} />
       </Button>
-      <span className="flex-1 text-right">
-        {caret ? `Ln ${caret.line}, Col ${caret.column}` : null}
+      <span className="min-w-0 flex-1 truncate text-right">
+        {showCaret ? <CaretReadout /> : null}
       </span>
     </PaneStatusBar>
   );
+}
+
+/** Subscribes to the selection store on its own so a caret move re-renders only this readout. */
+function CaretReadout() {
+  const selection = useEditorSelectionStore((state) => state.selection);
+  return selection ? `Ln ${selection.line}, Col ${selection.column}` : null;
 }

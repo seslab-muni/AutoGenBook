@@ -1,5 +1,6 @@
 import userEvent from '@testing-library/user-event';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { screen, waitFor, within } from '@testing-library/react';
 import { http } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -20,11 +21,14 @@ const CASTRO_NAME = 'Castro_Liskov_PBFT_TOCS.pdf';
 
 /** Every PATCH body the popover sends — observed, then passed through to the regular mock handler. */
 let patchBodies: OutlineNodeUpdate[];
+let patchNodeIds: string[];
 
 beforeEach(() => {
   patchBodies = [];
+  patchNodeIds = [];
   server.use(
-    http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async ({ request }) => {
+    http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async ({ request, params }) => {
+      patchNodeIds.push(params.nodeId as string);
       patchBodies.push((await request.clone().json()) as OutlineNodeUpdate);
       return undefined;
     }),
@@ -133,8 +137,8 @@ describe('ChapterOptionsPopover brief fields', () => {
     renderWithProviders(<Harness nodeId="sec-1-1" />);
 
     const subPrompt = await screen.findByRole('textbox', { name: 'Sub-prompt' });
-    expect(screen.getByText('Target pages')).toBeInTheDocument();
-    expect(screen.getByText('Equation density')).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Target pages' })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Equation density' })).toBeInTheDocument();
 
     await user.type(subPrompt, 'Use the five-qubit code.');
     await waitFor(() =>
@@ -160,5 +164,73 @@ describe('ChapterOptionsPopover brief fields', () => {
     await user.type(await screen.findByRole('textbox', { name: 'Sub-prompt' }), 'x');
     unmount();
     await waitFor(() => expect(patchBodies).toContainEqual({ subPrompt: 'x' }));
+  });
+});
+
+/** A closable popover (as `ManuscriptSheet` drives it), keyed by node like the sheet is. */
+function ClosableHarness({ initialNodeId }: { initialNodeId: string }) {
+  const [nodeId, setNodeId] = useState(initialNodeId);
+  const [open, setOpen] = useState(true);
+  const { data } = useQuery(outline.flat(PROJECT_ID));
+  const flat = data?.items ?? [];
+  const node = flat.find((item) => item.id === nodeId);
+  return (
+    <>
+      <button type="button" onClick={() => setNodeId('sec-1-2')}>
+        switch section
+      </button>
+      <button type="button">outside</button>
+      {node ? (
+        <ChapterOptionsPopover
+          key={node.id}
+          projectId={PROJECT_ID}
+          node={node}
+          flat={flat}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      ) : null}
+    </>
+  );
+}
+
+describe('ChapterOptionsPopover pending edits', () => {
+  it('merges two fields edited inside one debounce window into a single PATCH', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness nodeId="sec-1-1" />);
+    await user.type(await screen.findByRole('textbox', { name: 'Sub-prompt' }), 'a');
+    await user.type(screen.getByRole('textbox', { name: 'Summary (CLI brief)' }), 'b');
+
+    await waitFor(() => expect(patchBodies).toHaveLength(1));
+    expect(Object.keys(patchBodies[0] ?? {}).sort()).toEqual(['subPrompt', 'summary']);
+  });
+
+  it('saves a pending edit when the popover closes with Escape', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ClosableHarness initialNodeId="sec-1-1" />);
+    await user.type(await screen.findByRole('textbox', { name: 'Sub-prompt' }), 'z');
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(patchBodies).toContainEqual({ subPrompt: 'z' }));
+    expect(screen.queryByRole('dialog', { name: 'Chapter options' })).not.toBeInTheDocument();
+  });
+
+  it('saves a pending edit when the popover closes by clicking outside', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ClosableHarness initialNodeId="sec-1-1" />);
+    await user.type(await screen.findByRole('textbox', { name: 'Sub-prompt' }), 'q');
+    await user.click(screen.getByRole('button', { name: 'outside' }));
+
+    await waitFor(() => expect(patchBodies).toContainEqual({ subPrompt: 'q' }));
+  });
+
+  it('saves a pending edit against the node it was typed on when the section changes', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ClosableHarness initialNodeId="sec-1-1" />);
+    await user.type(await screen.findByRole('textbox', { name: 'Sub-prompt' }), 'k');
+    await user.click(screen.getByRole('button', { name: 'switch section' }));
+
+    await waitFor(() => expect(patchBodies).toContainEqual({ subPrompt: 'k' }));
+    expect(patchNodeIds).toEqual(['sec-1-1']);
   });
 });

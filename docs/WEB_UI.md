@@ -49,30 +49,44 @@ only controls whether the CLI may split a node.
 **Editor header, Chapter options and status bar (issue #182, phase 1).** Once a
 section is selected, `features/editor/components/manuscript-sheet.tsx` renders
 a header (left to right): the content-lock icon button
-(`lock-content-button.tsx`, same enablement rules as the outline row), a
-**Write / Source** switcher (Source is the CodeMirror `SectionEditor`; Write is
-the rendered, read-only manuscript view — the persisted `editor-store` view is
-`'write' | 'source'`, a stored legacy `'preview'` migrates to `'write'`), a
-**Chapter options** chip opening a popover (`chapter-options-popover.tsx`) with
-the section's standing generation brief — target pages, equation density, math
-level, summary, sub-prompt — plus the source scope (`NodeSourcesSection`),
-saved as you edit (sliders/text debounced, a pending edit is flushed when the
-popover closes), a **Copilot** icon button that stays disabled until
-`ManuscriptSheet` is given an `onOpenCopilot` callback (the prompt window lands
-in a later phase), the existing copy/download/open-in-run buttons, and the save
-status. There is no Properties sheet any more: the outline row's gear button
-and the context menu's *Properties* item were removed with it.
+(`lock-content-button.tsx`, same enablement rules as the outline row; a button
+that cannot act is `aria-disabled`, not `disabled`, so its tooltip stays
+reachable), a **Write / Source** toggle group (Source is the CodeMirror
+`SectionEditor`; Write is the rendered, read-only manuscript view — the
+persisted `editor-store` view is `'write' | 'source'`, a stored legacy
+`'preview'` migrates to `'write'`), a **Chapter options** chip opening a popover
+(`chapter-options-popover.tsx`) with the section's standing generation brief —
+target pages, equation density, math level, summary, sub-prompt — plus the
+source scope (`NodeSourcesSection`), saved as you edit (sliders/text debounced,
+a pending edit is flushed when the popover closes or the section changes), a
+**Copilot** icon button that stays disabled until `ManuscriptSheet` is given an
+`onOpenCopilot` callback (the prompt window lands in a later phase), and, pinned
+at the far right, a **More** menu (Copy Markdown, Download section .md, Open in
+run) followed by the save status. Below the `xl` breakpoint the Chapter options
+and save-status labels collapse to icons. There is no Properties sheet any more:
+the outline row's gear button and the context menu's *Properties* item were
+removed with it.
 
 The editor's status bar (`editor-status-bar.tsx`) shows `N characters · M words`
-of the live draft on the left, an **`N sources`** button in the middle and, in
-the Source view, the caret position `Ln x, Col y` on the right (hidden in
-Write, which has no caret in the Markdown source). The button toggles a
-non-modal drawer above the bar (`sources-drawer.tsx`) listing the section's
+of the live draft on the left (characters are Unicode code points), an
+**`N sources`** button in the middle and, in the Source view, the caret position
+`Ln x, Col y` (column in code points) on the right (hidden in Write, which has
+no caret in the Markdown source). The caret and selection live in
+`stores/editor-selection-store.ts` as `{from, to, line, column}` with `from`/`to`
+as code-point offsets over the Markdown source, so a caret move re-renders only
+the status bar readout. The sources button toggles a non-modal drawer that sits
+between the editor and the bar (`sources-drawer.tsx`) listing the section's
 effective sources — the resolved scope (own selection, inherited from an
-ancestor, or all project sources), each source's chunk count and how often the
-section cites it (`ragCitations` matched on file name) — with a *Change scope*
-link that closes the drawer and opens Chapter options. Escape or the button
-closes it. The right pane (`CopilotDrawer`) is unchanged in this phase.
+ancestor, or all project sources), each source's chunk count and how many
+passages of it the last run cited (`ragCitations` matched on file name; not a live
+count), with sources whose indexing failed marked as not searched — and a
+*Change scope* link that closes the drawer and opens Chapter options focused on
+its Sources section. Escape pressed inside the drawer, or on the sources button,
+closes it. What left the status bar compared to before: the `≈ N pages` estimate
+and the `N equations` count (dropped), the reviewer score badge (now only in the
+right pane's Review tab) and the `Locked` badge (now the pressed state of the
+header's lock button). The save status moved to the header. The right pane
+(`CopilotDrawer`) is unchanged in this phase.
 
 `routes/__root.tsx` mounts the app shell once (theme toggle, toaster, the
 `NewProjectDialog` — reachable from both the hub and the studio header) and

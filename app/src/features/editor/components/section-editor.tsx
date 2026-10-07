@@ -1,16 +1,13 @@
 import { markdown as markdownLang } from '@codemirror/lang-markdown';
 import { StreamLanguage } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
-import { EditorState } from '@codemirror/state';
+import type { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
 import { useMemo } from 'react';
 
-/** 1-based caret position in the document. */
-export interface EditorCaret {
-  line: number;
-  column: number;
-}
+import { characterCount } from '@/features/editor/lib/word-count';
+import type { EditorSelection } from '@/stores/editor-selection-store';
 
 interface SectionEditorProps {
   value: string;
@@ -22,8 +19,13 @@ interface SectionEditorProps {
   language?: 'markdown' | 'latex';
   /** CodeMirror's built-in light/dark theme — pass the app's resolved theme so it doesn't clash. */
   theme?: 'light' | 'dark';
-  /** Fired on mount and whenever the selection head moves or the document changes. Keep its identity stable: a new one reconfigures the editor. */
-  onCaretChange?: (caret: EditorCaret) => void;
+  /**
+   * Fired on mount and whenever the selection or document changes, with offsets in code points
+   * over the document. Keep its identity stable: a new one reconfigures the editor.
+   */
+  onSelectionChange?: (selection: EditorSelection) => void;
+  /** Hands the CodeMirror view to the caller (highlights, selection toolbar) once it exists. */
+  onCreateEditor?: (view: EditorView) => void;
   className?: string;
 }
 
@@ -41,7 +43,8 @@ export function SectionEditor({
   readOnly = false,
   language = 'markdown',
   theme = 'light',
-  onCaretChange,
+  onSelectionChange,
+  onCreateEditor,
   className,
 }: SectionEditorProps) {
   const extensions = useMemo(
@@ -49,7 +52,8 @@ export function SectionEditor({
       language === 'latex' ? StreamLanguage.define(stex) : markdownLang(),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
-        if (update.selectionSet || update.docChanged) onCaretChange?.(caretOf(update.state));
+        if (update.selectionSet || update.docChanged)
+          onSelectionChange?.(selectionOf(update.state));
       }),
       keymap.of([
         {
@@ -61,18 +65,28 @@ export function SectionEditor({
         },
       ]),
     ],
-    [language, onFlush, onCaretChange],
+    [language, onFlush, onSelectionChange],
   );
+
+  const basicSetup = useMemo(
+    () => ({ foldGutter: false, highlightActiveLine: !readOnly }),
+    [readOnly],
+  );
+
+  function handleCreate(view: EditorView) {
+    onSelectionChange?.(selectionOf(view.state));
+    onCreateEditor?.(view);
+  }
 
   return (
     <CodeMirror
       value={value}
       onChange={onChange}
       onBlur={onFlush}
-      onCreateEditor={(view) => onCaretChange?.(caretOf(view.state))}
+      onCreateEditor={handleCreate}
       readOnly={readOnly}
       extensions={extensions}
-      basicSetup={{ foldGutter: false, highlightActiveLine: !readOnly }}
+      basicSetup={basicSetup}
       theme={theme}
       height="100%"
       className={className}
@@ -80,8 +94,13 @@ export function SectionEditor({
   );
 }
 
-function caretOf(state: EditorState): EditorCaret {
-  const head = state.selection.main.head;
+function selectionOf(state: EditorState): EditorSelection {
+  const { head, from, to } = state.selection.main;
   const line = state.doc.lineAt(head);
-  return { line: line.number, column: head - line.from + 1 };
+  return {
+    from: characterCount(state.doc.sliceString(0, from)),
+    to: characterCount(state.doc.sliceString(0, to)),
+    line: line.number,
+    column: characterCount(state.doc.sliceString(line.from, head)) + 1,
+  };
 }

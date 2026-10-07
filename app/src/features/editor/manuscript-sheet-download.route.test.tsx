@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { renderRouterApp } from '@/test/router-test-utils';
@@ -20,7 +21,10 @@ describe('Studio editor pane (routed, MSW-backed) — section download', () => {
       ),
     ).toBeInTheDocument();
 
-    const link = await screen.findByRole('link', { name: /download section \.md/i }, LONG);
+    await userEvent
+      .setup()
+      .click(await screen.findByRole('button', { name: 'More actions' }, LONG));
+    const link = await screen.findByRole('menuitem', { name: /download section \.md/i }, LONG);
     expect(link).toHaveAttribute(
       'href',
       expect.stringContaining(

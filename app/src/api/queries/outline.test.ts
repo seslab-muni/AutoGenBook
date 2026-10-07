@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { delay, http } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 
 import { problemResponse } from '@/mocks/problem';
@@ -46,6 +46,34 @@ describe('outline queries', () => {
 
     await waitFor(() => expect(result.current.flat.data?.total).toBe((initialTotal ?? 0) + 1));
     expect(result.current.tree.data?.items.some((node) => node.title === 'New Chapter')).toBe(true);
+  });
+
+  it('a late response to one PATCH does not overwrite fields another PATCH just saved', async () => {
+    const { result } = renderWithQueryClient(() => ({
+      node: useQuery(outline.node(PROJECT_ID, 'sec-1-1')),
+      lock: useUpdateOutlineNodeMutation(PROJECT_ID, 'sec-1-1'),
+      save: useUpdateOutlineNodeMutation(PROJECT_ID, 'sec-1-1'),
+    }));
+    await waitFor(() => expect(result.current.node.isSuccess).toBe(true));
+    const stale = result.current.node.data!;
+
+    // The lock toggle's response is computed from the pre-save content and lands last.
+    server.use(
+      http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async ({ request }) => {
+        const body = (await request.clone().json()) as { contentLocked?: boolean };
+        if (body.contentLocked === undefined) return undefined;
+        await delay(80);
+        return HttpResponse.json({ ...stale, contentLocked: true });
+      }),
+    );
+
+    result.current.lock.mutate({ contentLocked: true });
+    result.current.save.mutate({ contentMarkdown: 'fresh text after the lock' });
+    await waitFor(() => expect(result.current.save.isSuccess).toBe(true));
+    await waitFor(() => expect(result.current.lock.isSuccess).toBe(true));
+
+    expect(result.current.node.data?.contentMarkdown).toBe('fresh text after the lock');
+    expect(result.current.node.data?.contentLocked).toBe(true);
   });
 
   it('updating a node’s content recomputes actualWords server-side', async () => {
