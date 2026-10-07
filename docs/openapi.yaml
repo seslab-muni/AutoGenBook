@@ -973,6 +973,264 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/comments:
+    get:
+      tags:
+      - comments
+      summary: List Project Comments
+      description: 'Whole threads; `kind`/`status` select thread roots and `limit`/`offset`/
+
+        `total` count roots (each root''s replies come along).'
+      operationId: comments-list_project_comments
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentKind'
+          - type: 'null'
+          title: Kind
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentStatus'
+          - type: 'null'
+          title: Status
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 1
+          default: 1000
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_Comment_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/outline/{node_id}/comments:
+    get:
+      tags:
+      - comments
+      summary: List Node Comments
+      description: Whole threads of the node, not paged (`total` counts thread roots).
+      operationId: comments-list_node_comments
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      - name: kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentKind'
+          - type: 'null'
+          title: Kind
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentStatus'
+          - type: 'null'
+          title: Status
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_Comment_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - comments
+      summary: Create Node Comment
+      operationId: comments-create_node_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/comments/{comment_id}:
+    patch:
+      tags:
+      - comments
+      summary: Update Comment
+      operationId: comments-update_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Comment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - comments
+      summary: Delete Comment
+      operationId: comments-delete_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Comment Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/comments/{comment_id}/resolve:
+    post:
+      tags:
+      - comments
+      summary: Resolve Comment
+      description: 'Resolve a thread (`{}` or `{"resolved": true}`) or reopen it
+
+        (`{"resolved": false}`). Only a thread''s root can be resolved.'
+      operationId: comments-resolve_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Comment Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/CommentResolve'
+              - type: 'null'
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/projects/{project_id}/runs:
     post:
       tags:
@@ -1535,6 +1793,236 @@ components:
       - n_pages
       - needsSubdivision
       title: BookStructureNode
+    Comment:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        projectId:
+          type: string
+          format: uuid
+          title: Projectid
+        nodeId:
+          type: string
+          format: uuid
+          title: Nodeid
+        kind:
+          $ref: '#/components/schemas/CommentKind'
+        authorId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Authorid
+        authorName:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorname
+        anchor:
+          anyOf:
+          - $ref: '#/components/schemas/CommentAnchorOut'
+          - type: 'null'
+        status:
+          $ref: '#/components/schemas/CommentStatus'
+        threadId:
+          type: string
+          format: uuid
+          title: Threadid
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+        bodyMarkdown:
+          type: string
+          title: Bodymarkdown
+        payload:
+          additionalProperties: true
+          type: object
+          title: Payload
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+        updatedAt:
+          type: string
+          format: date-time
+          title: Updatedat
+        editedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Editedat
+      type: object
+      required:
+      - id
+      - projectId
+      - nodeId
+      - kind
+      - authorId
+      - anchor
+      - status
+      - threadId
+      - parentId
+      - bodyMarkdown
+      - payload
+      - createdAt
+      - updatedAt
+      title: Comment
+    CommentAnchorIn:
+      properties:
+        quote:
+          type: string
+          maxLength: 20000
+          minLength: 1
+          title: Quote
+        prefix:
+          type: string
+          maxLength: 32
+          title: Prefix
+          default: ''
+        suffix:
+          type: string
+          maxLength: 32
+          title: Suffix
+          default: ''
+        start:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Start
+        end:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: End
+      additionalProperties: false
+      type: object
+      required:
+      - quote
+      title: CommentAnchorIn
+      description: 'Request anchor: a W3C text-quote selector over the node''s
+
+        `contentMarkdown`. `start`/`end` are Unicode code-point offsets (not UTF-16
+
+        units), `end` exclusive; both null = unknown/orphaned. The server
+
+        re-resolves it (`api.application.comment_anchors.resolve_anchor`) and
+
+        refreshes `prefix`/`suffix` from the content.'
+    CommentAnchorOut:
+      properties:
+        quote:
+          type: string
+          title: Quote
+          default: ''
+        prefix:
+          type: string
+          title: Prefix
+          default: ''
+        suffix:
+          type: string
+          title: Suffix
+          default: ''
+        start:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Start
+        end:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: End
+      type: object
+      title: CommentAnchorOut
+      description: 'Response anchor. Deliberately unable to fail: stored anchors (e.g.
+        from
+
+        a fuzzy re-anchor, which rewrites `quote` to the text actually matched, or
+
+        the reviewer import) always serialise. None of the request rules apply;
+
+        a missing/wrong-typed `quote`/`prefix`/`suffix` becomes `""` and bad or
+
+        partial `start`/`end` degrade to null (orphaned).'
+    CommentCreate:
+      properties:
+        bodyMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+          title: Bodymarkdown
+        anchor:
+          anyOf:
+          - $ref: '#/components/schemas/CommentAnchorIn'
+          - type: 'null'
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+      additionalProperties: false
+      type: object
+      required:
+      - bodyMarkdown
+      title: CommentCreate
+    CommentKind:
+      type: string
+      enum:
+      - comment
+      - suggestion
+      - review
+      title: CommentKind
+    CommentResolve:
+      properties:
+        resolved:
+          type: boolean
+          title: Resolved
+          default: true
+      additionalProperties: false
+      type: object
+      title: CommentResolve
+    CommentStatus:
+      type: string
+      enum:
+      - open
+      - resolved
+      - orphaned
+      - running
+      - pending
+      - accepted
+      - rejected
+      - failed
+      - cancelled
+      title: CommentStatus
+      description: 'Comment and review rows: `open | resolved | orphaned`. Suggestion
+        rows:
+
+        `running` (job in flight, cancellable), `pending` (finished, awaiting
+
+        accept/reject), `accepted`, `rejected`, `failed`, `cancelled`. A DB CHECK
+
+        (`ck_node_comments_kind_status`) enforces the pairing.'
+    CommentUpdate:
+      properties:
+        bodyMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+          title: Bodymarkdown
+      additionalProperties: false
+      type: object
+      required:
+      - bodyMarkdown
+      title: CommentUpdate
     ExportRequestIn:
       properties:
         format:
@@ -1779,6 +2267,14 @@ components:
             format: uuid
           type: array
           title: Sourceids
+        openCommentCount:
+          type: integer
+          title: Opencommentcount
+          default: 0
+        pendingSuggestionCount:
+          type: integer
+          title: Pendingsuggestioncount
+          default: 0
         createdAt:
           type: string
           format: date-time
@@ -1968,6 +2464,14 @@ components:
             format: uuid
           type: array
           title: Sourceids
+        openCommentCount:
+          type: integer
+          title: Opencommentcount
+          default: 0
+        pendingSuggestionCount:
+          type: integer
+          title: Pendingsuggestioncount
+          default: 0
         createdAt:
           type: string
           format: date-time
@@ -2160,6 +2664,29 @@ components:
       - latex
       - pdf
       title: OutputFormat
+    Page_Comment_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Comment'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[Comment]
     Page_File_:
       properties:
         items:

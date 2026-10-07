@@ -370,6 +370,82 @@ class OutlineNodeRecord(Base):
     )
 
 
+class NodeCommentRecord(Base):
+    """Margin cards of an outline node (issue #182): comments, suggestions and
+    reviewer issues. Soft delete via `deleted_at`. `kind`/`status` are plain
+    text + CHECK (not Postgres enums): the value sets will grow."""
+
+    __tablename__ = "node_comments"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "kind IN ('comment', 'suggestion', 'review')", name="ck_node_comments_kind"
+        ),
+        sa.CheckConstraint(
+            "(kind IN ('comment', 'review') AND status IN ('open', 'resolved', 'orphaned'))"
+            " OR (kind = 'suggestion' AND status IN ('running', 'pending', 'accepted',"
+            " 'rejected', 'failed', 'cancelled'))",
+            name="ck_node_comments_kind_status",
+        ),
+        sa.Index(
+            "ix_node_comments_node_id_active",
+            "node_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_node_comments_project_id_active",
+            "project_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index("ix_node_comments_thread_id", "thread_id"),
+        sa.Index("ix_node_comments_parent_id", "parent_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("outline_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # NULL for the copilot / the reviewer.
+    author_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    anchor: Mapped[dict | None] = mapped_column(_jsonb(), nullable=True)
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # The root row's id (a root row's own id); no FK, so a root can be inserted
+    # with `thread_id = id` in one statement.
+    thread_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, nullable=False)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("node_comments.id", ondelete="CASCADE"), nullable=True
+    )
+    body_markdown: Mapped[str] = mapped_column(
+        sa.Text, nullable=False, default="", server_default=""
+    )
+    payload: Mapped[dict] = mapped_column(
+        _jsonb(), nullable=False, default=dict, server_default="{}"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
+        nullable=False,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    # Set only by a body edit (`updated_at` moves on any change).
+    edited_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+
 class RunRecord(Base):
     __tablename__ = "runs"
     __table_args__ = (

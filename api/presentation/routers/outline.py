@@ -52,6 +52,8 @@ def to_schema(node: OutlineNodeDomain) -> OutlineNode:
         content_locked=node.content_locked,
         source_scope=node.source_scope,
         source_ids=node.source_ids,
+        open_comment_count=node.open_comment_count,
+        pending_suggestion_count=node.pending_suggestion_count,
         created_at=node.created_at,
         updated_at=node.updated_at,
     )
