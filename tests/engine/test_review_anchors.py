@@ -267,3 +267,41 @@ def test_reviser_view_is_unchanged_for_quote_less_issues_and_keeps_an_empty_repl
     assert dumps(review.for_reviser()) == dumps(legacy)  # the full-run reviser prompt is byte-identical for these
     delete = SectionReview(issues=[ReviewIssue(description="d", quote="the very big dog", replace_from="very big ", replace_to="")])
     assert delete.for_reviser()["issues"][0]["replace_to"] == "" and delete.for_reviser()["issues"][0]["replace_from"] == "very big "
+
+
+def _stub_run(tmp_path: Path, section: bytes | None, issues: list[dict] | None):
+    from engine.pipeline.book import BookRun
+    from engine.pipeline.context import Paths
+
+    class Stub:
+        pass
+
+    out = tmp_path / "out"
+    (out / "sections").mkdir(parents=True)
+    (out / "section_reviews").mkdir()
+    if section is not None:
+        (out / "sections" / "1.md").write_bytes(section)
+    if issues is not None:
+        (out / "section_reviews" / "1.json").write_text(json.dumps({"issues": issues}), encoding="utf-8")
+    stub = Stub()
+    stub.paths = Paths(out)
+    BookRun._anchor_reviews(stub, "1")
+    return out
+
+
+def test_an_undecodable_locked_section_nulls_offsets_instead_of_crashing(tmp_path: Path) -> None:
+    out = _stub_run(tmp_path, b"\xff\xfe not utf-8 \x80", [{"type": "t", "quote": "not utf-8 at all", "start": 4, "end": 9}])
+    assert json.loads((out / "section_reviews" / "1.json").read_text(encoding="utf-8"))["issues"][0]["start"] is None
+
+
+def test_without_review_files_the_section_is_not_even_read(tmp_path: Path) -> None:
+    _stub_run(tmp_path / "a", b"\xff\xfe", None)  # no review file: returns before reading
+    _stub_run(tmp_path / "b", None, None)
+
+
+def test_offsets_index_the_text_as_read_with_universal_newlines(tmp_path: Path) -> None:
+    out = _stub_run(tmp_path, b"First line.\r\nSecond line holds the quoted words here.\r\n", [{"type": "t", "quote": "the quoted words here", "start": None, "end": None}])
+    issue = json.loads((out / "section_reviews" / "1.json").read_text(encoding="utf-8"))["issues"][0]
+    text = (out / "sections" / "1.md").read_text(encoding="utf-8")  # what graph_import stores: "\r\n" became "\n"
+    assert "\r" not in text and text[issue["start"]:issue["end"]] == "the quoted words here"
+    assert issue["start"] == text.index("the quoted")

@@ -107,13 +107,14 @@ def test_duplicate_quote_disambiguated_by_context() -> None:
     assert r1["start"] == grown.index("The value")
 
 
-def test_duplicate_without_context_prefers_nearest_to_stored_start() -> None:
+def test_duplicate_without_context_is_orphaned_not_pinned_to_stale_offsets() -> None:
     text = "x. Same words here. y. Same words here. z. Same words here."
     positions = [i for i in range(len(text)) if text.startswith("Same words here.", i)]
-    anchor = {"quote": "Same words here.", "prefix": "", "suffix": "", "start": positions[1] + 1, "end": positions[1] + 5}
-    assert resolve_anchor(text, anchor)["start"] == positions[1]
-    anchor["start"] = len(text)
-    assert resolve_anchor(text, anchor)["start"] == positions[2]
+    bare = {"quote": "Same words here.", "prefix": "", "suffix": "", "start": positions[1] + 1, "end": positions[1] + 5}
+    assert resolve_anchor(text, bare)["start"] is None
+    assert resolve_anchor(text, {**bare, "start": positions[1], "end": positions[1] + 16})["start"] is None  # even when it still "holds"
+    with_context = {**bare, "start": positions[1] + 1, "end": positions[1] + 5, "prefix": "y. ", "suffix": " z. Same"}
+    assert resolve_anchor(text, with_context)["start"] == positions[1]
 
 
 # ---------------------------------------------------------------- whitespace
@@ -357,7 +358,7 @@ def test_stored_offsets_without_context_agreement_do_not_pin_a_wrong_duplicate()
     edited = text.replace("x = 1\n", "")
     assert edited[start:start + 1] == "x"  # the stored offsets point at an `x` ... of line 3's neighbour
     r, level = resolve_anchor_detailed(edited, anchor)
-    assert r["start"] == edited.index("x = 2") and level == "exact"
+    assert r["start"] in (None, 0)  # the deleted line was the prefix: the right `x` or an orphan, never line 3's
 
 
 def test_stored_offsets_pick_the_right_sentence_when_the_text_before_changed() -> None:
@@ -462,11 +463,11 @@ def test_periodic_text_cannot_fake_a_head_and_tail_match() -> None:
 
 def test_repeated_text_beyond_the_scan_cap_is_never_silently_wrong() -> None:
     text = "ab " * 3000
-    a = {"quote": "ab ab ab ab", "prefix": "", "suffix": "", "start": 3000, "end": 3000 + 11}
+    a = {"quote": "ab ab ab ab", "prefix": text[2968:3000], "suffix": text[3011:3043], "start": 3000, "end": 3000 + 11}
     r = resolve_anchor(text, a)
     assert r["start"] is not None and abs(r["start"] - 3000) < 12  # a window around the stored offset
     assert resolve_quote(text, "ab ab ab ab")["start"] is None  # nothing singles one out
-    assert resolve_anchor(text, {**a, "start": None, "end": None})["start"] is None
+    assert resolve_anchor(text, {**a, "start": None, "end": None})["start"] is None  # periodic: nothing singles one out
 
 
 def test_two_kb_quote_in_a_hundred_kb_section_is_fast() -> None:
@@ -487,3 +488,111 @@ def test_two_kb_quote_in_a_hundred_kb_section_is_fast() -> None:
         t0 = time.perf_counter()
         resolve_anchor(variant, a)
         assert time.perf_counter() - t0 < 1.0
+
+
+# ============================================================ review round 2
+SUBWORD = "Let $x_1$ and $x_2$ be the two inputs of the comparator. The network compares x with y and then outputs the larger one."
+
+
+def test_sub_word_anchor_keeps_its_true_position_when_the_context_still_matches() -> None:
+    a = make_anchor(SUBWORD, 5, 6)  # the `x` of $x_1$
+    r = resolve_anchor("Note. " + SUBWORD, a)
+    assert (r["start"], r["end"]) == (11, 12)
+    r2 = resolve_anchor(SUBWORD.replace("comparator", "comparator circuit"), a)
+    assert r2["start"] == 5
+    far = make_anchor(SUBWORD, SUBWORD.index("x with y"), SUBWORD.index("x with y") + 1)  # the bare word `x`
+    assert resolve_anchor("Note. " + SUBWORD, far)["start"] == SUBWORD.index("x with y") + 6
+
+
+def test_stored_anchor_without_context_whose_quote_repeats_is_orphaned() -> None:
+    text = "alpha beta gamma. alpha beta gamma."
+    bare = {"quote": "alpha beta gamma.", "prefix": "", "suffix": "", "start": 18, "end": 35}
+    assert text[18:35] == bare["quote"]
+    assert resolve_anchor(text, bare)["start"] is None
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_short_selections_survive_edits_elsewhere_or_orphan_never_move(seed: int) -> None:
+    import random
+
+    rng = random.Random(seed)
+    vocab = ["".join(rng.choice("abcdefghijklmnoprstuvwxyz") for _ in range(rng.randint(3, 9))) for _ in range(500)]
+    text = " ".join(rng.choice(vocab) for _ in range(500))
+    total = orphans = 0
+    for _ in range(300):
+        words = rng.randint(0, 3)
+        if words == 0:  # a 1-4 character selection, possibly inside a word
+            start = rng.randrange(60, len(text) - 80)
+            end = start + rng.randint(1, 4)
+        else:
+            i = rng.randrange(5, 480)
+            toks = text.split(" ")
+            start = len(" ".join(toks[:i])) + 1
+            end = start + len(" ".join(toks[i:i + words]))
+        if not text[start:end].strip():
+            continue
+        anchor = make_anchor(text, start, end)
+        pos = rng.choice([rng.randrange(0, max(1, start - 80)), rng.randrange(min(len(text), end + 80), len(text) + 1)])
+        if rng.random() < 0.5:
+            chunk = "".join(rng.choice(vocab) + " " for _ in range(rng.randint(1, 8)))
+            edited, shift = text[:pos] + chunk + text[pos:], (len(chunk) if pos <= start else 0)
+        else:
+            cut = min(rng.randint(1, 30), start - pos if pos < start else len(text) - pos)
+            edited, shift = text[:pos] + text[pos + cut:], (-cut if pos < start else 0)
+        r = resolve_anchor(edited, anchor)
+        total += 1
+        if r["start"] is None:
+            orphans += 1
+            continue
+        assert r["start"] == start + shift, (seed, text[start:end], r["start"], start + shift)
+    assert total > 200 and orphans / total <= 0.03, (orphans, total)
+
+
+def test_citation_markers_are_dropped_in_the_tolerant_view() -> None:
+    text = "The code corrects any single-qubit error [kb_report_ab12cd34_page_3_1] and detects two errors [web_x_1] in a row."
+    r = resolve_quote(text, "The code corrects any single-qubit error and detects two errors in a row.")
+    _check(text, r)
+    assert r["quote"].endswith("in a row.") and r["start"] == 0
+
+
+def test_emphasis_markers_inside_math_and_code_are_not_dropped() -> None:
+    text = "We compute $2*3*4 = 24$ and call `x_i is_real` in the helper function of the library."
+    assert resolve_quote(text, "234 = 24 and call")["start"] is None
+    assert resolve_quote_detailed(text, "xi isreal in the helper function")[1] in ("fuzzy", "orphan")  # never the tolerant level
+    ok = resolve_quote(text, "We compute $2*3*4 = 24$ and call")
+    assert ok["start"] == 0
+
+
+def test_nfd_span_end_includes_trailing_combining_marks() -> None:
+    text = "Voil\N{LATIN SMALL LETTER A}\N{COMBINING GRAVE ACCENT} tout le monde, bonjour."
+    r = resolve_quote(text, "Voil\N{LATIN SMALL LETTER A}", prefix="", suffix="")
+    assert r["start"] is None or text[r["end"]:r["end"] + 1] != "\N{COMBINING GRAVE ACCENT}"
+    r2 = resolve_quote(text, "Voil\N{LATIN SMALL LETTER A}\N{COMBINING GRAVE ACCENT} tout le")
+    _check(text, r2)
+
+
+def test_fuzzy_span_does_not_start_inside_emphasis() -> None:
+    sentence = "Each stabilizer generator measures one parity check of the encoded block and reports a single syndrome bit."
+    text = "Opening words. **" + sentence + "** Closing words follow it directly after."
+    edited = text.replace("measures one parity", "measures exactly one parity")
+    a = make_anchor(text, text.index("Each"), text.index("Each") + len(sentence))
+    r = resolve_anchor(edited, a)
+    assert r["start"] is not None and edited[r["start"]:r["start"] + 2] == "**" and edited[r["end"] - 2:r["end"]] == "**"
+
+
+def test_long_quote_with_an_edit_in_its_head_or_tail_still_anchors() -> None:
+    import random
+
+    rng = random.Random(9)
+    words = [f"term{rng.randrange(10**4)}" for _ in range(900)]
+    quote = " ".join(words[:500]) + "."
+    text = "Header paragraph.\n\n" + quote + "\n\nFooter paragraph."
+    a = make_anchor(text, text.index("term"), text.index("term") + len(quote))
+    for edited in (
+        text.replace(words[3], words[3] + "X", 1),          # inside the head
+        text.replace(words[497], words[497] + "Y", 1),      # inside the tail
+        text.replace(words[2], "", 1),                      # a word deleted from the head
+    ):
+        r = resolve_anchor(edited, a)
+        assert r["start"] == edited.index("term"), r
+        assert abs((r["end"] - r["start"]) - len(quote)) <= 60

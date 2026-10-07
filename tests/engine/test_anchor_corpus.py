@@ -21,7 +21,8 @@ SECTION = (
     "This is the well-known five-qubit code, which corrects any single-qubit error.\n\n"
     "In summary, the code is not just small; it is optimal. The code is optimal for its parameters, and the code is also simple. "
     "Decoding uses a lookup table with 16 entries.\n\n"
-    "The code is simple.\n"
+    "The code is simple.\n\n"
+    "The code corrects every single-qubit error [kb_report_ab12_page_3_1] and detects two errors. Compute $2*3*4 = 24$ first.\n"
 )
 
 CASES = [
@@ -55,6 +56,15 @@ CASES = [
     ("Photosynthesis converts light energy into chemical energy", None),
     # small paraphrases of a long sentence: fuzzy may resolve them, never elsewhere
     ("Its entries are +1 or -1 and a nontrivial syndrome signals that an error occurred.", "Its entries are +1 or -1, and a non-trivial syndrome signals that an error has occurred."),
+    # sub-word and tiny quotes: only with something to vouch for them
+    ("x", None),
+    ("5", None),
+    ("ell", None),
+    # a quote spanning a citation marker the reviewer never saw
+    ("The code corrects every single-qubit error and detects two errors.", "The code corrects every single-qubit error [kb_report_ab12_page_3_1] and detects two errors."),
+    # emphasis delimiters inside math and code are operators, not Markdown
+    ("234 = 24 is the product", None),
+    ("Compute 2*3*4 = 24 first.", "Compute $2*3*4 = 24$ first."),
 ]
 
 

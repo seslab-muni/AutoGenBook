@@ -118,3 +118,52 @@ def test_granularity_and_merging() -> None:
     hunks = _roundtrip(old, new)
     assert hunks[0] == Hunk(0, 19, "the quick brown fox", "a slow brown dog")
     assert diff_hunks(old, old) == [] and diff_hunks(old, new, base=10)[0].start == 10
+
+
+# ============================================================ review round 2
+def _low_vocabulary() -> tuple[str, str]:
+    old = " ".join("word " * 300 + f"uniq{i}" for i in range(80))
+    return old, old.replace("word", "term")
+
+
+def test_low_vocabulary_input_is_fast_and_correct() -> None:
+    old, new = _low_vocabulary()
+    t0 = time.perf_counter()
+    hunks = _roundtrip(old, new)
+    assert time.perf_counter() - t0 < 3.0 and hunks
+    for a, b in (("word " * 316, "term " * 316), ("a b " * 600, "b a " * 600)):
+        t0 = time.perf_counter()
+        _roundtrip(a, b)
+        assert time.perf_counter() - t0 < 1.0
+
+
+def test_the_real_diff_cancels_promptly_on_a_hard_input() -> None:
+    import threading
+
+    from engine.util.textdiff import diff_hunks_detailed
+
+    old, new = _low_vocabulary()
+    stop = threading.Event()
+    threading.Timer(0.05, stop.set).start()
+    t0 = time.perf_counter()
+    with pytest.raises(DiffCancelled):
+        diff_hunks_detailed(old, new, should_stop=stop.is_set)
+    assert time.perf_counter() - t0 < 0.5
+
+
+def test_degraded_blocks_are_counted() -> None:
+    from engine.util.textdiff import diff_hunks_detailed
+
+    old, new = _low_vocabulary()
+    hunks, coarse = diff_hunks_detailed(old, new, budget_s=0.0)
+    assert coarse >= 1 and apply_hunks(old, hunks) == new
+    hunks2, coarse2 = diff_hunks_detailed("ab " * 400, "ba " * 400)  # nothing unique to anchor on
+    assert apply_hunks("ab " * 400, hunks2) == "ba " * 400
+    assert diff_hunks_detailed("one two", "one three")[1] == 0
+
+
+def test_changed_lines_do_not_chain_into_one_giant_hunk() -> None:
+    old = "".join(f"line {i} has some text\n" for i in range(3000))
+    new = "".join(f"line {i} has other text\n" for i in range(3000))
+    hunks = _roundtrip(old, new)
+    assert len(hunks) > 1000 and max(len(h.removed) + len(h.added) for h in hunks) <= 400

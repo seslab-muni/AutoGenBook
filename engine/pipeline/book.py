@@ -991,15 +991,21 @@ class BookRun:
         the whole file as `content_markdown`). Called after every write of
         `sections/<key>.md`, so offsets never refer to an earlier draft: a
         quote that no longer occurs gets null offsets, never stale ones."""
-        path = self.paths.section(key)
-        if not path.is_file():
-            return
-        text = path.read_text(encoding="utf-8")
+        reviews = []
         for revised in (False, True):
             review_path = self.paths.review(key, revised=revised)
             data = read_json(review_path)
-            if not isinstance(data, dict):
-                continue
+            if isinstance(data, dict):
+                reviews.append((review_path, data))
+        if not reviews:
+            return
+        path = self.paths.section(key)
+        try:
+            # exactly what `graph_import` stores: universal newlines, UTF-8
+            text: str | None = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None  # unreadable (e.g. a locked file that is not UTF-8): no offsets
+        for review_path, data in reviews:
             touched = False
             for issue in data.get("issues") or []:
                 if not isinstance(issue, dict):
@@ -1010,7 +1016,7 @@ class BookRun:
                         issue["start"] = issue["end"] = None  # never keep offsets of another text
                         touched = True
                     continue
-                anchor = resolve_quote(text, quote)
+                anchor = resolve_quote(text, quote) if text is not None else {"start": None}
                 touched = True
                 if anchor["start"] is None:
                     issue["start"] = issue["end"] = None

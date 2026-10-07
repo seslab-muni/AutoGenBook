@@ -187,7 +187,10 @@ def _context_score(hay: str, i: int, j: int, prefix: str, suffix: str) -> int:
 
 
 def _agrees(text: str, start: int, end: int, prefix: str, suffix: str) -> bool:
-    """The stored context still surrounds [start, end) (up to a few edits far away)."""
+    """The stored context still surrounds [start, end) (up to a few edits far
+    away). No stored context is no evidence: False."""
+    if not (prefix or suffix):
+        return False
     if prefix and _common_suffix(text[max(0, start - len(prefix)):start], prefix) < min(len(prefix), _CONTEXT_AGREE):
         return False
     if suffix and _common_prefix(text[end:end + len(suffix)], suffix) < min(len(suffix), _CONTEXT_AGREE):
@@ -254,18 +257,45 @@ def _clusters(chunk: str, base: int):
         i = j
 
 
+_CITE = r"\s*\[(?:kb|web)_[^\]\s]+\]"
+_TOLERANT_CHUNK = re.compile(rf"{_CITE}|\s+|(?:(?!\[(?:kb|web)_[^\]\s]+\])\S)+")
+# Inner text of math and code spans: `*` and `_` there are operators / identifiers, not emphasis.
+_PROTECTED = re.compile(r"```.*?```|`[^`\n]+`|\$\$.*?\$\$|\$[^$\n]+\$", re.DOTALL)
+
+
+def _protected_intervals(text: str) -> tuple[list[int], list[int]]:
+    starts: list[int] = []
+    ends: list[int] = []
+    for m in _PROTECTED.finditer(text):
+        edge = 3 if m.group(0).startswith("```") else (2 if m.group(0).startswith("$$") else 1)
+        if m.end() - m.start() > 2 * edge:
+            starts.append(m.start() + edge)
+            ends.append(m.end() - edge)
+    return starts, ends
+
+
 def _fold(text: str, level: int) -> _View:
     """Level 0 identity; 1 whitespace runs collapse to one space; 2 adds NFC;
     3 adds typographic folding (curly quotes, dashes, NFKC forms such as the
-    ellipsis character) and removal of zero-width characters and Markdown
-    emphasis/code markers."""
+    ellipsis character), removal of zero-width characters, of Markdown
+    emphasis/code markers (not inside math or code spans) and of the engine's
+    `[kb_...]`/`[web_...]` citation markers."""
     if level == 0:
         return _View(text, None, None)
     out: list[str] = []
     idx: list[int] = []
     end: list[int] = []
-    for m in _SPACE_OR_WORD.finditer(text):
+    pstarts, pends = _protected_intervals(text) if level >= 3 else ([], [])
+
+    def protected(pos: int) -> bool:
+        k = bisect_left(pstarts, pos + 1) - 1
+        return k >= 0 and pos < pends[k]
+
+    chunks = (_TOLERANT_CHUNK if level >= 3 else _SPACE_OR_WORD).finditer(text)
+    for m in chunks:
         chunk, a, b = m.group(0), m.start(), m.end()
+        if level >= 3 and chunk.lstrip().startswith("[") and re.fullmatch(_CITE, chunk):
+            continue  # a citation marker (with the space before it) is dropped
         if chunk[0].isspace():
             out.append(" ")
             idx.append(a)
@@ -278,7 +308,7 @@ def _fold(text: str, level: int) -> _View:
             continue
         for cluster, ca, cb in _clusters(chunk, a):
             if level >= 3:
-                if cluster in _DROPPED:
+                if cluster in _DROPPED and not (cluster in "*_" and protected(ca)):
                     continue
                 cluster = "".join(_FOLD_CHARS.get(c, c) for c in cluster)
                 cluster = unicodedata.normalize("NFKC", cluster)
@@ -320,7 +350,8 @@ def _locate(text: str, quote: str, prefix: str, suffix: str, hint: int | None, *
                 if not positions:
                     return None, "orphan"
             short = _is_short(needle)
-            if short:
+            bare = not (ctx_p or ctx_s)
+            if short and bare:  # word boundaries matter only when nothing else vouches for the place
                 positions = [i for i in positions if _on_boundaries(view.s, i, i + len(needle))]
             if positions:
                 chosen = _choose(view.s, positions, len(needle), ctx_p, ctx_s, hint_v, short)
@@ -329,12 +360,12 @@ def _locate(text: str, quote: str, prefix: str, suffix: str, hint: int | None, *
                 a, b = view.to_orig(chosen, chosen + len(needle))
                 if lv >= 3:
                     a, b = _extend_markers(text, a, b)
-                return (a, b), label
+                return _extend_combining(text, a, b), label
         if lv == 3:
             for needle in needles:
                 span = _elided(view, needle, ctx_p, ctx_s, hint_v)
                 if span is not None:
-                    return _extend_markers(text, *span), label
+                    return _extend_combining(text, *_extend_markers(text, *span)), label
     return None, "orphan"
 
 
@@ -379,25 +410,47 @@ def _near_hint(hay: str, needle: str, hint: int) -> list[int]:
 
 def _choose(hay: str, positions: list[int], n: int, prefix: str, suffix: str, hint: int | None, short: bool) -> int | None:
     """One occurrence among `positions`, or None when the evidence does not
-    single one out (a short quote needs evidence; a long one falls back to the
-    first occurrence, which is the same text)."""
+    single one out.
+
+    With stored context, the occurrences whose surroundings still agree are
+    the candidates (several: the one nearest the stored offset); a short quote
+    with no agreeing occurrence is orphaned, a longer one falls back to the
+    best partial agreement. Without context the quote must be unique; a
+    repeated one is taken (first occurrence) only when it is a long sentence."""
+    if prefix or suffix:
+        agreeing = [i for i in positions if _agrees(hay, i, i + n, prefix, suffix)]
+        if len(agreeing) == 1:
+            return agreeing[0]
+        if len(agreeing) > 1:
+            if hint is not None:
+                return min(agreeing, key=lambda i: abs(i - hint))
+            ranked = sorted(agreeing, key=lambda i: -_context_score(hay, i, i + n, prefix, suffix))
+            top = _context_score(hay, ranked[0], ranked[0] + n, prefix, suffix)
+            if top > _context_score(hay, ranked[1], ranked[1] + n, prefix, suffix):
+                return ranked[0]
+            return None if short or n < MIN_REPEATABLE_CHARS else ranked[0]
+        if short:
+            return None
+        scored = sorted(((-_context_score(hay, i, i + n, prefix, suffix), abs(i - hint) if hint is not None else 0, i) for i in positions))
+        if scored[0][0] == 0:  # no agreement at all: nothing vouches for any of them
+            return scored[0][2] if len(positions) == 1 else None
+        return scored[0][2] if len(scored) == 1 or scored[1][:2] != scored[0][:2] else None
     if len(positions) == 1:
-        if n < MIN_BARE_CHARS and not (prefix or suffix or hint is not None):
+        if n < MIN_BARE_CHARS and hint is None:
             return None  # a lone character or two, with nothing to vouch for the place
         return positions[0]
-    scored = sorted(
-        ((-_context_score(hay, i, i + n, prefix, suffix), abs(i - hint) if hint is not None else 0, i) for i in positions)
-    )
-    best = scored[0]
-    tie = scored[1][:2] == best[:2]
-    has_context = best[0] < 0
-    if short:
-        if tie or not (has_context or (hint is not None and best[1] <= 64)):
-            return None
-        return best[2]
-    if tie and not has_context and hint is None:
-        return positions[0] if n >= MIN_REPEATABLE_CHARS else None  # a repeated long sentence is the same text
-    return best[2]
+    if hint is not None:
+        return None  # a repeated quote with no stored context: the stored offsets cannot be trusted
+    return positions[0] if n >= MIN_REPEATABLE_CHARS and not short else None
+
+
+def _extend_combining(text: str, a: int, b: int) -> Span:
+    """A span must not cut a base character from its combining marks."""
+    while a > 0 and a < len(text) and unicodedata.combining(text[a]):
+        a -= 1
+    while b < len(text) and unicodedata.combining(text[b]):
+        b += 1
+    return a, b
 
 
 def _elided(view: _View, needle: str, prefix: str, suffix: str, hint: int | None) -> Span | None:
@@ -525,7 +578,7 @@ def _fuzzy(text: str, quote: str, prefix: str, suffix: str, hint: int | None, th
         decided = all(best[2] >= r[2] + 0.1 for r in rivals) or (hint is not None and all(best[3] < r[3] / 2 for r in rivals))
         if not decided:
             return None
-    return best[4], best[5]
+    return _extend_markers(text, best[4], best[5])
 
 
 def _best_span(quote: str, text: str, lo: int, hi: int, slack: int) -> Span | None:
@@ -570,24 +623,47 @@ def _snap(text: str, a: int, b: int) -> Span:
 
 def _head_tail(text: str, quote: str, prefix: str, suffix: str, hint: int | None) -> Span | None:
     """A long quote is anchored by its first and last `HEAD_TAIL` characters:
-    both must occur, in order, at a distance within 5 % of the quote's length."""
+    both must occur, in order, at a distance within 5 % of the quote's length.
+    An end that no longer matches exactly is looked for approximately, but
+    only around where the other end puts it."""
     n = len(quote)
     head, tail = quote[:HEAD_TAIL], quote[-HEAD_TAIL:]
     heads, t1 = _find_all(text, head)
-    tails, t2 = _find_all(text, tail)
-    if t1 or t2 or not heads or not tails:
+    tail_starts, t2 = _find_all(text, tail)
+    if t1 or t2:
         return None
-    pairs: list[Span] = []
-    for h in heads:
-        for t in tails:
-            length = t + len(tail) - h
-            if abs(length - n) <= max(40, n // 20):
-                pairs.append((h, t + len(tail)))
+    tails = [t + len(tail) for t in tail_starts]  # end offsets
+    tol = max(40, n // 20)
+    if not heads and tails:
+        heads = [h for e in tails[:8] if (h := _approx_piece(text, head, e - n - tol - HEAD_TAIL, e - n + tol + HEAD_TAIL)) is not None]
+    elif heads and not tails:
+        tails = [e for h in heads[:8] if (e := _approx_piece(text, tail, h + n - tol - HEAD_TAIL, h + n + tol + HEAD_TAIL, want_end=True)) is not None]
+    if not heads or not tails:
+        return None
+    pairs = [(h, e) for h in heads for e in tails if abs(e - h - n) <= tol]
     if not pairs:
         return None
+    pairs = sorted(set(pairs))
     if len(pairs) == 1:
         return pairs[0]
     scored = sorted((-_context_score(text, a, b, prefix, suffix), abs(a - hint) if hint is not None else 0, a, b) for a, b in pairs)
     if scored[0][:2] == scored[1][:2] or (scored[0][0] == 0 and hint is None):
         return None
     return scored[0][2], scored[0][3]
+
+
+def _approx_piece(text: str, piece: str, lo: int, hi: int, *, want_end: bool = False) -> int | None:
+    """Start (or end) of the best approximate occurrence of `piece` in
+    `text[lo:hi]`, at least 80 % similar and about as long as the piece."""
+    lo, hi = max(0, lo), min(len(text), hi)
+    if hi - lo < len(piece) // 2:
+        return None
+    span = _best_span(piece, text, lo, hi, max(8, min(40, len(piece) // 5)))
+    if span is None:
+        return None
+    a, b = _snap(text, *span)
+    if not (0.85 * len(piece) <= b - a <= 1.15 * len(piece) + 4):
+        return None
+    if SequenceMatcher(None, piece, text[a:b], autojunk=False).ratio() < FUZZY_THRESHOLD:
+        return None
+    return b if want_end else a

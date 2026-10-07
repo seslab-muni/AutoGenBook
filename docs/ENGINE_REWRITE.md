@@ -370,17 +370,26 @@ ignored. The rule throughout: **a false-positive match is worse than an orphan**
   non-breaking spaces, zero-width characters, Markdown `*`/`_`/backtick markers (the span is
   widened over adjacent delimiters), surrounding quote marks and ellipses, an ellipsis for elided
   text (each segment at least 12 characters, total span at most 4x the quote + 200, exactly one
-  chain) -> bounded fuzzy match -> orphan.
-* Short quotes (under 12 characters and 3 words) must sit on word boundaries and be singled out
-  by context or by being the only occurrence; under 4 characters they need context or a stored
-  offset; a repeated quote shorter than 30 characters with no evidence is orphaned. Occurrence
-  scans are capped at 2000; beyond that only a window around the stored offset is searched.
+  chain) -> bounded fuzzy match -> orphan. The tolerant view also drops the engine's own `[kb_...]` /
+  `[web_...]` citation markers, but keeps `*` and `_` inside math (`$...$`) and code spans; spans
+  never stop inside an emphasis delimiter or between a base character and its combining marks.
+* Context first. With a stored prefix/suffix, the occurrences whose surroundings still agree (at
+  least 12 characters each side, or all there are) are the candidates, regardless of word
+  boundaries - a sub-word anchor such as the `x` of `$x_1$` keeps its place; several agreeing: the
+  one nearest the stored start; none: a short quote is orphaned, a longer one falls back to the best
+  partial agreement. Without any context the quote must be unique; a repeated bare quote is
+  orphaned (stored offsets alone are not evidence), except a repeated sentence of 30+ characters
+  in `resolve_quote`, where the first occurrence is the same text. Short bare quotes (under 12
+  characters and 3 words) must additionally sit on word boundaries, and under 4 characters need a
+  stored offset. Occurrence scans are capped at 2000; beyond that only a window around the stored
+  offset is searched.
 * Fuzzy: quotes of 20-600 characters are aligned with `difflib` in a few regions around seed hits
   and the stored offset; the span must be within 15 % of the quote's length, snap outward to word
   boundaries and reach similarity 0.8 (anchors) / 0.85 (quotes); several about-equally similar
   places (siblings such as "Theorem 1." / "Theorem 2.") are refused unless context or the stored
   offset decides. Longer quotes are anchored by their first and last 200 characters (both must
-  match exactly, at a distance within 5 % of the quote's length).
+  match, at a distance within 5 % of the quote's length; an end that misses exactly is matched
+  approximately on its own, but only where the other end puts it).
 * A found anchor's `quote` is the text actually matched, so `text[start:end] == quote`.
 
 **Anchored review issues.** `ReviewIssue` gains `quote` (verbatim span, one sentence or less),
@@ -410,35 +419,61 @@ deterministically), a `SectionBrief` (the chapter options), `LLMSettings`, an op
 `allow_fuzzy_anchor`.
 
 * `scope="section"`: the model returns the whole revised body; it is diffed against the original
-  (`engine/util/textdiff.py`: hierarchical line/sentence/word diff with a patience fallback and a
-  time budget; hunks are code-point offsets over the original and always reproduce the revision).
+  (`engine/util/textdiff.py`: hierarchical line/sentence/word diff over tokens that carry their
+  trailing whitespace, with a patience fallback for repetitive blocks and a 2.5 s budget that is
+  checked inside every loop; hunks are code-point offsets over the original, always reproduce the
+  revision, and merged hunks stay under 400 characters. Blocks that degrade to one whole-block hunk
+  are reported in `warnings`).
   A body that shrinks below half without `shorter` adds a warning (`ReviseResult.warnings`).
 * `scope="range"`: the anchor is resolved first; only `stored`/`exact`/`whitespace` matches are
   accepted unless `allow_fuzzy_anchor` (otherwise `AnchorOrphaned`). The model returns only the
   replacement; the engine strips a head/tail that echoes the surrounding text, rejects a
-  replacement that repeats 200+ characters from outside the range, one that echoes the section
-  marker, or one implausibly long, then splices it in and verifies the outside is unchanged. An
-  empty replacement deletes the range (seam whitespace tidied, reported in `warnings`).
-* A code fence the model wraps around everything is removed unless the original is itself fenced;
+  replacement that repeats 200+ characters from the 1500 characters around the range (fenced code
+  and display math exempt; a repeated whole line is not an echo) and one that echoes the section
+  marker; a replacement far longer than the range only warns. It then splices the answer in. For
+  a replacement the text outside the range is verified unchanged (`startswith`/`endswith`). An
+  empty replacement deletes the range: whole lines go with their line break, the next line keeps
+  its indentation, the blank lines at the seam are the larger of the two sides (a table or tight
+  list stays one block), inside a line only horizontal whitespace at the seam changes; the check
+  there is exact too - what is dropped is the range plus whitespace at the seam, nothing else - and
+  `warnings` says so.
+* A code fence the model wraps around everything is removed only if it is a `markdown`/`md` fence
+  or a bare one around several paragraphs of prose for a request that is not about code, and never
+  when the original is itself fenced;
   CRLF line endings are kept; with a knowledge base, `\cite{}` forms become `[key]` and keys that
   are new and unknown are dropped (known = the whole original section).
 * Prompts (`prompts/book/copilot_reviser.md`, `copilot_range.md`) put every user-supplied block
   between per-call random delimiters and say that only the request and requirements blocks are
   instructions; issue and comment texts are rendered on one line. The full-run `reviser.md` is
-  untouched.
+  untouched. The document brief, glossary, outline and neighbours are delimited data blocks too;
+  `document_kind` must be one of `book`, `paper`, `presentation`.
 * Errors: `InputError` for a bad request; everything else is a `ReviseError` carrying `.usage`:
   `AnchorOrphaned`, `ReviseConfigError` (no API key), `ReviseAuthError`, `ReviseRateLimited`,
   `ReviseTimeout`, `ReviseProviderError`, `ReviseUnusableOutput`.
-* Events: stages `retrieve`, `revise`, `diff` (payload `{"phase": ...}`). Cancellation closes the
-  client and stops the diff worker.
+* Events: stages `retrieve`, `revise`, `diff` (payload `{"phase": ...}`). Cancelling the awaiting
+  task closes the client, sets the diff worker's stop flag (it ends within about 100 ms; the
+  difflib call it may be inside finishes first) and emits a `revise` event with
+  `payload.phase == "cancelled"` and the usage spent so far. Retrieval failures and malformed
+  requests are `ReviseError` / `InputError`.
 
 *Integration helpers.* `ReviseClientPool` shares the HTTP client, limiter and the per-model
 structured-output probe between calls (`await pool.revise(request, sink)`; one pool per API
-process and event loop, not thread-safe; each call keeps its own usage). `interactive_llm_settings`
+process and event loop, not thread-safe; each call keeps its own usage). Idle base clients are
+bounded (`max_clients`, LRU, closed on eviction); throttle notices go to the sinks of the calls in
+flight; calls that wait on a probe that failed because the endpoint is down (auth, connection,
+5xx) share its failure instead of queueing a timeout each. A transport belongs to the pool. `interactive_llm_settings`
 builds `LLMSettings` with the full run's environment parsing (`config.llm_settings_from_env`) and
-interactive defaults (90 s, one retry; overridable per project). `await load_revision_retrieval(
+interactive defaults (90 s, one retry, never looser than the environment's limits; model, key and
+endpoint overridable per project - the environment key is never sent to a different `base_url`:
+give `api_key` then; `reasoning_effort` is a parameter, not inherited). `await load_revision_retrieval(
 work_dir)` loads the index a run saved under `<work_dir>/out/.kb_cache` (never builds, returns
-`None` when absent) with the citation index prebuilt, cached per index file.
+`None` when absent or unusable) with the citation index prebuilt, cached per index file (the two
+most recent; `work_dir` must be server-derived, the index is a pickle).
+
+*Newlines.* Review offsets index the text as `Path.read_text(encoding="utf-8")` returns it
+(universal newlines: `\r\n` and lone `\r` read as `\n`), which is what `graph_import` stores in
+`content_markdown`; a section file that is not valid UTF-8 gets null offsets. `engine.revise`
+instead indexes the string it is given, unchanged, and keeps its CRLF line endings.
 
 ## 5. Testing strategy
 
