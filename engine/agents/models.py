@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _SEVERITY_ALIASES = {
     "critical": "critical", "blocker": "critical", "fatal": "critical",
@@ -88,11 +88,40 @@ class SectionDraft(BaseModel):
     citations_used: list[str] = Field(default_factory=list)
 
 
+def _hide_offsets(schema: dict[str, Any]) -> None:
+    """The model never supplies offsets: the engine resolves `quote` against
+    the section body and writes `start`/`end` itself (engine/util/anchors.py),
+    so they are not part of the schema sent to the provider."""
+    for name in ("start", "end"):
+        schema.get("properties", {}).pop(name, None)
+
+
 class ReviewIssue(BaseModel):
+    model_config = ConfigDict(json_schema_extra=_hide_offsets)
+
     type: str = "other"
     severity: str = "minor"
     description: str = ""
     required_fix: str = ""
+    quote: str = Field(
+        "", description="The span of the section this issue is about, copied verbatim (one sentence or less); empty when it concerns the section as a whole"
+    )
+    start: int | None = Field(None, description="Set by the engine: code-point offset of `quote` in the final section body")
+    end: int | None = Field(None, description="Set by the engine: exclusive end offset of `quote`")
+    replace_from: str = Field("", description="When the fix is a literal replacement: the exact text to replace (inside `quote`)")
+    replace_to: str = Field("", description="When the fix is a literal replacement: the exact replacement text")
+
+    @field_validator("quote", "replace_from", "replace_to", mode="before")
+    @classmethod
+    def _text(cls, value: Any) -> str:
+        """Providers without strict schemas answer `null` for an unused field."""
+        return value if isinstance(value, str) else ""
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _engine_owned(cls, value: Any) -> None:
+        """Offsets are written by the engine only; whatever a model sends is dropped."""
+        return None
 
     @field_validator("severity", mode="before")
     @classmethod
@@ -110,9 +139,32 @@ class SectionReview(BaseModel):
     def needs_revision(self) -> bool:
         return (not self.ok_to_keep) or any(i.severity in {"major", "critical"} for i in self.issues)
 
+    def for_reviser(self) -> dict[str, Any]:
+        """The review as the reviser prompt shows it: offsets are meaningless
+        to a model and empty optional fields are noise, so issues carry
+        `quote`/`replace_from`/`replace_to` only when the reviewer gave them."""
+        data = self.model_dump()
+        for issue in data["issues"]:
+            issue.pop("start", None)
+            issue.pop("end", None)
+            for name in ("quote", "replace_from", "replace_to"):
+                if not issue.get(name):
+                    issue.pop(name, None)
+            if issue.get("replace_from"):  # "replace X with nothing" keeps its empty target
+                issue["replace_to"] = issue.get("replace_to", "")
+        return data
+
 
 class SectionRevision(BaseModel):
     body_markdown: str
+    summary: str = ""
+    changes_made: list[str] = Field(default_factory=list)
+
+
+class RangeRevision(BaseModel):
+    """Copilot, selection scope: the new text of the selected passage only."""
+
+    replacement_markdown: str
     summary: str = ""
     changes_made: list[str] = Field(default_factory=list)
 

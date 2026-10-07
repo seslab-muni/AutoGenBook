@@ -2,8 +2,13 @@
  "issues": [
   {
    "description": "Section 3-1-1 should give one more example.",
+   "end": 98,
+   "quote": "Fake generated content for Topic 3.1, part 1 (3-1-1), part 1: about connects and precise presented",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
   }
  ],

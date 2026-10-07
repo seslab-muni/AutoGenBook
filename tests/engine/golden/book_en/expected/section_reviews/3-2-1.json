@@ -2,9 +2,36 @@
  "issues": [
   {
    "description": "Section 3-2-1 should give one more example.",
+   "end": 95,
+   "quote": "Fake generated content for Topic 3.2, part 1 (3-2-1), part 1: how assumptions want the approach",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "major",
+   "start": 0,
    "type": "coverage"
+  },
+  {
+   "description": "Section 3-2-1 says 'generated' where the glossary has another term.",
+   "end": 3381,
+   "quote": "Fake generated content for Topic 3.2, part 1 (3-2-1), part 7: yet in careful how.",
+   "replace_from": "generated",
+   "replace_to": "produced",
+   "required_fix": "Use the glossary term.",
+   "severity": "minor",
+   "start": 3300,
+   "type": "terminology"
+  },
+  {
+   "description": "Section 3-2-1 repeats itself in its second paragraph.",
+   "end": null,
+   "quote": "account part about connects and precise presented on shows explaining who of",
+   "replace_from": "",
+   "replace_to": "",
+   "required_fix": "Delete the repeated paragraph.",
+   "severity": "minor",
+   "start": null,
+   "type": "redundancy"
   }
  ],
  "ok_to_keep": false,

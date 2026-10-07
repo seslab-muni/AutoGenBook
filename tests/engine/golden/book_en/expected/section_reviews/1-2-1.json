@@ -2,8 +2,13 @@
  "issues": [
   {
    "description": "Section 1-2-1 should give one more example.",
+   "end": 97,
+   "quote": "Fake generated content for Topic 1.2, part 1 (1-2-1), part 1: who of the each to consequences yet",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
   }
  ],

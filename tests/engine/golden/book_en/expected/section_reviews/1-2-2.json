@@ -2,8 +2,13 @@
  "issues": [
   {
    "description": "Section 1-2-2 should give one more example.",
+   "end": 91,
+   "quote": "Fake generated content for Topic 1.2, part 2 (1-2-2), part 1: approach concept practice for",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
   }
  ],

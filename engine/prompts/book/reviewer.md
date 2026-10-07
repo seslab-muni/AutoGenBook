@@ -15,6 +15,7 @@ Check, in this order:
 5. Length: roughly the target length.
 
 Report each problem as an issue with `type` (grounding, citation, coverage, coherence, terminology, language, style, length or redundancy), `severity` (minor, major or critical), a precise `description` and the `required_fix`. Set `ok_to_keep` to false when any issue is major or critical. Add up to three `retrieval_queries` (in the language of the sources) that would find evidence the section is missing. Write descriptions and fixes in English.
+For an issue about a specific passage, set `quote` to that passage copied verbatim from the draft (one sentence or less; no paraphrase, no added quotation marks, no ellipsis); leave it empty when the issue concerns the section as a whole. When the fix is a literal replacement (a term, a number, a wrong word), also set `replace_from` (the exact text, inside the quote) and `replace_to` (the exact new text); otherwise leave both empty.
 === user ===
 Book: {book_title}; target readers: {target_readers}
 

@@ -2,9 +2,25 @@
  "issues": [
   {
    "description": "Section 2-2-1 should give one more example.",
+   "end": 91,
+   "quote": "Fake generated content for Topic 2.2, part 1 (2-2-1), part 1: approach concept practice for",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "major",
+   "start": 0,
    "type": "coverage"
+  },
+  {
+   "description": "Section 2-2-1 says 'generated' where the glossary has another term.",
+   "end": 3666,
+   "quote": "Fake generated content for Topic 2.2, part 1 (2-2-1), part 7: shows explaining who of.",
+   "replace_from": "generated",
+   "replace_to": "produced",
+   "required_fix": "Use the glossary term.",
+   "severity": "minor",
+   "start": 3580,
+   "type": "terminology"
   }
  ],
  "ok_to_keep": false,

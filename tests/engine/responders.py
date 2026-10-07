@@ -179,7 +179,7 @@ _CHAPTER_HINT_RE = re.compile(r"(?im)^Suggested number of chapters:\s*(\d+)")
 _PART_PAGES_RE = re.compile(r"(?im)^-\s*(?:Pages|Slides):\s*([\d.]+)")
 _PART_TITLE_RE = re.compile(r"(?im)^-\s*Title:\s*(.+?)\s*$")
 _SUGGESTED_RE = re.compile(r"(?i)use about (\d+) (?:of them|slides)")
-_BODY_RE = re.compile(r"<<<\n(.*?)\n>>>", re.DOTALL)
+_BODY_RE = re.compile(r"<<<[\w-]*\n(.*?)\n[\w-]*>>>", re.DOTALL)
 _OVERVIEW_KEY_RE = re.compile(r"(?m)^\[(\d+(?:-\d+)*)\]")
 _PATCHABLE_RE = re.compile(r"Only these sections may be patched:\s*([^.\n]+)\.")
 _MAX_PATCHES_RE = re.compile(r"choose at most (\d+) sections")
@@ -258,25 +258,96 @@ def section_draft(call: Any) -> dict:
     return {"body_markdown": body, "summary": f"Section {key} explains {_section_title(prompt)}.", "key_terms": ["fake term"], "citations_used": cites}
 
 
+def _tail_quote_of(body: str, paragraph: int) -> str:
+    """A span from the body of a paragraph, after the lead-in that all the
+    fake paragraphs of a section share (so no sibling resembles it)."""
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    line = paragraphs[paragraph].splitlines()[0].split(": ", 1)[-1]
+    return line[:80].rsplit(" ", 1)[0] if len(line) > 80 else line
+
+
+def _quote_of(body: str, paragraph: int) -> str:
+    """A verbatim span (one line of at most ~100 characters, cut at a word
+    boundary) of the given paragraph of `body`, as a model would copy it."""
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return ""
+    line = paragraphs[paragraph].splitlines()[0]
+    if len(line) > 100:
+        line = line[:100].rsplit(" ", 1)[0]
+    return line
+
+
+def quote_variant(quote: str, key: str) -> str:
+    """The quote as a model might hand it back: verbatim, with a doubled space
+    (whitespace level), wrapped in curly quotes or with a trailing ellipsis
+    (typographic level). Deterministic per section."""
+    variant = stable_int("quote-variant", key) % 4
+    if variant == 1 and " " in quote:
+        i = quote.index(" ", len(quote) // 2)
+        return quote[:i] + "  " + quote[i + 1:]
+    if variant == 2:
+        return chr(0x201C) + quote + chr(0x201D)
+    if variant == 3:
+        return quote + chr(0x2026)
+    return quote
+
+
 @register("SectionReview")
 def section_review(call: Any) -> dict:
+    """Every issue quotes the draft. Rejected sections get a literal-replacement
+    issue on their last paragraph and, for some keys, a `redundancy` issue on
+    paragraph 2 that `section_revision` fixes by rewriting the quoted span (so
+    its quote no longer exists in the revised text)."""
     prompt = call.prompt
     key = node_key_of(prompt) or "0"
     body = first_match(_BODY_RE, prompt) or ""
     reject = stable_int("review", key) % 3 == 0 and "(revised)" not in body
     issues = [{"type": "coverage", "severity": "major" if reject else "minor",
-               "description": f"Section {key} should give one more example.", "required_fix": "Add a concrete example."}]
+               "description": f"Section {key} should give one more example.", "required_fix": "Add a concrete example.",
+               "quote": quote_variant(_quote_of(body, 0), key), "replace_from": "", "replace_to": ""}]
+    if reject:
+        quote = _quote_of(body, -1)
+        issues.append({"type": "terminology", "severity": "minor", "description": f"Section {key} says 'generated' where the glossary has another term.",
+                       "required_fix": "Use the glossary term.", "quote": quote, "replace_from": "generated" if "generated" in quote else "",
+                       "replace_to": "produced" if "generated" in quote else ""})
+        if stable_int("redundant", key) % 4 == 0 and len([p for p in body.split("\n\n") if p.strip()]) >= 3:
+            issues.append({"type": "redundancy", "severity": "minor", "description": f"Section {key} repeats itself in its second paragraph.",
+                           "required_fix": "Delete the repeated paragraph.", "quote": _tail_quote_of(body, 1), "replace_from": "", "replace_to": ""})
     return {"ok_to_keep": not reject, "issues": issues, "suggested_edits": [],
             "retrieval_queries": [f"example for {_section_title(prompt)}"] if reject else []}
 
 
+_REVIEW_JSON_RE = re.compile(r"```json\n(.*?)\n```", re.DOTALL)
+
+
 @register("SectionRevision")
 def section_revision(call: Any) -> dict:
+    """Appends an example; rewrites the span a `redundancy` issue quotes."""
     prompt = call.prompt
     bodies = _BODY_RE.findall(prompt)
     body = bodies[-1] if bodies else ""
+    match = _REVIEW_JSON_RE.search(prompt)
+    if match:
+        try:
+            review = json.loads(match.group(1))
+        except ValueError:
+            review = {}
+        for issue in review.get("issues", []):
+            quote = issue.get("quote") or ""
+            if issue.get("type") == "redundancy" and quote:
+                body = body.replace(quote, "This sentence was rewritten to remove the repetition.")
     return {"body_markdown": body.rstrip() + "\n\nFake generated content (revised) with the example the review asked for.",
             "summary": "Revised section.", "changes_made": ["added an example"]}
+
+
+@register("RangeRevision")
+def range_revision(call: Any) -> dict:
+    """The selected passage (the last `<<<...>>>` block) with one sentence added."""
+    bodies = _BODY_RE.findall(call.prompt)
+    passage = bodies[-1] if bodies else ""
+    return {"replacement_markdown": passage.rstrip() + " An added proof sentence (revised).",
+            "summary": "Extended the passage.", "changes_made": ["added a proof sentence"]}
 
 
 @register("LengthAdjustment")
