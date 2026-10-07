@@ -147,6 +147,14 @@ class SectionRevision(BaseModel):
     changes_made: list[str] = Field(default_factory=list)
 
 
+class RangeRevision(BaseModel):
+    """Copilot, selection scope: the new text of the selected passage only."""
+
+    replacement_markdown: str
+    summary: str = ""
+    changes_made: list[str] = Field(default_factory=list)
+
+
 class LengthAdjustment(BaseModel):
     body_markdown: str
 

@@ -126,16 +126,19 @@ def heading_rule(graph: DocGraph, key: str, *, allow: bool = False) -> str:
 _FENCE_WRAP_RE = re.compile(r"^\s*```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL | re.IGNORECASE)
 
 
+def unwrap_fence(body: str) -> str:
+    """`\\r\\n` -> `\\n`, trimmed, and a code fence around the whole body removed."""
+    text = (body or "").replace("\r\n", "\n").strip()
+    match = _FENCE_WRAP_RE.match(text)
+    return match.group(1).strip() if match else text
+
+
 def clean_body(body: str, title: str, graph: DocGraph, key: str, index: CitationIndex, *, allow_headings: bool = False, lead_ins: bool = True) -> str:
     """Normalise a model-written body: unwrap a whole-body code fence, drop a
     repeated title heading, flatten (or, with `allow_headings`, re-level) body
     headings (`lead_ins=False`, slides: ATX headings only), and rewrite `\\cite{}` and `\\footnote{Source: RID:...}` into
     `[cite_key]` markers."""
-    text = (body or "").replace("\r\n", "\n").strip()
-    match = _FENCE_WRAP_RE.match(text)
-    if match:
-        text = match.group(1).strip()
-
+    text = unwrap_fence(body)
     text = single_key_citations(text, index)
     level = min(6, graph.depth(key) + 1)
     return normalize_body(text, title, level, allow_headings=allow_headings, lead_ins=lead_ins)

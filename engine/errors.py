@@ -46,3 +46,17 @@ class AuditBlocked(EngineError):
 
 class GenerationFailed(EngineError):
     """One or more tasks failed; the others completed and were persisted."""
+
+
+class ReviseError(EngineError):
+    """`engine.revise` could not produce a usable revision (empty or unusable
+    model output, a request that cannot be applied)."""
+
+
+class AnchorOrphaned(ReviseError):
+    """The anchor of a range revision no longer matches the section text."""
+
+    def __init__(self, quote: str) -> None:
+        shown = quote if len(quote) <= 80 else quote[:77] + "..."
+        super().__init__(f"the selected range cannot be found in the section any more: {shown!r}")
+        self.quote = quote

@@ -299,6 +299,15 @@ def section_revision(call: Any) -> dict:
             "summary": "Revised section.", "changes_made": ["added an example"]}
 
 
+@register("RangeRevision")
+def range_revision(call: Any) -> dict:
+    """The selected passage (the last `<<<...>>>` block) with one sentence added."""
+    bodies = _BODY_RE.findall(call.prompt)
+    passage = bodies[-1] if bodies else ""
+    return {"replacement_markdown": passage.rstrip() + " An added proof sentence (revised).",
+            "summary": "Extended the passage.", "changes_made": ["added a proof sentence"]}
+
+
 @register("LengthAdjustment")
 def length_adjustment(call: Any) -> dict:
     prompt = call.prompt
