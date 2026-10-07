@@ -1460,10 +1460,15 @@ paths:
           title: Suggestion Id
       responses:
         '200':
-          description: Successful Response
+          description: '`text/event-stream`. `event: progress` messages carry a `SuggestionProgress`;
+            the last message is `event: done|failed|cancelled` carrying a `SuggestionTerminal`.'
           content:
             application/json:
-              schema: {}
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/SuggestionProgress'
+                - $ref: '#/components/schemas/SuggestionTerminal'
+                title: Response 200 Revisions-Stream Suggestion Events
         '422':
           description: Validation Error
           content:
@@ -2520,6 +2525,11 @@ components:
           type: integer
           title: Pendingsuggestioncount
           default: 0
+        contentHash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Contenthash
         createdAt:
           type: string
           format: date-time
@@ -2723,6 +2733,11 @@ components:
           type: integer
           title: Pendingsuggestioncount
           default: 0
+        contentHash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Contenthash
         createdAt:
           type: string
           format: date-time
@@ -2819,6 +2834,13 @@ components:
           - type: string
           - type: 'null'
           title: Contentmarkdown
+        expectedContentHash:
+          anyOf:
+          - type: string
+            maxLength: 64
+            minLength: 64
+          - type: 'null'
+          title: Expectedcontenthash
         contentLatex:
           anyOf:
           - type: string
@@ -4141,6 +4163,13 @@ components:
             maxItems: 10000
           - type: 'null'
           title: Hunkindexes
+        expectedContentHash:
+          anyOf:
+          - type: string
+            maxLength: 64
+            minLength: 64
+          - type: 'null'
+          title: Expectedcontenthash
       additionalProperties: false
       type: object
       title: SuggestionAccept
@@ -4157,6 +4186,38 @@ components:
       - node
       title: SuggestionAccepted
       description: The accepted suggestion and the node as it is now.
+    SuggestionProgress:
+      properties:
+        seq:
+          type: integer
+          title: Seq
+        ts:
+          type: string
+          title: Ts
+        stage:
+          type: string
+          title: Stage
+        level:
+          type: string
+          title: Level
+        message:
+          type: string
+          title: Message
+        payload:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Payload
+      type: object
+      required:
+      - seq
+      - ts
+      - stage
+      - level
+      - message
+      title: SuggestionProgress
+      description: '`data` of a `progress` event of `GET /suggestions/{id}/events/stream`.'
     SuggestionStarted:
       properties:
         kind:
@@ -4170,6 +4231,20 @@ components:
       required:
       - suggestion
       title: SuggestionStarted
+    SuggestionTerminal:
+      properties:
+        status:
+          type: string
+          title: Status
+        suggestion:
+          anyOf:
+          - $ref: '#/components/schemas/Comment'
+          - type: 'null'
+      type: object
+      required:
+      - status
+      title: SuggestionTerminal
+      description: '`data` of the terminal `done` / `failed` / `cancelled` event.'
     TargetAudience:
       type: string
       enum:

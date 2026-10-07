@@ -579,7 +579,7 @@ async def test_events_are_persisted_for_reconnecting_clients(
         rows = (await session.execute(select(RevisionEventRecord).where(RevisionEventRecord.comment_id == uuid.UUID(card["id"])))).scalars().all()
         jobs = (await session.execute(select(RevisionJobRecord))).scalars().all()
     assert len(rows) >= 3 and {r.stage for r in rows} >= {"revise", "diff"}
-    assert [j.owner for j in jobs] == [revision_runner.instance_id]
+    assert jobs == []  # the job row only lives while the suggestion runs
 
 
 # ---------------------------------------------------------------- user keys

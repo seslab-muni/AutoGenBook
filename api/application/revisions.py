@@ -39,7 +39,11 @@ again); a heartbeat gap longer than `REVISION_STALE_S` (a frozen process) gets
 the job failed although it might still finish - its late result is then
 discarded by the CAS; usage of a job killed with its process is not recorded.
 One running revision per node (unique index), `REVISION_MAX_PER_USER` per user
-(checked, not locked: two simultaneous starts can exceed it by one).
+(admission is serialised per user with a row lock on the user, held until the
+suggestion row is committed, so simultaneous starts cannot exceed it; liveness
+is judged against the database clock). Startup recovery by host name assumes one
+API process per host name (a no-op where pods get fresh names - the heartbeat
+sweep covers that; `--workers > 1` is unsupported).
 """
 
 from __future__ import annotations
@@ -66,6 +70,7 @@ from starlette.concurrency import run_in_threadpool
 from engine.config import LLMSettings, is_openrouter
 from engine.errors import (
     AnchorOrphaned,
+    ConfigError,
     InputError,
     ReviseAuthError,
     ReviseConfigError,
@@ -124,13 +129,6 @@ logger = logging.getLogger("api.application.revisions")
 
 Verb = Literal["revise", "rewrite"]
 Scope = Literal["section", "range"]
-_TERMINAL_STATUSES = (
-    CommentStatus.PENDING,
-    CommentStatus.ACCEPTED,
-    CommentStatus.REJECTED,
-    CommentStatus.FAILED,
-    CommentStatus.CANCELLED,
-)
 
 MAX_THREADS_PER_REVISION = 25
 MAX_THREAD_CHARS = 3000
@@ -253,6 +251,7 @@ class RevisionJob:
     base_payload: dict[str, Any]  # the request echo (verb, scope, instruction, params, ...)
     retrieval_dir: Path | None = None
     kb_sources: tuple[str, ...] | None = None
+    extra_warnings: tuple[str, ...] = ()
 
 
 class RevisionRunner:
@@ -337,11 +336,20 @@ class RevisionRunner:
         while True:
             await asyncio.sleep(self._sweep_interval_s)
             try:
-                await self.recover_stale()
+                await self.sweep_once()
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
                 logger.exception("revision sweeper pass failed")
+
+    async def sweep_once(self) -> None:
+        """One housekeeping pass: fail jobs whose owner died, drop the progress
+        events and job rows of long finished suggestions."""
+        await self.recover_stale()
+        async with self._session_factory() as session:
+            repo = SqlAlchemyRevisionRepository(session)
+            await repo.purge_finished(self._settings.revision_events_keep_s)
+            await repo.commit()
 
     async def recover_stale(
         self, *, max_age_s: float | None = None, include_own_host: bool = False
@@ -351,10 +359,9 @@ class RevisionRunner:
         `REVISION_STALE_S`) or no job row, and - on startup - owned by another
         process of this host (this process is the only one that can be)."""
         max_age = self._settings.revision_stale_s if max_age_s is None else max_age_s
-        cutoff = _now() - timedelta(seconds=max_age)
         async with self._session_factory() as session:
             ids = await SqlAlchemyRevisionRepository(session).stale_running(
-                cutoff,
+                max_age,
                 owner_prefix=f"{self.hostname}:" if include_own_host else None,
                 exclude_owner=self.instance_id,
             )
@@ -374,7 +381,17 @@ class RevisionRunner:
         endpoint and key, the project's model), unless the user stored their own
         key. The environment key is never sent to a different endpoint (the
         engine enforces it; there is no per-project endpoint here)."""
-        return interactive_llm_settings(self._env, model=model, api_key=api_key)
+        # The environment's reasoning effort (prod sets "none") applies to
+        # revisions too, else the model's default reasoning would eat the 90 s
+        # interactive timeout. A malformed value falls back to "not sent".
+        env = os.environ if self._env is None else self._env
+        effort = (env.get("AUTOGENBOOK_LLM_REASONING_EFFORT") or "").strip().lower() or None
+        try:
+            return interactive_llm_settings(
+                self._env, model=model, api_key=api_key, reasoning_effort=effort
+            )
+        except ConfigError:
+            return interactive_llm_settings(self._env, model=model, api_key=api_key)
 
     # ------------------------------------------------------------- jobs
     def spawn(self, job: RevisionJob) -> asyncio.Task:
@@ -447,26 +464,56 @@ class RevisionRunner:
         finally:
             flusher.cancel()
             await asyncio.gather(flusher, return_exceptions=True)
-            await self._flush(job, sink)
-            kind, data = outcome or ("failed", {"error": ("internal", ERROR_MESSAGES["internal"])})
+            # Recording the outcome must survive a cancel / shutdown arriving
+            # right now (the result and the usage would be lost and the card
+            # would stay `running` until the sweeper): it runs as its own task
+            # that this one waits for even when cancelled.
+            await self._shielded(self._record(job, sink, outcome, started))
+
+    @staticmethod
+    async def _shielded(coro) -> None:
+        task = asyncio.ensure_future(coro)
+        cancelled = False
+        while not task.done():
             try:
-                if kind == "pending":
-                    await self._finish_pending(job, data["result"], started)
-                elif kind == "failed":
-                    await self._finish(
-                        comment_id, "failed", error=data["error"], usage=data.get("usage") or {}
-                    )
-                elif kind == "interrupted":
-                    await self._finish(
-                        comment_id,
-                        "failed",
-                        error=("interrupted", ERROR_MESSAGES["interrupted"]),
-                        usage=data.get("usage") or {},
-                    )
-                else:  # cancelled here, or by someone else (external)
-                    await self._finish(comment_id, "cancelled", usage=data.get("usage") or {})
-            except Exception:  # noqa: BLE001
-                logger.exception("recording the outcome of revision %s failed", comment_id)
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        task.result()
+
+    async def _record(
+        self,
+        job: RevisionJob,
+        sink: DbEventSink,
+        outcome: tuple[str, dict[str, Any]] | None,
+        started: datetime,
+    ) -> None:
+        comment_id = job.comment_id
+        try:
+            await self._flush(job, sink)
+        except Exception:  # noqa: BLE001 - a lost event must never lose the outcome
+            logger.exception("final event flush of revision %s failed", comment_id)
+        kind, data = outcome or ("failed", {"error": ("internal", ERROR_MESSAGES["internal"])})
+        try:
+            if kind == "pending":
+                await self._finish_pending(job, data["result"], started)
+            elif kind == "failed":
+                await self._finish(
+                    comment_id, "failed", error=data["error"], usage=data.get("usage") or {}
+                )
+            elif kind == "interrupted":
+                await self._finish(
+                    comment_id,
+                    "failed",
+                    error=("interrupted", ERROR_MESSAGES["interrupted"]),
+                    usage=data.get("usage") or {},
+                )
+            else:  # cancelled here, or by someone else (external)
+                await self._finish(comment_id, "cancelled", usage=data.get("usage") or {})
+        except Exception:  # noqa: BLE001
+            logger.exception("recording the outcome of revision %s failed", comment_id)
 
     async def _work(self, job: RevisionJob, sink: DbEventSink):
         request = job.request
@@ -503,7 +550,7 @@ class RevisionRunner:
                     ],
                 )
             if heartbeat:
-                await repo.heartbeat(job.comment_id, _now())
+                await repo.heartbeat(job.comment_id)
             await session.commit()
 
     async def _flush_loop(self, job: RevisionJob, sink: DbEventSink, work: asyncio.Task) -> None:
@@ -541,7 +588,7 @@ class RevisionRunner:
             "hunks": [h.to_dict() for h in result.hunks],
             "summary": result.summary,
             "changesMade": list(result.changes_made),
-            "warnings": list(result.warnings),
+            "warnings": [*job.extra_warnings, *result.warnings],
             "droppedCitations": list(result.dropped_citations),
             "anchor": result.anchor,
             "model": result.model,
@@ -558,8 +605,23 @@ class RevisionRunner:
                 payload=payload,
                 body_markdown=(result.summary or "")[:20_000],
             )
-        if not ok:
+        if ok:
+            await self._drop_job(job.comment_id)
+        else:
+            # Cancelled / deleted meanwhile: the result is discarded; a deleted
+            # card must still end in a terminal state.
             logger.info("revision %s finished but was no longer running; result discarded", job.comment_id)
+            await self._finish(job.comment_id, "cancelled", usage=_json_safe(result.usage))
+
+    async def _drop_job(self, comment_id: uuid.UUID) -> None:
+        """The job row only matters while the suggestion runs."""
+        try:
+            async with self._session_factory() as session:
+                repo = SqlAlchemyRevisionRepository(session)
+                await repo.delete_job(comment_id)
+                await repo.commit()
+        except Exception:  # noqa: BLE001 - the sweeper removes it later
+            logger.warning("could not delete the job row of revision %s", comment_id)
 
     async def _finish(
         self,
@@ -573,7 +635,7 @@ class RevisionRunner:
         payload. If somebody cancelled first, only the usage is added."""
         async with self._session_factory() as session:
             comments = _comments(session)
-            row = await comments.get(comment_id)
+            row = await comments.get(comment_id, include_deleted=True)
             if row is None or row.kind != CommentKind.SUGGESTION:
                 return False
             payload = {**row.payload, "finishedAt": _iso(_now())}
@@ -583,8 +645,13 @@ class RevisionRunner:
                 payload["error"] = {"code": error[0], "message": error[1]}
             target = CommentStatus.FAILED if outcome == "failed" else CommentStatus.CANCELLED
             if await comments.transition_suggestion(
-                comment_id, CommentStatus.RUNNING, status=target, payload=payload
+                comment_id,
+                CommentStatus.RUNNING,
+                status=target,
+                payload=payload,
+                include_deleted=True,
             ):
+                await self._drop_job(comment_id)
                 return True
             if row.status == CommentStatus.CANCELLED and usage and "usage" not in row.payload:
                 await comments.transition_suggestion(
@@ -592,6 +659,7 @@ class RevisionRunner:
                     CommentStatus.CANCELLED,
                     status=CommentStatus.CANCELLED,
                     payload={**row.payload, "usage": _json_safe(usage)},
+                    include_deleted=True,
                 )
             return False
 
@@ -639,6 +707,13 @@ class RevisionParamsData:
             "fixIssueIds": [str(i) for i in self.fix_issue_ids],
             "addressCommentIds": [str(i) for i in self.address_comment_ids],
         }
+
+
+def _is_running_index_violation(exc: IntegrityError) -> bool:
+    """Only the one-running-revision-per-node unique index means "already
+    running" (Postgres names it; SQLite names the column)."""
+    text = str(exc.orig) if exc.orig is not None else str(exc)
+    return "uq_node_comments_running_suggestion" in text or "node_comments.node_id" in text
 
 
 def _word_count(text: str) -> int:
@@ -701,6 +776,10 @@ class RevisionService:
     ) -> StartedRevision:
         project, node = await self._node(project_id, node_id)
         instruction = instruction.replace("\x00", "").strip()
+        if len(instruction) > self._settings.revision_max_instruction_chars:
+            raise ValidationFailed(
+                f"instruction is longer than {self._settings.revision_max_instruction_chars} characters"
+            )
         if verb == "rewrite":
             return await self._start_rewrite(
                 project_id, node_id, user, scope=scope, anchor=anchor, instruction=instruction,
@@ -708,10 +787,6 @@ class RevisionService:
             )
 
         # ---- validation (cheap, no side effects)
-        if len(instruction) > self._settings.revision_max_instruction_chars:
-            raise ValidationFailed(
-                f"instruction is longer than {self._settings.revision_max_instruction_chars} characters"
-            )
         if params.shorter and params.longer:
             raise ValidationFailed("params.shorter and params.longer cannot both be set")
         if not (instruction or params.has_any or thread_id is not None):
@@ -724,6 +799,13 @@ class RevisionService:
         content = node.content_markdown or ""
         if not content.strip():
             raise Conflict("this section has no text to revise yet", code="section_empty")
+        if scope == "section" and len(content) > self._settings.revision_max_section_chars:
+            raise Conflict(
+                f"this section is too long to revise as a whole "
+                f"({len(content)} > {self._settings.revision_max_section_chars} characters); "
+                "select the passage to revise instead",
+                code="section_too_large",
+            )
 
         thread_root = await self._load_thread_root(node, thread_id)
         fix_rows, address_rows = await self._load_references(node, params, thread_root)
@@ -748,7 +830,7 @@ class RevisionService:
 
         flat = await self._outline.list(project_id)
         brief = self._brief(project, node, flat)
-        retrieval_dir = await self._retrieval_dir(project)
+        retrieval_dir, retrieval_warnings = await self._retrieval_dir(project)
         kb_sources = self._effective_kb_sources(node, flat)
 
         fix_issues = tuple(self._issue_dict(r) for r in fix_rows)
@@ -803,13 +885,15 @@ class RevisionService:
         )
         try:
             created = await self._comments.add(row, commit=False)
-            await self._revisions.add_job(comment_id, self._runner.instance_id, now)
+            await self._revisions.add_job(comment_id, self._runner.instance_id)
             await self._revisions.commit()
         except IntegrityError as exc:
             await self._revisions.rollback()
-            raise Conflict(
-                "a revision of this section is already running", code="revision_in_progress"
-            ) from exc
+            if _is_running_index_violation(exc):
+                raise Conflict(
+                    "a revision of this section is already running", code="revision_in_progress"
+                ) from exc
+            raise
         except BaseException:
             await self._revisions.rollback()
             raise
@@ -822,6 +906,7 @@ class RevisionService:
                 base_payload=base_payload,
                 retrieval_dir=retrieval_dir,
                 kb_sources=kb_sources,
+                extra_warnings=retrieval_warnings,
             )
         )
         return StartedRevision(kind="suggestion", suggestion=created)
@@ -934,6 +1019,10 @@ class RevisionService:
         return texts
 
     async def _check_caps(self, node: OutlineNode, user: User) -> None:
+        # Per-user admission is serialised on the user's row, held until the
+        # suggestion row is committed, so simultaneous starts cannot all pass
+        # the count.
+        await self._revisions.lock_user(user.id)
         if await self._comments.count_running_suggestions(node_id=node.id):
             raise Conflict(
                 "a revision of this section is already running; cancel it or wait for it",
@@ -1042,56 +1131,109 @@ class RevisionService:
             current = by_id.get(current.parent_id) if current.parent_id else None
         return None
 
-    async def _retrieval_dir(self, project: Project) -> Path | None:
-        """The work directory of the project's most recent succeeded run that
-        saved a knowledge-base index - derived from the database and required
-        to lie under `RUNS_DIR`, never from the request. None = no retrieval."""
+    async def _retrieval_dir(self, project: Project) -> tuple[Path | None, tuple[str, ...]]:
+        """`(work dir, warnings)`: the work directory of the project's most
+        recent succeeded run that built a knowledge base (full and regenerate
+        runs only - a burst of exports must not hide it) and saved its index,
+        derived from the database and required to lie under `RUNS_DIR`, never
+        from the request. `(None, ...)` = no retrieval; a saved index larger
+        than `REVISION_MAX_KB_BYTES` is not loaded into the API process (a
+        warning says so)."""
         runs, _total = await self._runs.list(
-            project.id, limit=5, offset=0, statuses=[RunStatus.succeeded]
+            project.id,
+            limit=10,
+            offset=0,
+            statuses=[RunStatus.succeeded],
+            kinds=[RunKind.full, RunKind.regenerate_section],
         )
         runs_root = await run_in_threadpool(lambda: Path(self._settings.runs_dir).resolve())
+        limit = self._settings.revision_max_kb_bytes
 
-        def usable(run: Run) -> Path | None:
+        def usable(run: Run) -> tuple[Path | None, bool]:
             try:
                 work_dir = Path(run.work_dir).resolve()
             except OSError:
-                return None
+                return None, False
             if runs_root != work_dir and runs_root not in work_dir.parents:
-                return None
-            if (work_dir / book_command.OUT_DIRNAME / ".kb_cache").is_dir():
-                return work_dir
-            return None
+                return None, False
+            cache = work_dir / book_command.OUT_DIRNAME / ".kb_cache"
+            if not cache.is_dir():
+                return None, False
+            size = 0
+            for index in cache.glob("engine_kb_*.pkl"):
+                try:
+                    size = max(size, index.stat().st_size)
+                except OSError:
+                    continue
+            if size > limit:
+                return None, True
+            return work_dir, False
 
         for run in runs:
-            found = await run_in_threadpool(usable, run)
+            found, too_large = await run_in_threadpool(usable, run)
+            if too_large:
+                return None, ("sources too large to search during a revision",)
             if found is not None:
-                return found
-        return None
+                return found, ()
+        return None, ()
 
     # ------------------------------------------------------------ accept
     async def accept(
-        self, suggestion_id: uuid.UUID, user: User, *, hunk_indexes: list[int] | None = None
+        self,
+        suggestion_id: uuid.UUID,
+        user: User,
+        *,
+        hunk_indexes: list[int] | None = None,
+        expected_content_hash: str | None = None,
     ) -> NodeComment:
         """Apply a `pending` suggestion to the node's text (see
         `revision_apply`), in one transaction with: the status change, the
         resolution of the threads/issues it addressed, and the re-anchoring of
-        the node's other cards. Locks the node row, so it cannot interleave
-        with another accept."""
+        the node's other cards. Locks the node row first (the content PATCH
+        takes the same lock, in the same order), so it cannot interleave with
+        another accept or a save; `expected_content_hash` (the client's
+        `contentHash` of the text it shows) makes it fail with `content_conflict`
+        instead of applying to text the client has not seen. The addressed
+        threads/issues are settled only by a full accept, not by a partial one."""
         row = await self.get_suggestion(suggestion_id)
         if row.status != CommentStatus.PENDING:
             raise Conflict(
                 f"this suggestion is {row.status.value}; only a pending one can be accepted",
                 code="not_pending",
             )
+        hunk_count = len(row.payload.get("hunks") or [])
         if hunk_indexes is not None:
             if not hunk_indexes:
                 raise ValidationFailed("hunkIndexes must not be empty")
             if row.payload.get("scope") != "section":
                 raise ValidationFailed("hunkIndexes apply to section suggestions only")
+            if len(set(hunk_indexes)) != len(hunk_indexes):
+                raise ValidationFailed("hunkIndexes must not repeat an index")
+            if any(not 0 <= i < hunk_count for i in hunk_indexes):
+                raise ValidationFailed(f"hunkIndexes must be between 0 and {hunk_count - 1}")
         try:
             node = await self._outline.get_for_update(row.node_id)
             if node is None:
                 raise NotFound(f"outline node {row.node_id} does not exist")
+            # Re-read under the lock: a concurrent accept/reject/cancel may have
+            # won, and the anchor may have been re-anchored since the first read.
+            current_row = await self._comments.get(suggestion_id)
+            if current_row is None or current_row.kind != CommentKind.SUGGESTION:
+                raise NotFound(f"suggestion {suggestion_id} does not exist")
+            row = current_row
+            if row.status != CommentStatus.PENDING:
+                raise Conflict(
+                    f"this suggestion is {row.status.value}; only a pending one can be accepted",
+                    code="not_pending",
+                )
+            if expected_content_hash is not None and expected_content_hash != content_hash(
+                node.content_markdown or ""
+            ):
+                raise Conflict(
+                    "the section changed since you loaded it; reload it before accepting",
+                    code="content_conflict",
+                    extensions={"currentContentHash": content_hash(node.content_markdown or "")},
+                )
             if node.status == NodeStatus.DRAFTING:
                 raise Conflict(
                     "this section is being generated by a run; its text would be overwritten",
@@ -1142,9 +1284,11 @@ class RevisionService:
                 dataclasses.replace(node, **changes, updated_at=now), fields=tuple(fields), commit=False
             )
 
-            await self._comments.set_status_many(
-                await self._resolvable_references(row, node), CommentStatus.RESOLVED
-            )
+            full = hunk_indexes is None or len(set(hunk_indexes)) == hunk_count
+            if full:
+                await self._comments.set_status_many(
+                    await self._resolvable_references(row, node), CommentStatus.RESOLVED
+                )
             await reanchor_node_cards(self._comments, node.id, new_content)
             await self._outline.commit()
         except BaseException:
@@ -1208,15 +1352,26 @@ class RevisionService:
             )
         await self._revisions.request_cancel(suggestion_id)
         await self._revisions.commit()
-        if not await self._runner.cancel_local(suggestion_id):
+        await self._runner.cancel_local(suggestion_id)
+        # Whoever owns the job, the state change is this compare-and-set: it
+        # wins unless the job recorded its result first (then that result
+        # stands and the answer is 409 `not_running`).
+        current = await self.get_suggestion(suggestion_id)
+        if current.status == CommentStatus.RUNNING:
             payload = {
-                **row.payload,
+                **current.payload,
                 "finishedAt": _iso(_now()),
                 "cancelledBy": str(user.id),
             }
             await self._comments.transition_suggestion(
                 suggestion_id, CommentStatus.RUNNING, status=CommentStatus.CANCELLED, payload=payload
             )
-        # An owner on another replica may not have reacted yet if the CAS above
-        # lost a race with its own finish; the row shows the final state.
-        return await self.get_suggestion(suggestion_id)
+            current = await self.get_suggestion(suggestion_id)
+        if current.status != CommentStatus.CANCELLED:
+            raise Conflict(
+                f"this suggestion is {current.status.value}; it finished before it could be cancelled",
+                code="not_running",
+            )
+        await self._revisions.delete_job(suggestion_id)
+        await self._revisions.commit()
+        return current

@@ -55,37 +55,37 @@ def hunks_of(payload: dict[str, Any]) -> list[Hunk]:
         raise MalformedSuggestion("the suggestion carries no usable changes") from exc
 
 
+def _occurrences(text: str, needle: str, limit: int = 2) -> list[int]:
+    """Start offsets of (possibly overlapping) occurrences of `needle`, at most `limit`."""
+    found: list[int] = []
+    pos = text.find(needle)
+    while pos != -1 and len(found) < limit:
+        found.append(pos)
+        pos = text.find(needle, pos + 1)
+    return found
+
+
 def _locate_hunk(current: str, original: str, hunk: Hunk) -> tuple[int, int] | None:
     """Where `hunk` applies in `current`: the span its `removed` text now
-    occupies (an empty span for a pure insertion), or None."""
-    if hunk.removed:
-        anchor = {
-            "quote": hunk.removed,
-            "prefix": original[max(0, hunk.start - CONTEXT) : hunk.start],
-            "suffix": original[hunk.end : hunk.end + CONTEXT],
-            "start": hunk.start,
-            "end": hunk.end,
-        }
-        resolved, level = resolve_anchor_detailed(current, anchor)
-        if resolved["start"] is None or level not in ACCEPTED_LEVELS:
-            return None
-        return resolved["start"], resolved["end"]
+    occupies (an empty span for a pure insertion), or None.
+
+    Exact matching only, and only when unambiguous: the window
+    `prefix + removed + suffix` (for an insertion the seam `prefix | suffix`),
+    taken from the original text, must occur exactly once in the current
+    text. Repetitive text therefore never gets a hunk at the wrong repetition:
+    no nearest-offset tie-breaking, no fuzzy matching - when in doubt, stale."""
     before = original[max(0, hunk.start - CONTEXT) : hunk.start]
-    after = original[hunk.start : hunk.start + CONTEXT]
-    if len((before + after).strip()) < MIN_INSERTION_CONTEXT:
+    after = original[hunk.end : hunk.end + CONTEXT]
+    window = before + hunk.removed + after
+    if not hunk.removed and len(window.strip()) < MIN_INSERTION_CONTEXT:
         return None
-    anchor = {
-        "quote": before + after,
-        "prefix": "",
-        "suffix": "",
-        "start": hunk.start - len(before),
-        "end": hunk.start + len(after),
-    }
-    resolved, level = resolve_anchor_detailed(current, anchor)
-    if resolved["start"] is None or level not in ("stored", "exact"):
+    if not window.strip():
         return None
-    point = resolved["start"] + len(before)
-    return point, point
+    found = _occurrences(current, window)
+    if len(found) != 1:
+        return None
+    start = found[0] + len(before)
+    return start, start + len(hunk.removed)
 
 
 def _apply_hunks_to_changed(current: str, original: str, hunks: list[Hunk]) -> str:
@@ -106,6 +106,10 @@ def _apply_hunks_to_changed(current: str, original: str, hunks: list[Hunk]) -> s
     for start, end, added in reversed(placed):
         text = text[:start] + added + text[end:]
     return text
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.split())
 
 
 def _range_replacement(payload: dict[str, Any]) -> str:
@@ -155,6 +159,18 @@ def apply_revision(
         if resolved["start"] is None or level not in ACCEPTED_LEVELS:
             raise StaleSuggestion(
                 "the selected text changed since this suggestion was made; ask again"
+            )
+        # The text now at the range must be what the model was asked to rewrite
+        # (up to whitespace): a small edit inside the range is the user's work
+        # and must never be overwritten.
+        anchor_info = payload.get("anchor") or {}
+        a0, a1 = anchor_info.get("start"), anchor_info.get("end")
+        if not isinstance(a0, int) or not isinstance(a1, int):
+            raise MalformedSuggestion("the suggestion has no resolved range")
+        now_text = current[resolved["start"] : resolved["end"]]
+        if _squash(now_text) != _squash(original[a0:a1]):
+            raise StaleSuggestion(
+                "the selected text was edited since this suggestion was made; ask again"
             )
         new_range = _range_replacement(payload)
         return current[: resolved["start"]] + new_range + current[resolved["end"] :]

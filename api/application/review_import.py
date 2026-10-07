@@ -86,8 +86,19 @@ class ParsedIssue:
 
 
 def _text(value: Any, limit: int = MAX_BODY) -> str:
-    # Postgres text columns reject NUL.
-    return (value if isinstance(value, str) else "").replace("\x00", "")[:limit]
+    # Postgres text columns reject NUL and anything that is not valid UTF-8
+    # (a lone surrogate a model emitted).
+    text = (value if isinstance(value, str) else "").replace("\x00", "")[:limit]
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
+def _flag(value: Any, default: bool = True) -> bool:
+    """A JSON-ish boolean: `"false"`/`"no"`/`"0"` mean false, `null` the default."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "no", "0", "n", "")
+    if value is None:
+        return default
+    return bool(value)
 
 
 def _norm(value: str) -> str:
@@ -96,7 +107,7 @@ def _norm(value: str) -> str:
 
 def issue_key(issue_type: str, quote: str, description: str) -> str:
     raw = "\x1f".join((_norm(issue_type), _norm(quote), _norm(description)))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
 
 
 def _source_of(issue_type: str, description: str) -> str:
@@ -134,7 +145,7 @@ def parse_review(
 ) -> tuple[list[ParsedIssue], dict[str, Any]]:
     """`(issues, summary)` of a section review; issues with the same key are
     reported once."""
-    ok_to_keep = bool(review.get("ok_to_keep", True))
+    ok_to_keep = _flag(review.get("ok_to_keep"), True)
     parsed: dict[str, ParsedIssue] = {}
     for raw in review.get("issues") or []:
         if not isinstance(raw, dict):

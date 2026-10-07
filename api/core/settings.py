@@ -150,6 +150,18 @@ class Settings(BaseSettings):
     # `revision_stale_s` (its process died) with code `interrupted`.
     revision_heartbeat_s: float = Field(default=10.0, gt=0, alias="REVISION_HEARTBEAT_S")
     revision_stale_s: float = Field(default=45.0, gt=0, alias="REVISION_STALE_S")
+    # Safety limits: a section body above `revision_max_section_chars` is only
+    # revised by selection (409 `section_too_large` for scope "section"); a
+    # saved knowledge-base index above `revision_max_kb_bytes` is not loaded into
+    # the API process (the revision runs without retrieval, with a warning).
+    revision_max_section_chars: int = Field(
+        default=60_000, ge=1, alias="REVISION_MAX_SECTION_CHARS"
+    )
+    revision_max_kb_bytes: int = Field(
+        default=256 * 1024 * 1024, ge=0, alias="REVISION_MAX_KB_BYTES"
+    )
+    # How long a finished revision's progress events are kept.
+    revision_events_keep_s: float = Field(default=300.0, ge=0, alias="REVISION_EVENTS_KEEP_S")
 
     @field_validator("llm_key_encryption_key", mode="before")
     @classmethod

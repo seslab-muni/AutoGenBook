@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from api.application.outline import OutlineService
+from api.application.revision_apply import content_hash
 from api.domain.models import OutlineNode as OutlineNodeDomain
 from api.domain.outline import OutlineTree
 from api.presentation.deps import get_outline_service
@@ -58,6 +59,12 @@ def to_schema(node: OutlineNodeDomain) -> OutlineNode:
         created_at=node.created_at,
         updated_at=node.updated_at,
     )
+
+
+def with_hash(schema: OutlineNode, node: OutlineNodeDomain) -> OutlineNode:
+    """Single-node responses carry `contentHash` (one hash of one text)."""
+    schema.content_hash = content_hash(node.content_markdown or "")
+    return schema
 
 
 def tree_to_schema(tree: OutlineTree) -> OutlineNodeTree:
@@ -141,7 +148,7 @@ async def get_outline_node(
     service: OutlineService = Depends(get_outline_service),
 ) -> OutlineNode:
     node = await service.get(project_id, node_id)
-    return to_schema(node)
+    return with_hash(to_schema(node), node)
 
 
 @router.patch("/{node_id}", response_model=OutlineNode)
@@ -153,7 +160,7 @@ async def update_outline_node(
 ) -> OutlineNode:
     changes = body.model_dump(exclude_unset=True)
     node = await service.update(project_id, node_id, changes)
-    return to_schema(node)
+    return with_hash(to_schema(node), node)
 
 
 @router.delete("/{node_id}", status_code=status.HTTP_204_NO_CONTENT)

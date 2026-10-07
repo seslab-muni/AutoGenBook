@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from api.application.reanchor import reanchor_node_cards
+from api.application.revision_apply import content_hash
 from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project, SourceScope
 from api.domain.outline import (
@@ -323,10 +324,28 @@ class OutlineService:
         self, project_id: uuid.UUID, node_id: uuid.UUID, changes: dict[str, Any]
     ) -> OutlineNode:
         project = await self._get_project(project_id)
+        changes = dict(changes)
+        expected_hash = changes.pop("expected_content_hash", None)
+        if "content_markdown" in changes and self._comment_repository is not None:
+            # A content write takes the node row lock first (the same order as
+            # `RevisionService.accept`), so it cannot interleave with an accept
+            # that is rewriting the same text; the lock is held to the commit.
+            locked = await self._outline_repository.get_for_update(node_id)
+            if locked is None or locked.project_id != project_id:
+                raise NotFound(f"outline node {node_id} does not exist")
+            if expected_hash is not None and expected_hash != content_hash(
+                locked.content_markdown or ""
+            ):
+                await self._outline_repository.rollback()
+                raise Conflict(
+                    "the section changed since you loaded it (an accepted suggestion, a run "
+                    "or another editor); reload it before saving",
+                    code="content_conflict",
+                    extensions={"currentContentHash": content_hash(locked.content_markdown or "")},
+                )
         flat = await self._outline_repository.list(project_id)
         node = self._get_node(project_id, node_id, flat)
 
-        changes = dict(changes)
         await self._normalize_source_scope(project_id, node, changes)
         if "content_markdown" in changes:
             changes["actual_words"] = _word_count(changes["content_markdown"] or "")

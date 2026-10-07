@@ -19,6 +19,7 @@ from api.domain.models import (
     Run,
     RunArtifact,
     RunEvent,
+    RunKind,
     RunStatus,
     Source,
     User,
@@ -159,7 +160,9 @@ class OutlineRepository(Protocol):
 
 
 class CommentRepository(Protocol):
-    async def get(self, comment_id: uuid.UUID) -> NodeComment | None: ...
+    async def get(
+        self, comment_id: uuid.UUID, *, include_deleted: bool = False
+    ) -> NodeComment | None: ...
 
     # Whole threads: the roots matching the filters plus all their live replies.
     async def list_threads_for_node(
@@ -234,6 +237,7 @@ class CommentRepository(Protocol):
         payload: dict | None = None,
         body_markdown: str | None = None,
         commit: bool = True,
+        include_deleted: bool = False,
     ) -> bool: ...
 
     async def count_running_suggestions(
@@ -292,6 +296,7 @@ class RunRepository(Protocol):
         offset: int,
         *,
         statuses: Sequence[RunStatus] | None = None,
+        kinds: Sequence[RunKind] | None = None,
     ) -> tuple[list[Run], int]: ...
 
     # 1-based position of `run` among its project's other `queued` runs,

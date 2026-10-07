@@ -16,6 +16,12 @@ data:
   # `required` needs it. 4 = the e-INFRA gateway's parallel-request limit per key.
   LLM_KEY_POLICY: "optional"
   LLM_USER_KEY_CONCURRENCY: "4"
+  # Copilot revisions run inside the api pod (issue #182; docs/OPERATIONS.md). The pod has 2Gi,
+  # so the KB index loaded for retrieval is capped (bytes) and big sections are revised by selection.
+  REVISION_MAX_PER_USER: "3"
+  REVISION_TIMEOUT_S: "300"
+  REVISION_MAX_KB_BYTES: "268435456"
+  REVISION_MAX_SECTION_CHARS: "60000"
   WORKER_CONCURRENCY: "1"
   WORKER_POLL_INTERVAL_S: "2"
   WORKER_STALE_S: "300"

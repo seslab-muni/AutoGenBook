@@ -192,7 +192,7 @@ async def test_accepting_a_subset_of_hunks(authed_client: AsyncClient, session_f
     suggestion_id, hunks = await _pending_with_hunks(session_factory, project_id, node_id, new)
     assert len(hunks) >= 2
 
-    for bad, expect in (([], 422), ([99], 409)):
+    for bad, expect in (([], 422), ([99], 422), ([0, 0], 422), ([-1], 422)):
         response = await authed_client.post(_accept(suggestion_id), json={"hunkIndexes": bad})
         assert response.status_code == expect, response.text
     response = await authed_client.post(_accept(suggestion_id), json={"hunkIndexes": [len(hunks) - 1]})

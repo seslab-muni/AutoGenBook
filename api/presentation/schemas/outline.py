@@ -63,6 +63,10 @@ class OutlineNode(BaseSchema):
     # that are `running` or `pending`. Soft-deleted rows are not counted.
     open_comment_count: int = 0
     pending_suggestion_count: int = 0
+    # sha256 hex of the UTF-8 `contentMarkdown` (the same hash as a suggestion's
+    # `baseContentHash`). Only on the single-node responses (GET/PATCH node,
+    # accept); null in lists and trees. Send it back as `expectedContentHash`.
+    content_hash: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -104,6 +108,9 @@ class OutlineNodeUpdate(BaseSchema):
     math_level: MathLevel | None = None
     sub_prompt: str | None = None
     content_markdown: str | None = None
+    # Optimistic precondition for a `contentMarkdown` write: the `contentHash`
+    # of the text this edit was based on; 409 `content_conflict` on mismatch.
+    expected_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
     content_latex: str | None = None
     reviewer_score: float | None = None
     reviewer_notes: str | None = None

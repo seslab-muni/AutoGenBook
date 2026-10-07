@@ -66,6 +66,7 @@ def upgrade() -> None:
         ["node_id"],
         unique=True,
         postgresql_where=where,
+        sqlite_where=where,
     )
 
 

@@ -115,10 +115,27 @@ class SqlAlchemyCommentRepository:
             merged.extend(sorted(by_thread[root.id], key=lambda c: (c.created_at, c.id)))
         return merged
 
-    async def get(self, comment_id: uuid.UUID) -> NodeComment | None:
+    async def get(
+        self, comment_id: uuid.UUID, *, include_deleted: bool = False
+    ) -> NodeComment | None:
+        """One card, read fresh from the database (an instance already in the
+        session is refreshed). `include_deleted` also returns a soft-deleted
+        card (and one of a deleted node/project) - used to finish the job of a
+        suggestion that was deleted while running."""
+        if include_deleted:
+            record = (
+                await self._session.execute(
+                    select(NodeCommentRecord)
+                    .where(NodeCommentRecord.id == comment_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            return _to_domain(record) if record is not None else None
         row = (
             await self._session.execute(
-                self._select().where(NodeCommentRecord.id == comment_id)
+                self._select()
+                .where(NodeCommentRecord.id == comment_id)
+                .execution_options(populate_existing=True)
             )
         ).first()
         return _to_domain(row[0], row[1]) if row is not None else None
@@ -425,6 +442,7 @@ class SqlAlchemyCommentRepository:
         payload: dict | None = None,
         body_markdown: str | None = None,
         commit: bool = True,
+        include_deleted: bool = False,
     ) -> bool:
         """Compare-and-set a live `suggestion` row's status: True when the row
         was in `expected` (and now is `status`), False when somebody else got
@@ -434,15 +452,15 @@ class SqlAlchemyCommentRepository:
             values["payload"] = payload
         if body_markdown is not None:
             values["body_markdown"] = body_markdown
+        conditions = [
+            NodeCommentRecord.id == comment_id,
+            NodeCommentRecord.kind == CommentKind.SUGGESTION.value,
+            NodeCommentRecord.status == expected.value,
+        ]
+        if not include_deleted:
+            conditions.append(NodeCommentRecord.deleted_at.is_(None))
         result = await self._session.execute(
-            update(NodeCommentRecord)
-            .where(
-                NodeCommentRecord.id == comment_id,
-                NodeCommentRecord.kind == CommentKind.SUGGESTION.value,
-                NodeCommentRecord.status == expected.value,
-                NodeCommentRecord.deleted_at.is_(None),
-            )
-            .values(**values)
+            update(NodeCommentRecord).where(*conditions).values(**values)
         )
         if commit:
             await self._session.commit()

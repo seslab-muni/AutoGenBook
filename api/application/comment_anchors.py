@@ -57,3 +57,10 @@ def resolve_anchors(
 
 def is_resolved(anchor: Mapping[str, Any]) -> bool:
     return anchor.get("start") is not None and anchor.get("end") is not None
+
+
+def resolve_anchors_detailed(
+    content: str, anchors: Sequence[Mapping[str, Any]]
+) -> list[tuple[dict[str, Any], str]]:
+    """`(anchor, level)` for each anchor (see `resolve_anchor_level`)."""
+    return [resolve_anchor_level(content, anchor) for anchor in anchors]

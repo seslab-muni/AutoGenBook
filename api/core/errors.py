@@ -57,8 +57,16 @@ class ApiError(Exception):
     # body - only `Unauthorized` uses this (`WWW-Authenticate: Cookie`).
     headers: dict[str, str] | None = None
 
-    def __init__(self, detail: str | None = None, *, code: str | None = None) -> None:
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        code: str | None = None,
+        extensions: dict[str, Any] | None = None,
+    ) -> None:
         self.detail = detail
+        # Extra members merged into the problem body (e.g. `currentContentHash`).
+        self.extensions = extensions or {}
         # Optional machine-readable discriminator (e.g. `llm_key_required`), emitted as
         # the problem body's `code` extension member so a client can branch on it
         # instead of string-matching `detail`.
@@ -116,6 +124,7 @@ def _problem_response(
     instance: str,
     headers: dict[str, str] | None = None,
     code: str | None = None,
+    extensions: dict[str, Any] | None = None,
 ) -> JSONResponse:
     body: dict[str, Any] = {
         "type": "about:blank",
@@ -127,6 +136,8 @@ def _problem_response(
         body["detail"] = detail
     if code is not None:
         body["code"] = code
+    for key, value in (extensions or {}).items():
+        body.setdefault(key, value)
     return JSONResponse(
         status_code=status_code, content=body, media_type=PROBLEM_JSON, headers=headers
     )
@@ -136,7 +147,13 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         return _problem_response(
-            exc.status_code, exc.title, exc.detail, request.url.path, exc.headers, exc.code
+            exc.status_code,
+            exc.title,
+            exc.detail,
+            request.url.path,
+            exc.headers,
+            exc.code,
+            exc.extensions,
         )
 
     @app.exception_handler(RequestValidationError)

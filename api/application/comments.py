@@ -21,6 +21,12 @@ from api.domain.ports import CommentRepository, OutlineRepository, ProjectReposi
 #    nested in a comment thread (`parent_id`/`thread_id` = the root).
 
 _RESOLVABLE_KINDS = (CommentKind.COMMENT, CommentKind.REVIEW)
+_TERMINAL_SUGGESTION = (
+    CommentStatus.ACCEPTED,
+    CommentStatus.REJECTED,
+    CommentStatus.FAILED,
+    CommentStatus.CANCELLED,
+)
 HEAVY_PAYLOAD_KEYS = frozenset({"originalMarkdown", "replacementMarkdown"})
 
 
@@ -65,7 +71,7 @@ class CommentService:
 
     @staticmethod
     def _trim(comment: NodeComment) -> NodeComment:
-        """The project-wide list leaves out a suggestion's heavy texts
+        """The project-wide list (and, for finished suggestions, the node list) leaves out a suggestion's heavy texts
         (`originalMarkdown`, `replacementMarkdown`); the node list and
         `GET /comments/{id}` carry them."""
         if comment.kind != CommentKind.SUGGESTION or not (HEAVY_PAYLOAD_KEYS & comment.payload.keys()):
@@ -96,9 +102,11 @@ class CommentService:
     ) -> list[NodeComment]:
         """Whole threads (root + live replies); the filters select roots."""
         await self._get_node(project_id, node_id)
-        return self._present(
+        rows = self._present(
             await self._comments.list_threads_for_node(node_id, kind=kind, status=status)
         )
+        # Finished suggestions keep their diff but not both full texts.
+        return [self._trim(c) if c.status in _TERMINAL_SUGGESTION else c for c in rows]
 
     async def list_for_project(
         self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import Union
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, Request, status
@@ -17,6 +18,7 @@ from api.infrastructure.db.revision_repository import SqlAlchemyRevisionReposito
 from api.presentation.deps import current_user, get_outline_service, get_revision_service
 from api.presentation.routers.comments import to_schema as comment_to_schema
 from api.presentation.routers.outline import to_schema as node_to_schema
+from api.presentation.routers.outline import with_hash
 from api.presentation.schemas.revisions import (
     RevisionCreate,
     RevisionStarted,
@@ -34,7 +36,6 @@ router = APIRouter(tags=["revisions"])
 
 _SSE_POLL_INTERVAL_S = 0.5
 _SSE_EVENT_BATCH_LIMIT = 200
-_DONE_STATUSES = (CommentStatus.PENDING, CommentStatus.ACCEPTED, CommentStatus.REJECTED)
 
 
 @router.post(
@@ -98,10 +99,15 @@ async def accept_suggestion(
     `node_generating`, `run_active`). Settles the thread / issues it addressed
     and re-anchors the section's other cards, all in one transaction."""
     accepted = await service.accept(
-        suggestion_id, user, hunk_indexes=body.hunk_indexes if body is not None else None
+        suggestion_id,
+        user,
+        hunk_indexes=body.hunk_indexes if body is not None else None,
+        expected_content_hash=body.expected_content_hash if body is not None else None,
     )
     node = await outline.get(accepted.project_id, accepted.node_id)
-    return SuggestionAccepted(suggestion=comment_to_schema(accepted), node=node_to_schema(node))
+    return SuggestionAccepted(
+        suggestion=comment_to_schema(accepted), node=with_hash(node_to_schema(node), node)
+    )
 
 
 @router.post("/suggestions/{suggestion_id}/reject", response_model=Comment)
@@ -147,15 +153,16 @@ async def _stream_suggestion_events(
         if await is_disconnected():
             return
         async with session_factory() as session:
+            # The row first, then the events: a job writes its last events
+            # before it leaves `running`, so a terminal row seen here means all
+            # of its events are visible to the read below - the terminal event
+            # can never overtake the last progress events.
+            row = await SqlAlchemyCommentRepository(session).get(suggestion_id)
+            running = row is not None and row.status == CommentStatus.RUNNING
             events = await SqlAlchemyRevisionRepository(session).list_events(
                 suggestion_id, after_seq, limit=_SSE_EVENT_BATCH_LIMIT
             )
-            row = None
-            if len(events) < _SSE_EVENT_BATCH_LIMIT:
-                row = await SqlAlchemyCommentRepository(session).get(suggestion_id)
-                terminal = row is None or row.status != CommentStatus.RUNNING
-            else:
-                terminal = False
+            terminal = not running and len(events) < _SSE_EVENT_BATCH_LIMIT
         for event in events:
             after_seq = event.seq
             data = SuggestionProgress(
@@ -181,7 +188,20 @@ async def _stream_suggestion_events(
         await asyncio.sleep(poll_interval_s)
 
 
-@router.get("/suggestions/{suggestion_id}/events/stream")
+@router.get(
+    "/suggestions/{suggestion_id}/events/stream",
+    response_class=EventSourceResponse,
+    responses={
+        200: {
+            "model": Union[SuggestionProgress, SuggestionTerminal],
+            "description": (
+                "`text/event-stream`. `event: progress` messages carry a "
+                "`SuggestionProgress`; the last message is `event: done|failed|cancelled` "
+                "carrying a `SuggestionTerminal`."
+            ),
+        }
+    },
+)
 async def stream_suggestion_events(
     suggestion_id: uuid.UUID,
     request: Request,

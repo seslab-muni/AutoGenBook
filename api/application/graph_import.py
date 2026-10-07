@@ -197,12 +197,19 @@ async def _leaf_content_changes(
         # `reviewer_score` is deliberately never set from this - see
         # `_load_section_review`'s docstring (issue #81). Kept populated for
         # the legacy Review tab; the cards below are its successor.
-        changes["reviewer_notes"] = review["notes"]
+        changes["reviewer_notes"] = (
+            review["notes"].replace("\x00", "").encode("utf-8", "replace").decode("utf-8")
+        )
     issues: list[ParsedIssue] | None = None
     review_data = await _read_section_review(out_dir, cli_key)
     if review_data is not None:
-        issues, summary = await run_in_threadpool(parse_review, review_data, content, run_id)
-        changes["review_summary"] = summary
+        try:
+            issues, summary = await run_in_threadpool(parse_review, review_data, content, run_id)
+        except Exception:  # noqa: BLE001 - a malformed review must not abort the import
+            logger.exception("skipping the malformed reviewer output of section %s", cli_key)
+            issues = None
+        else:
+            changes["review_summary"] = summary
     return changes, issues
 
 

@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.domain.models import CommentKind, CommentStatus, RevisionEvent, RevisionJob
 from api.infrastructure.db.models import (
     NodeCommentRecord,
+    OutlineNodeRecord,
+    ProjectRecord,
     RevisionEventRecord,
     RevisionJobRecord,
+    UserRecord,
 )
 
 
@@ -33,14 +36,67 @@ class SqlAlchemyRevisionRepository:
     async def rollback(self) -> None:
         await self._session.rollback()
 
+    # ----------------------------------------------------------------- clock
+    # Liveness is judged against the database clock, never against the API
+    # processes' clocks (replicas may disagree). SQLite (tests, no replicas)
+    # has no interval arithmetic, so it falls back to the process clock.
+    def _postgres(self) -> bool:
+        bind = self._session.get_bind()
+        return bind.dialect.name == "postgresql"
+
+    def _db_now(self):
+        return func.now() if self._postgres() else datetime.now(timezone.utc)
+
+    def _db_cutoff(self, seconds: float):
+        delta = timedelta(seconds=seconds)
+        return func.now() - delta if self._postgres() else datetime.now(timezone.utc) - delta
+
+    async def lock_user(self, user_id: uuid.UUID) -> None:
+        """Serialise per-user admission (`FOR UPDATE` on the user row; held to
+        the end of the transaction; a no-op on SQLite)."""
+        await self._session.execute(
+            select(UserRecord.id).where(UserRecord.id == user_id).with_for_update()
+        )
+
     # ------------------------------------------------------------------ jobs
-    async def add_job(self, comment_id: uuid.UUID, owner: str, now: datetime) -> None:
-        self._session.add(
-            RevisionJobRecord(
-                comment_id=comment_id, owner=owner, heartbeat_at=now, cancel_requested=False
+    async def add_job(
+        self, comment_id: uuid.UUID, owner: str, heartbeat_at: datetime | None = None
+    ) -> None:
+        await self._session.execute(
+            insert(RevisionJobRecord).values(
+                comment_id=comment_id,
+                owner=owner,
+                heartbeat_at=heartbeat_at if heartbeat_at is not None else self._db_now(),
+                cancel_requested=False,
             )
         )
-        await self._session.flush()
+
+    async def delete_job(self, comment_id: uuid.UUID) -> None:
+        await self._session.execute(
+            delete(RevisionJobRecord).where(RevisionJobRecord.comment_id == comment_id)
+        )
+
+    async def purge_finished(self, older_than_s: float) -> int:
+        """Housekeeping: drop the progress events and job rows of suggestions
+        that are no longer `running` and were last touched `older_than_s` ago
+        (or whose card is gone)."""
+        finished = select(NodeCommentRecord.id).where(
+            NodeCommentRecord.status != CommentStatus.RUNNING.value,
+            NodeCommentRecord.updated_at < self._db_cutoff(older_than_s),
+        )
+        events = await self._session.execute(
+            delete(RevisionEventRecord).where(RevisionEventRecord.comment_id.in_(finished))
+        )
+        await self._session.execute(
+            delete(RevisionJobRecord).where(
+                RevisionJobRecord.comment_id.in_(
+                    select(NodeCommentRecord.id).where(
+                        NodeCommentRecord.status != CommentStatus.RUNNING.value
+                    )
+                )
+            )
+        )
+        return int(events.rowcount or 0)
 
     async def get_job(self, comment_id: uuid.UUID) -> RevisionJob | None:
         record = await self._session.get(RevisionJobRecord, comment_id)
@@ -53,11 +109,11 @@ class SqlAlchemyRevisionRepository:
             cancel_requested=record.cancel_requested,
         )
 
-    async def heartbeat(self, comment_id: uuid.UUID, now: datetime) -> None:
+    async def heartbeat(self, comment_id: uuid.UUID) -> None:
         await self._session.execute(
             update(RevisionJobRecord)
             .where(RevisionJobRecord.comment_id == comment_id)
-            .values(heartbeat_at=now)
+            .values(heartbeat_at=self._db_now())
         )
 
     async def request_cancel(self, comment_id: uuid.UUID) -> None:
@@ -69,15 +125,21 @@ class SqlAlchemyRevisionRepository:
 
     async def poll(self, comment_id: uuid.UUID) -> tuple[CommentStatus | None, bool, bool]:
         """`(status, deleted, cancel_requested)` of a job's suggestion row;
-        status None when the row is gone."""
+        `deleted` is true when the card, its node or its project was
+        soft-deleted (the job is pointless then); status None when the row is
+        gone."""
         row = (
             await self._session.execute(
                 select(
                     NodeCommentRecord.status,
                     NodeCommentRecord.deleted_at,
+                    OutlineNodeRecord.deleted_at,
+                    ProjectRecord.deleted_at,
                     RevisionJobRecord.cancel_requested,
                 )
                 .select_from(NodeCommentRecord)
+                .outerjoin(OutlineNodeRecord, OutlineNodeRecord.id == NodeCommentRecord.node_id)
+                .outerjoin(ProjectRecord, ProjectRecord.id == NodeCommentRecord.project_id)
                 .outerjoin(
                     RevisionJobRecord, RevisionJobRecord.comment_id == NodeCommentRecord.id
                 )
@@ -87,12 +149,13 @@ class SqlAlchemyRevisionRepository:
         ).first()
         if row is None:
             return None, True, False
-        status, deleted_at, cancel = row
-        return CommentStatus(status), deleted_at is not None, bool(cancel)
+        status, deleted_at, node_deleted, project_deleted, cancel = row
+        deleted = deleted_at is not None or node_deleted is not None or project_deleted is not None
+        return CommentStatus(status), deleted, bool(cancel)
 
     async def stale_running(
         self,
-        cutoff: datetime,
+        max_age_s: float,
         *,
         owner_prefix: str | None = None,
         exclude_owner: str | None = None,
@@ -101,7 +164,7 @@ class SqlAlchemyRevisionRepository:
         never got a job row). With `owner_prefix`, also those owned by a process
         whose instance id starts with it (the earlier processes of this host,
         found on startup) except `exclude_owner` (this process)."""
-        dead = RevisionJobRecord.heartbeat_at < cutoff
+        dead = RevisionJobRecord.heartbeat_at < self._db_cutoff(max_age_s)
         if owner_prefix is not None:
             same_host = RevisionJobRecord.owner.startswith(owner_prefix, autoescape=True)
             if exclude_owner is not None:

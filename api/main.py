@@ -29,14 +29,14 @@ logger = logging.getLogger("api")
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     warning = default_credentials_warning(get_settings())
     if warning:
         logger.warning(warning)
     # Issue #182: in-process copilot revisions. `start` fails the suggestions a
     # previous process left `running` and starts the sweeper; `aclose` cancels
     # the jobs (their suggestions become `interrupted`) and closes the LLM pool.
-    runner = get_revision_runner()
+    runner = app.dependency_overrides.get(get_revision_runner, get_revision_runner)()
     await runner.start()
     try:
         yield

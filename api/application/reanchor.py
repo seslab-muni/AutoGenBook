@@ -19,7 +19,9 @@ that was edited slightly is fuzzily re-matched (and rewritten to the matched
 text), a quote that is gone orphans the card. For comment and review rows the
 status follows (`reanchored_status`): `open` <-> `orphaned`, and a `resolved`
 row stays resolved. Suggestion rows keep their status - a pending suggestion is
-never rewritten or dropped because its text moved; `RevisionService.accept`
+never rewritten or dropped because its text moved - and their anchor moves only
+when the quote is found unchanged (stored/exact/whitespace match), never
+fuzzily: an edited range orphans the suggestion's anchor (its quote is kept); `RevisionService.accept`
 re-validates it against the current text instead.
 
 The resolver is CPU-bound pure Python (a 2 kB quote in a 100 kB section is
@@ -33,7 +35,7 @@ import logging
 import uuid
 from starlette.concurrency import run_in_threadpool
 
-from api.application.comment_anchors import resolve_anchors
+from api.application.comment_anchors import ACCEPTED_LEVELS, resolve_anchors_detailed
 from api.domain.models import CommentKind, CommentStatus, NodeComment
 from api.domain.ports import CommentRepository
 
@@ -68,12 +70,25 @@ async def reanchor_node_cards(
         return 0
     anchors = [row.anchor or {} for row in rows]
     if len(rows) * max(len(content), 1) > _THREAD_THRESHOLD:
-        resolved = await run_in_threadpool(resolve_anchors, content, anchors)
+        resolved = await run_in_threadpool(resolve_anchors_detailed, content, anchors)
     else:
-        resolved = resolve_anchors(content, anchors)
+        resolved = resolve_anchors_detailed(content, anchors)
 
     updates: list[tuple[uuid.UUID, dict | None, CommentStatus | None]] = []
-    for row, new_anchor in zip(rows, resolved):
+    for row, (new_anchor, level) in zip(rows, resolved):
+        if row.kind == CommentKind.SUGGESTION and level not in ACCEPTED_LEVELS:
+            # A suggestion's anchor only follows text that is still the same
+            # (up to whitespace). A fuzzy/tolerant match would rewrite its quote
+            # to the user's edited text; instead the anchor is orphaned (the
+            # status stays) and accept answers `stale`.
+            old = row.anchor or {}
+            new_anchor = {
+                "quote": old.get("quote", ""),
+                "prefix": old.get("prefix", ""),
+                "suffix": old.get("suffix", ""),
+                "start": None,
+                "end": None,
+            }
         new_status: CommentStatus | None = None
         if row.kind in (CommentKind.COMMENT, CommentKind.REVIEW):
             status = reanchored_status(row, new_anchor)
