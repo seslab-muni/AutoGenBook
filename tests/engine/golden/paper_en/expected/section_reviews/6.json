@@ -2,9 +2,36 @@
  "issues": [
   {
    "description": "Section 6 should give one more example.",
+   "end": 92,
+   "quote": "Fake generated content for Conclusion (6), part 1: how assumptions want the approach concept",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "major",
+   "start": 0,
    "type": "coverage"
+  },
+  {
+   "description": "Section 6 says 'generated' where the glossary has another term.",
+   "end": 3714,
+   "quote": "Fake generated content for Conclusion (6), part 8: reasoning it limitations a.",
+   "replace_from": "generated",
+   "replace_to": "produced",
+   "required_fix": "Use the glossary term.",
+   "severity": "minor",
+   "start": 3636,
+   "type": "terminology"
+  },
+  {
+   "description": "Section 6 reads as a whole-section remark.",
+   "end": null,
+   "quote": "",
+   "replace_from": "",
+   "replace_to": "",
+   "required_fix": "Tighten the prose.",
+   "severity": "minor",
+   "start": null,
+   "type": "style"
   }
  ],
  "ok_to_keep": false,

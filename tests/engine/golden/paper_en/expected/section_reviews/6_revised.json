@@ -3,9 +3,25 @@
  "issues": [
   {
    "description": "Section 6 should give one more example.",
+   "end": 92,
+   "quote": "Fake generated content for Conclusion (6), part 1: how assumptions want the approach concept",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
+  },
+  {
+   "description": "Section 6 reads as a whole-section remark.",
+   "end": null,
+   "quote": "",
+   "replace_from": "",
+   "replace_to": "",
+   "required_fix": "Tighten the prose.",
+   "severity": "minor",
+   "start": null,
+   "type": "style"
   },
   {
    "description": "Section 6 uses a synonym instead of the glossary term.",

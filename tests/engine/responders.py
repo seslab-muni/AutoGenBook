@@ -258,6 +258,18 @@ def section_draft(call: Any) -> dict:
     return {"body_markdown": body, "summary": f"Section {key} explains {_section_title(prompt)}.", "key_terms": ["fake term"], "citations_used": cites}
 
 
+def _quote_of(body: str, paragraph: int) -> str:
+    """A verbatim span (one line of at most ~100 characters, cut at a word
+    boundary) of the given paragraph of `body`, as a model would copy it."""
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return ""
+    line = paragraphs[paragraph].splitlines()[0]
+    if len(line) > 100:
+        line = line[:100].rsplit(" ", 1)[0]
+    return line
+
+
 @register("SectionReview")
 def section_review(call: Any) -> dict:
     prompt = call.prompt
@@ -265,7 +277,15 @@ def section_review(call: Any) -> dict:
     body = first_match(_BODY_RE, prompt) or ""
     reject = stable_int("review", key) % 3 == 0 and "(revised)" not in body
     issues = [{"type": "coverage", "severity": "major" if reject else "minor",
-               "description": f"Section {key} should give one more example.", "required_fix": "Add a concrete example."}]
+               "description": f"Section {key} should give one more example.", "required_fix": "Add a concrete example.",
+               "quote": _quote_of(body, 0), "replace_from": "", "replace_to": ""}]
+    if reject:  # a literal-replacement issue anchored in the last paragraph
+        quote = _quote_of(body, -1)
+        issues.append({"type": "terminology", "severity": "minor", "description": f"Section {key} says 'generated' where the glossary has another term.",
+                       "required_fix": "Use the glossary term.", "quote": quote, "replace_from": "generated" if "generated" in quote else "",
+                       "replace_to": "produced" if "generated" in quote else ""})
+    issues.append({"type": "style", "severity": "minor", "description": f"Section {key} reads as a whole-section remark.",
+                   "required_fix": "Tighten the prose.", "quote": "", "replace_from": "", "replace_to": ""})
     return {"ok_to_keep": not reject, "issues": issues, "suggested_edits": [],
             "retrieval_queries": [f"example for {_section_title(prompt)}"] if reject else []}
 

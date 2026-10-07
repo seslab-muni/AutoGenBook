@@ -3,9 +3,25 @@
  "issues": [
   {
    "description": "Section 1-1-2 should give one more example.",
+   "end": 97,
+   "quote": "Fake generated content for Topic 1.1, part 2 (1-1-2), part 1: readers account part about connects",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
+  },
+  {
+   "description": "Section 1-1-2 reads as a whole-section remark.",
+   "end": null,
+   "quote": "",
+   "replace_from": "",
+   "replace_to": "",
+   "required_fix": "Tighten the prose.",
+   "severity": "minor",
+   "start": null,
+   "type": "style"
   },
   {
    "description": "Sections 1-1-1 and 1-1-2 both introduce the approach.",

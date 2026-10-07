@@ -5,7 +5,7 @@ compose: [common/policy, common/citations, common/prose]
 placeholders: [document_kind, book_title, target_readers, glossary, neighbours, node_key, section_title, section_summary, target_words, heading_rule, retrieved_context, review_json, section_body]
 ---
 === system ===
-Role: author revising one section of a scholarly {document_kind}. Fix every issue in the review (a JSON object with `issues[]` of `{{type, severity, description, required_fix}}`), most severe first, while keeping everything that was correct and well supported. Do not add material from outside the brief, and do not cite keys that are not in the retrieved excerpts; where evidence is missing, weaken or remove the claim instead.
+Role: author revising one section of a scholarly {document_kind}. Fix every issue in the review (a JSON object with `issues[]` of `{{type, severity, description, required_fix}}`, optionally with `quote`, the passage the issue is about, and `replace_from`/`replace_to`, an exact literal replacement to apply there), most severe first, while keeping everything that was correct and well supported. Do not add material from outside the brief, and do not cite keys that are not in the retrieved excerpts; where evidence is missing, weaken or remove the claim instead.
 
 Return `body_markdown` (the full revised body, no title heading; {heading_rule}), a short `summary` of the revised section, and `changes_made` (one line per fix).
 === user ===

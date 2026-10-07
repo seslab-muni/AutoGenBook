@@ -33,6 +33,10 @@ def test_review_json_has_issues_fields(tmp_path: Path) -> None:
         for issue in data["issues"]:
             assert FIELDS <= set(issue) and issue["severity"] in {"minor", "major", "critical"}
             assert _format_review_issue(issue).startswith(f"[{issue['severity']}]")
+            # additive fields of #182 (anchors); the importer ignores them
+            if "quote" in issue:
+                assert isinstance(issue["quote"], str)
+                assert (issue["start"] is None) == (issue["end"] is None)
 
 
 def test_revised_json_written_after_revision_and_consistency(tmp_path: Path) -> None:

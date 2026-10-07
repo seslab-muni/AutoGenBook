@@ -2,9 +2,25 @@
  "issues": [
   {
    "description": "Section 3-2-1 should give one more example.",
+   "end": 95,
+   "quote": "Fake generated content for Topic 3.2, part 1 (3-2-1), part 1: how assumptions want the approach",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
+  },
+  {
+   "description": "Section 3-2-1 reads as a whole-section remark.",
+   "end": null,
+   "quote": "",
+   "replace_from": "",
+   "replace_to": "",
+   "required_fix": "Tighten the prose.",
+   "severity": "minor",
+   "start": null,
+   "type": "style"
   }
  ],
  "ok_to_keep": true,
