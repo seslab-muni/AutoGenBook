@@ -69,10 +69,15 @@ async def list_node_comments(
     status: CommentStatus | None = None,
     service: CommentService = Depends(get_comment_service),
 ) -> Page[Comment]:
-    """Whole threads of the node, not paged (`total` counts the returned rows)."""
+    """Whole threads of the node, not paged (`total` counts thread roots)."""
     rows = await service.list_for_node(project_id, node_id, kind=kind, status=status)
     items = [to_schema(c) for c in rows]
-    return Page[Comment](items=items, total=len(items), limit=max(len(items), 1), offset=0)
+    return Page[Comment](
+        items=items,
+        total=sum(1 for c in rows if c.parent_id is None),
+        limit=max(len(items), 1),
+        offset=0,
+    )
 
 
 @router.post(

@@ -57,19 +57,44 @@ class CommentAnchorIn(BaseSchema):
         return self
 
 
+def _lenient_str(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _lenient_offset(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 class CommentAnchorOut(BaseSchema):
-    """Response anchor. Deliberately lenient: stored anchors (e.g. written by
+    """Response anchor. Deliberately unable to fail: stored anchors (e.g. from
     a fuzzy re-anchor, which rewrites `quote` to the text actually matched, or
-    by the reviewer import) must always serialise, so none of the request
-    rules (length equality, max lengths, no extra keys) are re-applied."""
+    the reviewer import) always serialise. None of the request rules apply;
+    a missing/wrong-typed `quote`/`prefix`/`suffix` becomes `""` and bad or
+    partial `start`/`end` degrade to null (orphaned)."""
 
     model_config = ConfigDict(extra="ignore")
 
-    quote: str
+    quote: str = ""
     prefix: str = ""
     suffix: str = ""
     start: int | None = None
     end: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitise(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return {}
+        start, end = _lenient_offset(data.get("start")), _lenient_offset(data.get("end"))
+        if start is None or end is None or end < start:
+            start = end = None
+        return {
+            "quote": _lenient_str(data.get("quote")),
+            "prefix": _lenient_str(data.get("prefix")),
+            "suffix": _lenient_str(data.get("suffix")),
+            "start": start,
+            "end": end,
+        }
 
 
 class Comment(BaseSchema):

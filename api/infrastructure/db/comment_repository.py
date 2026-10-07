@@ -4,7 +4,8 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, exists, func, select, update
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.errors import NotFound
@@ -73,14 +74,28 @@ class SqlAlchemyCommentRepository:
 
     @staticmethod
     def _roots(statement, kind: CommentKind | None, status: CommentStatus | None):
+        """Select thread roots. `kind` matches a thread whose root or any live
+        row is of that kind (a copilot suggestion may sit inside a comment
+        thread); `status` then matches rows of that kind, or the root's own
+        status when no `kind` is given."""
         statement = statement.where(NodeCommentRecord.parent_id.is_(None))
         if kind is not None:
-            statement = statement.where(NodeCommentRecord.kind == kind.value)
-        if status is not None:
+            member = aliased(NodeCommentRecord)
+            conditions = [
+                member.thread_id == NodeCommentRecord.id,
+                member.deleted_at.is_(None),
+                member.kind == kind.value,
+            ]
+            if status is not None:
+                conditions.append(member.status == status.value)
+            statement = statement.where(exists().where(*conditions))
+        elif status is not None:
             statement = statement.where(NodeCommentRecord.status == status.value)
         return statement
 
     async def _with_replies(self, roots: list[NodeComment]) -> list[NodeComment]:
+        """Roots (already in page order) plus their live replies, threads
+        contiguous: ordered by root then by row `created_at`/id."""
         if not roots:
             return []
         rows = (
@@ -91,8 +106,13 @@ class SqlAlchemyCommentRepository:
                 )
             )
         ).all()
-        merged = roots + [_to_domain(record, name) for record, name in rows]
-        merged.sort(key=lambda c: (c.created_at, c.id))
+        by_thread: dict[uuid.UUID, list[NodeComment]] = {root.id: [] for root in roots}
+        for record, name in rows:
+            by_thread[record.thread_id].append(_to_domain(record, name))
+        merged: list[NodeComment] = []
+        for root in roots:
+            merged.append(root)
+            merged.extend(sorted(by_thread[root.id], key=lambda c: (c.created_at, c.id)))
         return merged
 
     async def get(self, comment_id: uuid.UUID) -> NodeComment | None:
@@ -147,7 +167,10 @@ class SqlAlchemyCommentRepository:
                 await self._session.execute(
                     select(NodeCommentRecord)
                     .where(NodeCommentRecord.id == comment.thread_id)
-                    .with_for_update()
+                    .with_for_update(key_share=True)
+                    # The session may hold a stale copy from the service's
+                    # earlier read; the lock must see the current row.
+                    .execution_options(populate_existing=True)
                 )
             ).scalar_one_or_none()
             if root is None or root.deleted_at is not None:
@@ -199,7 +222,7 @@ class SqlAlchemyCommentRepository:
         await self._session.execute(
             select(NodeCommentRecord.id)
             .where(NodeCommentRecord.id == thread_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
         )
         await self._session.execute(
             update(NodeCommentRecord)

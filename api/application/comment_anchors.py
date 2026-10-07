@@ -60,7 +60,7 @@ def resolve_anchor(content: str, anchor: Mapping[str, Any]) -> dict[str, Any]:
             matches = [
                 m
                 for m in matches
-                if content[:m].endswith(prefix) and content.startswith(suffix, m + len(quote))
+                if content.endswith(prefix, 0, m) and content.startswith(suffix, m + len(quote))
             ]
     if len(matches) == 1:
         return _with_context(content, quote, matches[0], matches[0] + len(quote))

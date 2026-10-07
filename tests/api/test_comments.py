@@ -380,6 +380,24 @@ async def test_stored_anchor_with_odd_shape_still_serialises(
     anchor = response.json()["items"][0]["anchor"]
     assert anchor["end"] == 99 and len(anchor["prefix"]) == 50 and "extra" not in anchor
 
+    for bad in (
+        {},
+        {"prefix": "p"},
+        {"quote": 5, "start": "0", "end": 3},
+        {"quote": "abc", "start": 1},
+        {"quote": "abc", "start": 5, "end": 2},
+        {"quote": "abc", "start": True, "end": 2.5},
+        {"quote": None, "prefix": None, "suffix": 7, "start": -1, "end": -1},
+    ):
+        await _insert_row(
+            session_factory, project_id, node_id, kind="review", status="open", anchor=bad
+        )
+    response = await authed_client.get(_url(project_id, node_id))
+    assert response.status_code == 200, response.text
+    for item in response.json()["items"][1:]:
+        assert item["anchor"]["start"] is None and item["anchor"]["end"] is None
+        assert isinstance(item["anchor"]["quote"], str)
+
 
 async def test_nul_and_oversized_input_rejected(authed_client: AsyncClient) -> None:
     project_id, node_id = await _setup(authed_client, "abc")
@@ -561,3 +579,144 @@ def test_resolve_anchor_uses_context_among_multiple_matches() -> None:
     assert (resolved["start"], resolved["end"]) == (9, 12)
     still_ambiguous = resolve_anchor(content, {"quote": "foo", "prefix": "", "suffix": ""})
     assert still_ambiguous["start"] is None
+
+
+async def test_reply_vs_thread_delete_race_is_safe(
+    authed_client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    seeded_user,
+) -> None:
+    from api.application.comments import CommentService
+    from api.core.errors import NotFound
+    from api.infrastructure.db.comment_repository import SqlAlchemyCommentRepository
+    from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
+    from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+
+    project_id, node_id = await _setup(authed_client)
+    root = await _post(authed_client, project_id, node_id, bodyMarkdown="root")
+
+    async with session_factory() as svc_session, session_factory() as other_session:
+        repo = SqlAlchemyCommentRepository(svc_session)
+        real_get = repo.get
+        fired = False
+
+        async def get_then_delete(comment_id):  # noqa: ANN001
+            nonlocal fired
+            result = await real_get(comment_id)
+            if not fired:
+                fired = True  # the thread is deleted right after the service read the parent
+                await SqlAlchemyCommentRepository(other_session).soft_delete_thread(
+                    uuid.UUID(root["id"])
+                )
+            return result
+
+        repo.get = get_then_delete  # type: ignore[method-assign]
+        service = CommentService(
+            repo,
+            SqlAlchemyOutlineRepository(svc_session),
+            SqlAlchemyProjectRepository(svc_session),
+        )
+        try:
+            await service.create(
+                uuid.UUID(project_id),
+                uuid.UUID(node_id),
+                seeded_user,
+                body_markdown="late reply",
+                parent_id=uuid.UUID(root["id"]),
+            )
+            raised = False
+        except NotFound:
+            raised = True
+        assert raised
+    assert (await authed_client.get(_url(project_id, node_id))).json()["items"] == []
+    async with session_factory() as session:
+        from sqlalchemy import select
+
+        live = (
+            await session.execute(
+                select(NodeCommentRecord).where(
+                    NodeCommentRecord.thread_id == uuid.UUID(root["id"]),
+                    NodeCommentRecord.deleted_at.is_(None),
+                )
+            )
+        ).all()
+        assert live == []
+
+
+async def test_patch_reply_returns_root_anchor_and_status(authed_client: AsyncClient) -> None:
+    project_id, node_id = await _setup(authed_client, "alpha beta")
+    root = await _post(
+        authed_client, project_id, node_id, bodyMarkdown="r", anchor={"quote": "beta"}
+    )
+    reply = await _post(authed_client, project_id, node_id, bodyMarkdown="1", parentId=root["id"])
+    await authed_client.post(f"/api/v1/comments/{root['id']}/resolve")
+    edited = await authed_client.patch(
+        f"/api/v1/comments/{reply['id']}", json={"bodyMarkdown": "edited"}
+    )
+    assert edited.json()["anchor"] == root["anchor"]
+    assert edited.json()["status"] == "resolved"
+
+
+async def test_reply_under_review_root(
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    review_id = uuid.uuid4()
+    await _insert_row(
+        session_factory, project_id, node_id, id=review_id, thread_id=review_id,
+        kind="review", status="open",
+    )
+    reply = await _post(
+        authed_client, project_id, node_id, bodyMarkdown="fixing", parentId=str(review_id)
+    )
+    assert reply["threadId"] == str(review_id) and reply["kind"] == "comment"
+    items = (await authed_client.get(_url(project_id, node_id) + "?kind=review")).json()["items"]
+    assert [i["id"] for i in items] == [str(review_id), reply["id"]]
+
+
+async def test_project_paging_is_disjoint_and_ordered(authed_client: AsyncClient) -> None:
+    project_id, node_id = await _setup(authed_client)
+    roots = []
+    for index in range(5):
+        root = await _post(authed_client, project_id, node_id, bodyMarkdown=f"r{index}")
+        roots.append(root["id"])
+    # Replies added out of order must stay inside their own thread.
+    for root_id in reversed(roots[:3]):
+        await _post(authed_client, project_id, node_id, bodyMarkdown="rep", parentId=root_id)
+    base = f"/api/v1/projects/{project_id}/comments"
+    full = [i["id"] for i in (await authed_client.get(base)).json()["items"]]
+    paged: list[str] = []
+    for offset in (0, 2, 4):
+        page = (await authed_client.get(f"{base}?limit=2&offset={offset}")).json()
+        assert page["total"] == 5
+        paged += [i["id"] for i in page["items"]]
+    assert paged == full and len(set(paged)) == len(full) == 8
+    threads = [i["threadId"] for i in (await authed_client.get(base)).json()["items"]]
+    assert threads == sorted(threads, key=roots.index)  # contiguous, in root order
+    node_total = (await authed_client.get(_url(project_id, node_id))).json()["total"]
+    assert node_total == 5
+
+
+async def test_kind_filter_matches_suggestion_inside_comment_thread(
+    authed_client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project_id, node_id = await _setup(authed_client)
+    plain = await _post(authed_client, project_id, node_id, bodyMarkdown="plain")
+    prompted = await _post(authed_client, project_id, node_id, bodyMarkdown="prompt")
+    child_id = uuid.uuid4()
+    await _insert_row(
+        session_factory, project_id, node_id, id=child_id,
+        thread_id=uuid.UUID(prompted["id"]), parent_id=uuid.UUID(prompted["id"]),
+        kind="suggestion", status="pending",
+    )
+    for base in (_url(project_id, node_id), f"/api/v1/projects/{project_id}/comments"):
+        items = (await authed_client.get(base + "?kind=suggestion")).json()["items"]
+        assert {i["threadId"] for i in items} == {prompted["id"]}
+        assert child_id.hex in {i["id"].replace("-", "") for i in items}
+        done = (await authed_client.get(base + "?kind=suggestion&status=accepted")).json()
+        assert done["items"] == []
+        both = (await authed_client.get(base + "?kind=suggestion&status=pending")).json()
+        assert len(both["items"]) == 2
+    assert plain["id"] not in {
+        i["id"] for i in (await authed_client.get(_url(project_id, node_id) + "?kind=suggestion")).json()["items"]
+    }

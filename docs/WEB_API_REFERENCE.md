@@ -342,7 +342,7 @@ Margin cards of an outline node (issue #182): human comments and replies, and (l
 
 Statuses (a DB CHECK enforces the kind/status pairing): comment and review rows use `open | resolved | orphaned` (`orphaned` = the anchor's quote cannot be found any more; a resolved row stays `resolved`). Suggestion rows use `running` (job in flight, cancellable), `pending` (finished, awaiting accept/reject), `accepted`, `rejected`, `failed`, `cancelled`.
 
-**Threads are flat.** A reply's `parentId` and `threadId` are both the root's id, even when it answers another reply. A reply stores no anchor or status of its own: responses show the root's `anchor` and `status`. Replying to a resolved thread reopens it (`open`, or `orphaned` if its anchor has null offsets). Replies are allowed under `comment` and `review` roots, `409` under a suggestion. Lists return whole threads (root plus all live replies, oldest first); the `kind`/`status` filters select thread **roots**.
+**Threads are flat.** A reply's `parentId` and `threadId` are both the root's id, even when it answers another reply. A reply stores no anchor or status of its own: responses show the root's `anchor` and `status`. Replying to a resolved thread reopens it (`open`, or `orphaned` if its anchor has null offsets). Replies are allowed under `comment` and `review` roots, `409` under a suggestion. Lists return whole threads (root plus all live replies, oldest first); the `kind`/`status` filters select **threads**: `kind` matches a thread whose root or any live row is of that kind (a copilot suggestion may sit inside the comment thread that prompted it), `status` then matches rows of that kind, or the root's own status when no `kind` is given. Lists are ordered by root `createdAt` (then id), with each thread's rows contiguous, oldest first.
 
 `anchor` is a W3C text-quote selector over the node's `contentMarkdown`: `{quote, prefix, suffix, start, end}`. `start`/`end` are offsets in **Unicode code points** (Python `str` indices; not JS UTF-16 units), `end` exclusive, both `null` = orphaned; `prefix`/`suffix` are up to 32 code points of context (default `""`). Request validation (`422`): non-empty `quote`, `start`/`end` both set or both null, `end - start == len(quote)`, no extra keys. Responses are not re-validated with these rules (a stored anchor always serialises; a fuzzy re-anchor rewrites `quote` to the text actually matched). On create the server resolves the anchor against the node's current content (`api/application/comment_anchors.py:resolve_anchor`): the client's offsets are kept only if `content[start:end] == quote`, else an exact match is used (when there are several, the one whose surroundings agree with `prefix`/`suffix`), else `start`/`end` are stored `null` and the row is `orphaned`; `prefix`/`suffix` of a resolved anchor are refreshed from the content.
 
@@ -350,7 +350,7 @@ Limits (`422`): `bodyMarkdown` 1-20 000 characters and non-blank, anchor `quote`
 
 #### `GET /api/v1/projects/{projectId}/outline/{nodeId}/comments`
 
-Query: `kind`, `status` (optional, applied to thread roots). Returns the node's whole threads as `Page<Comment>`, not paged (`total` = rows returned). `404` for an unknown project or node.
+Query: `kind`, `status` (optional, select threads, see below). Returns the node's whole threads as `Page<Comment>`, not paged (`total` counts thread roots; `limit` echoes the number of rows returned). `404` for an unknown project or node.
 
 #### `GET /api/v1/projects/{projectId}/comments`
 

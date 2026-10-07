@@ -1043,8 +1043,7 @@ paths:
       tags:
       - comments
       summary: List Node Comments
-      description: Whole threads of the node, not paged (`total` counts the returned
-        rows).
+      description: Whole threads of the node, not paged (`total` counts thread roots).
       operationId: comments-list_node_comments
       security:
       - cookieAuth: []
@@ -1922,6 +1921,7 @@ components:
         quote:
           type: string
           title: Quote
+          default: ''
         prefix:
           type: string
           title: Prefix
@@ -1941,17 +1941,17 @@ components:
           - type: 'null'
           title: End
       type: object
-      required:
-      - quote
       title: CommentAnchorOut
-      description: 'Response anchor. Deliberately lenient: stored anchors (e.g. written
-        by
+      description: 'Response anchor. Deliberately unable to fail: stored anchors (e.g.
+        from
 
         a fuzzy re-anchor, which rewrites `quote` to the text actually matched, or
 
-        by the reviewer import) must always serialise, so none of the request
+        the reviewer import) always serialise. None of the request rules apply;
 
-        rules (length equality, max lengths, no extra keys) are re-applied.'
+        a missing/wrong-typed `quote`/`prefix`/`suffix` becomes `""` and bad or
+
+        partial `start`/`end` degrade to null (orphaned).'
     CommentCreate:
       properties:
         bodyMarkdown:
