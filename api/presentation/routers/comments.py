@@ -61,6 +61,15 @@ async def list_project_comments(
     )
 
 
+@router.get("/comments/{comment_id}", response_model=Comment)
+async def get_comment(
+    comment_id: uuid.UUID, service: CommentService = Depends(get_comment_service)
+) -> Comment:
+    """One card, full payload (a suggestion's `originalMarkdown` /
+    `replacementMarkdown` included - the project-wide list leaves them out)."""
+    return to_schema(await service.get(comment_id))
+
+
 @router.get("/projects/{project_id}/outline/{node_id}/comments", response_model=Page[Comment])
 async def list_node_comments(
     project_id: uuid.UUID,

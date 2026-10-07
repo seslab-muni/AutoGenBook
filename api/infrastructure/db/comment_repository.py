@@ -396,6 +396,17 @@ class SqlAlchemyCommentRepository:
         ).all()
         return [_to_domain(record, name) for record, name in rows]
 
+    async def list_threads(self, thread_ids: Sequence[uuid.UUID]) -> list[NodeComment]:
+        """The roots `thread_ids` and every live reply, in one query (oldest first)."""
+        if not thread_ids:
+            return []
+        rows = (
+            await self._session.execute(
+                self._select().where(NodeCommentRecord.thread_id.in_(list(thread_ids)))
+            )
+        ).all()
+        return [_to_domain(record, name) for record, name in rows]
+
     async def list_thread(self, thread_id: uuid.UUID) -> list[NodeComment]:
         """The root and every live reply of one thread, oldest first."""
         rows = (

@@ -11,8 +11,18 @@ from api.core.errors import install_error_handlers
 from api.core.cache_headers import NoStoreMiddleware
 from api.core.request_logging import RequestIdMiddleware, configure_request_logging
 from api.core.settings import default_credentials_warning, get_settings
-from api.presentation.deps import current_user, require_csrf_header
-from api.presentation.routers import auth, comments, files, outline, projects, runs, sources, system
+from api.presentation.deps import current_user, get_revision_runner, require_csrf_header
+from api.presentation.routers import (
+    auth,
+    comments,
+    files,
+    outline,
+    projects,
+    revisions,
+    runs,
+    sources,
+    system,
+)
 
 configure_request_logging()
 logger = logging.getLogger("api")
@@ -23,8 +33,16 @@ async def lifespan(_: FastAPI):
     warning = default_credentials_warning(get_settings())
     if warning:
         logger.warning(warning)
-    yield
-    await get_engine().dispose()
+    # Issue #182: in-process copilot revisions. `start` fails the suggestions a
+    # previous process left `running` and starts the sweeper; `aclose` cancels
+    # the jobs (their suggestions become `interrupted`) and closes the LLM pool.
+    runner = get_revision_runner()
+    await runner.start()
+    try:
+        yield
+    finally:
+        await runner.aclose()
+        await get_engine().dispose()
 
 
 def _generate_unique_operation_id(route: APIRoute) -> str:
@@ -82,6 +100,7 @@ def create_app() -> FastAPI:
     guarded_router.include_router(sources.router)
     guarded_router.include_router(outline.router)
     guarded_router.include_router(comments.router)
+    guarded_router.include_router(revisions.router)
     guarded_router.include_router(runs.router)
     guarded_router.include_router(system.guarded_router)
 

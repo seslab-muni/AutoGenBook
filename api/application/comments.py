@@ -21,6 +21,7 @@ from api.domain.ports import CommentRepository, OutlineRepository, ProjectReposi
 #    nested in a comment thread (`parent_id`/`thread_id` = the root).
 
 _RESOLVABLE_KINDS = (CommentKind.COMMENT, CommentKind.REVIEW)
+HEAVY_PAYLOAD_KEYS = frozenset({"originalMarkdown", "replacementMarkdown"})
 
 
 class CommentService:
@@ -62,11 +63,28 @@ class CommentService:
             for c in comments
         ]
 
+    @staticmethod
+    def _trim(comment: NodeComment) -> NodeComment:
+        """The project-wide list leaves out a suggestion's heavy texts
+        (`originalMarkdown`, `replacementMarkdown`); the node list and
+        `GET /comments/{id}` carry them."""
+        if comment.kind != CommentKind.SUGGESTION or not (HEAVY_PAYLOAD_KEYS & comment.payload.keys()):
+            return comment
+        return replace(
+            comment,
+            payload={k: v for k, v in comment.payload.items() if k not in HEAVY_PAYLOAD_KEYS},
+        )
+
     async def _present_one(self, comment: NodeComment) -> NodeComment:
         if comment.parent_id is None or comment.kind != CommentKind.COMMENT:
             return comment
         root = await self._comments.get(comment.thread_id)
         return self._present([root, comment])[1] if root is not None else comment
+
+    async def get(self, comment_id: uuid.UUID) -> NodeComment:
+        """One card with its full payload (a suggestion's original and
+        replacement text included)."""
+        return await self._present_one(await self._get_comment(comment_id))
 
     async def list_for_node(
         self,
@@ -97,7 +115,7 @@ class CommentService:
         rows, total = await self._comments.list_threads_for_project(
             project_id, kind=kind, status=status, limit=limit, offset=offset
         )
-        return self._present(rows), total
+        return [self._trim(c) for c in self._present(rows)], total
 
     async def create(
         self,

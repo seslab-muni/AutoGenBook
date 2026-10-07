@@ -68,6 +68,16 @@ The password is read from `AUTOGENBOOK_USER_PASSWORD` or an interactive `getpass
 
 `WEB_BIND_HOST=0.0.0.0` (exposing the stack beyond `localhost`) is now acceptable behind TLS, since the login guard is the real access control rather than network isolation alone; `app/nginx.conf.template` still rate-limits `/api/` generally, plus a tighter dedicated backstop on `/api/v1/auth/login` against brute-forcing the 4 accounts.
 
+## Copilot revisions (in-process)
+
+Since issue #182 the API process itself calls the engine (`engine.revise`) for the Studio copilot's "Revise" actions (`POST .../outline/{nodeId}/revisions`, `docs/WEB_API_REFERENCE.md` "Revisions and suggestions"); runs and the worker are unaffected. What an operator needs to know:
+
+- **No extra service.** It needs the LLM settings the API container already gets (`OPENROUTER_API_KEY`/`AUTOGENBOOK_LLM_API_KEY`, `AUTOGENBOOK_LLM_BASE_URL`/`OPENROUTER_BASE_URL`, `OPENROUTER_PRICING_DISABLE`, `OPENROUTER_HTTP_REFERER`, `HTTPS_PROXY`, ...) - the same variables, parsed by the engine - and read access to `RUNS_DIR` (the `runs_data` volume) for retrieval; without that volume or a previous run the copilot works without retrieval. A user's own stored LLM key (`LLM_KEY_ENCRYPTION_KEY`) is used for their revisions.
+- **Settings** (`api/core/settings.py`): `REVISION_MAX_PER_USER` (3: revisions one user may have running; one per node is fixed), `REVISION_TIMEOUT_S` (300: wall-clock limit of one job), `REVISION_MAX_INSTRUCTION_CHARS` (4000), `REVISION_LLM_CONCURRENCY` (4: parallel requests per endpoint+key in the shared client pool), `REVISION_HEARTBEAT_S` (10) and `REVISION_STALE_S` (45). `docker-compose.yml` passes `REVISION_MAX_PER_USER` and `REVISION_TIMEOUT_S` through (`.env.example`); set the others in the container environment (or the Kubernetes ConfigMap) if needed.
+- **Restarts and several replicas.** Jobs live in the API process that started them. A restart fails that process's running revisions (the card shows `interrupted`; the user asks again); with several `api` replicas a replica that restarts fails the jobs of its own earlier process at once and the others notice a dead owner after `REVISION_STALE_S`. Cancel and the SSE progress stream work on any replica (they go through the database), so no sticky routing is needed. This assumes one API process per container/pod (the image's `uvicorn` command, no `--workers`): the instance id is `<hostname>:<random>`, and a starting process treats other ids with its own hostname as dead predecessors. A rolling deploy therefore interrupts the revisions running on the replica being replaced; give long deploys a quiet moment.
+- **Tables**: `revision_jobs` (one row per job: owner, heartbeat, cancel flag) and `revision_events` (progress events) are small and only grow with use; both cascade with their suggestion.
+- **Logs**: failures are logged as `api.application.revisions` (provider errors are mapped to fixed messages for users; keys are never logged).
+
 ## Logging and observability
 
 - Console and file logs go to `out_dir/logs/run.log`. (`autogenbook/logging.py:get_logger`, `autogenbook/paths.py:default_run_paths`)

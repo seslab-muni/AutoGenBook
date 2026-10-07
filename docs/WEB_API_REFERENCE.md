@@ -316,6 +316,8 @@ Partial update (`extra="forbid"` — `level`/`sectionNumber`/`cliKey`/`actualWor
 
 `contentLocked` (issue #113): `true` marks the leaf as content-locked — the next full run ships its `contentMarkdown` into the work dir (`out/locked_sections/<nodeId>.md`, referenced from `book_structure.json` as `content_locked`/`content_file`) and the CLI keeps it byte-for-byte instead of re-writing it, while still folding it into `context_memory.json`/`previous_sections` so later sections stop re-covering it; `graph_import` never overwrites a locked node's content on the way back. Setting it to `true` is rejected with `422` when `contentMarkdown` is blank and with `409` when the node has children (the CLI only writes section files for leaves); `null` leaves it unchanged. A `contentMarkdown` write that blanks a locked node clears the lock in the same write rather than failing a debounced autosave. Editing a locked node's text is allowed — the edited text is what the next run sees. A lock toggle is allowed while a run is active (it applies from the next run) and is deliberately *not* part of the spec the regenerate drift check hashes, so toggling it never invalidates `--resume`/regenerate.
 
+A `contentMarkdown` write also re-anchors the node's margin cards (see **Comments**) in the same transaction.
+
 Status codes: `200`; `404` if the project/node/new-parent doesn't exist; `409` if `contentLocked: true` targets a node with children, or if `parentId` moves the node under a content-locked node; `422` on the validation cases above.
 
 #### `POST /api/v1/projects/{projectId}/outline/unlock-all`
@@ -332,11 +334,13 @@ Status codes: `204`; `404`.
 
 Source (all seven): `api/application/outline.py:OutlineService`, `api/domain/outline.py`, `api/presentation/routers/outline.py`
 
-Every `OutlineNode` (flat, tree, single, create/update/replace responses, and the outline embedded in `Project`) also carries two derived badge counts (issue #182), computed from `node_comments` with one grouped query per request: `openCommentCount` (root `comment` threads whose status is `open` or `orphaned`, i.e. not resolved) and `pendingSuggestionCount` (`suggestion` rows that are `running` or `pending`). Soft-deleted rows are never counted.
+Every `OutlineNode` (flat, tree, single, create/update/replace responses, and the outline embedded in `Project`) also carries two derived badge counts (issue #182), computed from `node_comments` with one grouped query per request: `openCommentCount` (root `comment` threads whose status is `open` or `orphaned`, i.e. not resolved) and `pendingSuggestionCount` (`suggestion` rows that are `running` or `pending`). Soft-deleted rows are never counted. Reviewer issues (`kind=review`) are in neither count.
+
+Every `OutlineNode` also carries `reviewSummary` (read-only, nullable): the section's latest reviewer verdict written by the graph import, `{okToKeep: bool, issueCount: int, suggestedEdits: string[], retrievalQueries: string[], runId: string|null, reviewedAt: ISO string}`; `null` = never reviewed. It is replaced wholesale by every new review of the node (it is a property of the latest review, with no card lifecycle) and is where the frontend reads the per-section verdict; the individual issues are `kind=review` cards.
 
 ## Comments
 
-Margin cards of an outline node (issue #182): human comments and replies, and (later tracks) AI suggestions and reviewer issues, all in table `node_comments` (soft delete via `deletedAt`, never exposed). Behind the session guard like every route; like the rest of the API any signed-in user can read and comment on any project. Rows of a soft-deleted node or project are never listed and their `/comments/{id}` routes 404. Replacing the outline (`PUT /outline`, or a run that generates one) soft-deletes the old nodes, so their comments are stranded along with their content.
+Margin cards of an outline node (issue #182): human comments and replies, reviewer issues (`kind=review`, see **Reviewer issues**) and AI suggestions (`kind=suggestion`, see **Revisions and suggestions**), all in table `node_comments` (soft delete via `deletedAt`, never exposed). Behind the session guard like every route; like the rest of the API any signed-in user can read and comment on any project. Rows of a soft-deleted node or project are never listed and their `/comments/{id}` routes 404. Replacing the outline (`PUT /outline`, or a run that generates one) soft-deletes the old nodes, so their comments are stranded along with their content.
 
 `Comment`: `id`, `projectId`, `nodeId`, `kind` (`comment|suggestion|review`), `authorId` (nullable: copilot/reviewer), `authorName` (nullable, the author's current display name), `anchor` (nullable = the whole section), `status`, `threadId` (the root row's id; a root's own id), `parentId` (nullable; always the thread root's id), `bodyMarkdown`, `payload` (object; review/suggestion fields, `{}` for comments), `createdAt`, `updatedAt` (moves on any change), `editedAt` (nullable; set only by a body edit).
 
@@ -344,9 +348,15 @@ Statuses (a DB CHECK enforces the kind/status pairing): comment and review rows 
 
 **Threads are flat.** A reply's `parentId` and `threadId` are both the root's id, even when it answers another reply. A reply stores no anchor or status of its own: responses show the root's `anchor` and `status`. Replying to a resolved thread reopens it (`open`, or `orphaned` if its anchor has null offsets). Replies are allowed under `comment` and `review` roots, `409` under a suggestion. Lists return whole threads (root plus all live replies, oldest first); the `kind`/`status` filters select **threads**: `kind` matches a thread whose root or any live row is of that kind (a copilot suggestion may sit inside the comment thread that prompted it), `status` then matches rows of that kind, or the root's own status when no `kind` is given. Lists are ordered by root `createdAt` (then id), with each thread's rows contiguous, oldest first.
 
-`anchor` is a W3C text-quote selector over the node's `contentMarkdown`: `{quote, prefix, suffix, start, end}`. `start`/`end` are offsets in **Unicode code points** (Python `str` indices; not JS UTF-16 units), `end` exclusive, both `null` = orphaned; `prefix`/`suffix` are up to 32 code points of context (default `""`). Request validation (`422`): non-empty `quote`, `start`/`end` both set or both null, `end - start == len(quote)`, no extra keys. Responses are not re-validated with these rules (a stored anchor always serialises; a fuzzy re-anchor rewrites `quote` to the text actually matched). On create the server resolves the anchor against the node's current content (`api/application/comment_anchors.py:resolve_anchor`): the client's offsets are kept only if `content[start:end] == quote`, else an exact match is used (when there are several, the one whose surroundings agree with `prefix`/`suffix`), else `start`/`end` are stored `null` and the row is `orphaned`; `prefix`/`suffix` of a resolved anchor are refreshed from the content.
+`anchor` is a W3C text-quote selector over the node's `contentMarkdown`: `{quote, prefix, suffix, start, end}`. `start`/`end` are offsets in **Unicode code points** (Python `str` indices; not JS UTF-16 units), `end` exclusive, both `null` = orphaned; `prefix`/`suffix` are up to 32 code points of context (default `""`). Request validation (`422`): non-empty `quote`, `start`/`end` both set or both null, `end - start == len(quote)`, no extra keys. Responses are not re-validated with these rules (a stored anchor always serialises; a fuzzy re-anchor rewrites `quote` to the text actually matched). The server resolves every anchor with the engine's resolver (`engine/util/anchors.py`, ENGINE_REWRITE.md 4.9; `api/application/comment_anchors.py:resolve_anchor`): the client's offsets are a hint, kept only if the quote still sits there (and is unique or its `prefix`/`suffix` agree), else an exact match, a whitespace-/NFC-normalised match, or a bounded fuzzy match near the stored offset is used; anything ambiguous is orphaned (`start`/`end` stored `null`, status `orphaned`) - a false-positive match is worse than an orphan. A found anchor's `quote` is the text actually matched and `prefix`/`suffix` are refreshed from the content.
+
+**Re-anchoring.** Whenever a node's `contentMarkdown` changes, one function (`api/application/reanchor.py:reanchor_node_cards`) re-resolves every live anchored card of that node against the new text, in the same transaction as the content write, with one query for the cards and one bulk write for the changed ones (the CPU work runs in a thread for big inputs). It is called from every content writer: the `PATCH .../outline/{nodeId}` content write, the graph import (`_merge_cli_graph_into_outline`, `import_single_node`, i.e. full runs, resumes and regenerate runs), and `POST /suggestions/{id}/accept`. Cards covered: root `comment` and `review` rows with an anchor (any status), and `suggestion` rows that are `running` or `pending`. The anchor moves with the text; for comment and review rows the status follows (`open` <-> `orphaned`; a `resolved` row stays `resolved`, an `orphaned` one whose quote reappears is `open` again). A pending suggestion keeps its status whatever happens to its text (it is never rewritten or dropped); accepting it re-validates it against the current text.
 
 Limits (`422`): `bodyMarkdown` 1-20 000 characters and non-blank, anchor `quote` 1-20 000 characters; NUL (`\u0000`) is rejected in `bodyMarkdown` and in the anchor's `quote`/`prefix`/`suffix`.
+
+#### `GET /api/v1/comments/{commentId}`
+
+One live card with its full payload (a suggestion's `originalMarkdown`/`replacementMarkdown` included), as presented in lists (a reply shows its root's anchor/status). `404` for an unknown, deleted or deleted-node card.
 
 #### `GET /api/v1/projects/{projectId}/outline/{nodeId}/comments`
 
@@ -354,7 +364,7 @@ Query: `kind`, `status` (optional, select threads, see below). Returns the node'
 
 #### `GET /api/v1/projects/{projectId}/comments`
 
-Same for all live nodes of the project, used for the margin and badges. Query: `kind`, `status`, `limit` (default 1000, max 5000, like the outline list) and `offset`; they page the matching thread **roots**, `total` counts roots, and each returned root's replies come along.
+Same for all live nodes of the project, used for the margin and badges. To keep it small a suggestion's payload here leaves out the heavy texts `originalMarkdown` and `replacementMarkdown` (everything else, hunks included, is there); the node list and `GET /comments/{id}` carry them. Query: `kind`, `status`, `limit` (default 1000, max 5000, like the outline list) and `offset`; they page the matching thread **roots**, `total` counts roots, and each returned root's replies come along.
 
 #### `POST /api/v1/projects/{projectId}/outline/{nodeId}/comments`
 
@@ -366,15 +376,110 @@ Body: `bodyMarkdown`. Author only (`403` otherwise, also for suggestion/review r
 
 #### `DELETE /api/v1/comments/{commentId}`
 
-Soft delete, `204`. Author only (`403`); rows with no author (copilot/reviewer cards) can be dismissed by any signed-in user. Deleting a thread root soft-deletes the whole thread (including other users' replies); deleting a reply only that reply.
+Soft delete, `204`. Author only (`403`); rows with no author (reviewer cards) can be dismissed by any signed-in user. Deleting a `running` suggestion also stops its job (the owning process notices within a second). Deleting a thread root soft-deletes the whole thread (including other users' replies); deleting a reply only that reply.
 
 #### `POST /api/v1/comments/{commentId}/resolve`
 
-Body (optional): `{"resolved": true|false}`, default `true`. `true` sets the thread root's status to `resolved`; `false` reopens it (`open`, or `orphaned` if its anchor is unresolved). Any signed-in user may resolve. `409` for a reply and for a suggestion row.
+Body (optional): `{"resolved": true|false}`, default `true`. `true` sets the thread root's status to `resolved`; `false` reopens it (`open`, or `orphaned` if its anchor is unresolved). Any signed-in user may resolve - this is how a reviewer card is dismissed (a review row has no author; a dismissed issue is not re-created by a later import). `409` for a reply and for a suggestion row.
 
 Outline badges: `openCommentCount` counts root `comment` rows that are `open` or `orphaned`; `pendingSuggestionCount` counts `suggestion` rows (root or not) that are `running` or `pending`.
 
-Source: `api/application/comments.py:CommentService`, `api/infrastructure/db/comment_repository.py`, `api/presentation/routers/comments.py`
+Source: `api/application/comments.py:CommentService`, `api/application/reanchor.py`, `api/infrastructure/db/comment_repository.py`, `api/presentation/routers/comments.py`
+
+### Reviewer issues (`kind=review`)
+
+The graph import (`api/application/review_import.py`, called from `graph_import.py` for every imported leaf: full runs, resumes, regenerate runs, `outline: generate` runs) turns each issue of the engine's `section_reviews/<key>_revised.json` (else `<key>.json`) into one `kind=review` row: `authorId`/`authorName` null, `threadId = id`, `bodyMarkdown` = the issue's `description`, status `open` (`orphaned` if its quote cannot be found), `anchor` = the issue's `quote` resolved against the imported `contentMarkdown` (the engine's offsets are used when they still index the quote, else the quote is re-resolved tolerantly with `engine.util.anchors.resolve_quote`; `null` for a whole-section issue). `payload`:
+
+| key | meaning |
+|---|---|
+| `issueKey` | stable identity, `sha256(type, quote, description)[:32]` |
+| `type` | the reviewer's issue type (`coverage`, `terminology`, `consistency:term`, ...) |
+| `severity` | `"major"` or `"minor"` (the engine's alias table; `critical` and its aliases fold into `major`) |
+| `requiredFix` | what to change |
+| `replaceFrom`, `replaceTo` | optional literal replacement inside the quote (`""` when none) |
+| `quote` | the matched quote (`""` = whole section) |
+| `okToKeep` | the section review's own verdict (the same on every issue of the section) |
+| `source` | `"reviewer"` (the LLM reviewer), `"consistency"` (type `consistency:*`, the cross-section pass) or `"citation"` (the engine's removed-unknown-citations note) |
+| `runId` | the run that produced it (string or `null`) |
+| `outdated` | `true` only on a row a newer review no longer reports but a user had replied to (kept as resolved history) |
+| `superseded` | `true` only on a soft-deleted row a newer review replaced (never returned by the API) |
+
+The section verdict (`okToKeep`, `suggestedEdits`, `retrievalQueries`) is **not** a card: it is `OutlineNode.reviewSummary` (see **Outline**). `reviewerNotes` is still filled as before (the legacy Review tab).
+
+**Idempotency.** Importing the same run again, a later run, a regenerate of one node and a resume never duplicate cards: issues are matched to the node's existing rows by `issueKey`. A known issue keeps its row with replies and state (only the anchor, payload and open/orphaned state are refreshed; `resolved` stays `resolved`); a new issue becomes a new row; an issue a user resolved or deleted does not come back; a row whose issue the new review no longer reports is soft-deleted (`superseded`) if it is open and untouched, kept `resolved` + `outdated` if it has replies, and left alone if it is resolved. A review file without issues clears the open untouched rows; a node without a review file keeps its cards. Replacing the outline (`PUT /outline`, `outline: generate` run) strands the old cards with the old nodes as before. Review rows are not counted in `openCommentCount`.
+
+### Revisions and suggestions
+
+The copilot (issue #182 phase 4). A *revision* asks the model to rewrite a section or a selected range; it is a `kind=suggestion` card: `running` while the job works, then `pending` (a diff awaiting accept/reject) or `failed`/`cancelled`; accepting writes the node's text (`accepted`), rejecting keeps it (`rejected`). It runs **in the API process** through `engine.revise` (one shared `ReviseClientPool`), needs no run and no work directory, and works on a project that never had one. The model is the project's `llmModel`, the endpoint the deployment's (`AUTOGENBOOK_LLM_BASE_URL`/`OPENROUTER_BASE_URL`), the key the caller's own LLM key when stored (policy `required` makes it mandatory, `409 llm_key_required`) else the deployment key - the same resolution runs use, with an interactive timeout (90 s per request, one retry). Retrieval uses the knowledge base index of the project's most recent succeeded run (`<workDir>/out/.kb_cache`, work dir from the database and required to lie under `RUNS_DIR`), restricted to the node's effective source scope; with no such run the model works from the section alone.
+
+#### `POST /api/v1/projects/{projectId}/outline/{nodeId}/revisions`
+
+Body (`extra="forbid"`):
+
+```json
+{
+  "verb": "revise",                // "revise" (default) | "rewrite"
+  "scope": "section",              // "section" (default) | "range"
+  "anchor": { "quote": "...", "prefix": "", "suffix": "", "start": 12, "end": 40 },  // scope "range"; optional with threadId
+  "instruction": "Add a short proof.",   // free text, <= REVISION_MAX_INSTRUCTION_CHARS (4000)
+  "params": { "moreProofs": false, "moreExamples": false, "moreRigorous": false,
+              "shorter": false, "longer": false, "citeSources": false,
+              "fixIssueIds": [], "addressCommentIds": [] },   // <= 25 ids each
+  "threadId": null                 // create the suggestion inside this comment/review thread
+}
+```
+
+`202` with a discriminated body:
+
+* `verb: "revise"` -> `{"kind": "suggestion", "suggestion": <Comment>}` - the new card, `status: "running"`, `authorId` = the caller, `anchor` = the resolved range (`null` for section scope), `threadId`/`parentId` = the thread root's id when `threadId` was given (else its own id / `null`), `payload` = the request echo (below).
+* `verb: "rewrite"` -> `{"kind": "run", "runId": "...", "run": <Run>}`: Rewrite stays on the regenerate run - the call is `RunService.regenerate_node` with the instruction as `promptModifier`, with exactly that endpoint's `404`/`409` reasons (no previous run, content-locked node, regenerate already queued, ...). Only `instruction` is allowed with it (`422` for a `range` scope, an anchor, any param or a `threadId`).
+
+Validation (`422` unless noted): `shorter` and `longer` together; nothing to do (no instruction, no param, no `threadId`); instruction too long; `fixIssueIds` must be `kind=review` roots and `addressCommentIds` `kind=comment` roots **of this node**, `threadId` a comment/review root of this node (the thread's text is passed to the model as a comment to address, a review thread as an issue to fix, and the thread is settled on accept); a `range` needs an anchor (the request's or the thread's); an anchor with `scope: "section"`. `409` with `code`: `section_empty` (nothing to revise), `node_generating` (a run is generating the node), `anchor_orphaned` (the range no longer matches the section at the stored/exact/whitespace level - select it again), `revision_in_progress` (a revision of this node is already running; also what the loser of two simultaneous starts gets), `llm_key_required`, `llm_not_configured` (no key for an OpenRouter endpoint). `429 too_many_revisions`: the caller already has `REVISION_MAX_PER_USER` (3) revisions running. `404` unknown project/node.
+
+**Suggestion payload** (`Comment.payload` of a `kind=suggestion` row; keys are camelCase):
+
+| key | when | meaning |
+|---|---|---|
+| `verb`, `scope`, `instruction`, `params` | always | the request echo (`params` exactly as sent plus the defaults, ids as strings) - "try again" is a new POST with the same values |
+| `threadId` | always | the thread root's id or `null` |
+| `baseContentHash` | always | sha256 hex of the node's `contentMarkdown` the job started from |
+| `model`, `startedAt` | always | model id; ISO time |
+| `originalMarkdown`, `replacementMarkdown` | `pending`/`accepted`/`rejected` | the section body the job saw and the full new body (heavy: not in the project-wide list) |
+| `hunks` | same | `[{start, end, removed, added}]`: offsets (Unicode code points) into `originalMarkdown`, `original[start:end] == removed`; applying them reproduces `replacementMarkdown` |
+| `anchor` | same | the range as resolved in `originalMarkdown` (`null` for section scope) |
+| `summary`, `changesMade[]`, `warnings[]`, `droppedCitations[]` | same | what the model says it did; engine warnings; citation keys it invented and the engine removed |
+| `usage` | `pending`, `failed`, `cancelled` | LLM usage totals (tokens, cost when known); kept on failures; recorded here only (runs account cost on the run row, there is no project-level ledger) |
+| `finishedAt` | terminal | ISO time |
+| `error` | `failed` | `{code, message}`, see below |
+| `acceptedAt`, `acceptedBy`, `appliedHunks` | `accepted` | `appliedHunks` is the list of hunk indexes applied, or `null` for all |
+| `rejectedAt`, `rejectedBy` / `cancelledBy` | `rejected` / `cancelled` | |
+
+`bodyMarkdown` of a pending suggestion is the model's summary (empty while running and on failure). `error.code`: `llm_auth` (provider rejected the key), `llm_rate_limited`, `llm_timeout`, `llm_error` (any other provider failure), `llm_config`, `unusable_output` (the model's answer did not parse, even after a repair), `anchor_orphaned`, `revision_failed` (the engine refused the answer, e.g. it echoed the surrounding text; `message` explains), `invalid_request`, `timeout` (the job exceeded `REVISION_TIMEOUT_S`), `interrupted` (the API process died or restarted), `internal`. Messages are fixed user-facing texts - provider error text, URLs and keys never reach them.
+
+#### `GET /api/v1/suggestions/{suggestionId}/events/stream`
+
+Server-Sent Events of a revision; same conventions as the run stream: `id` is the event's `seq` (resume with `Last-Event-ID`), keep-alive pings every 15 s, the stream ends by itself after the terminal event, `404` before opening for an unknown/deleted/non-suggestion id. It only reads the database, so it works on any API replica and survives reconnects (progress events are persisted). Events:
+
+* `event: progress`, `data: {seq, ts, stage, level, message, payload}`: the engine's stages `retrieve` (`payload.phase` `start`/`done`), `revise` (`start`, `model`, `done`, plus warnings such as throttling), `diff` (`start`/`done`, `payload.hunks`).
+* exactly one terminal event, then the stream closes: `done` (the suggestion left `running`: `pending`, or already `accepted`/`rejected`), `failed` or `cancelled`; `data: {status, suggestion: <Comment, full payload>}`; its `id` is the last progress `seq` + 1.
+
+#### `POST /api/v1/suggestions/{suggestionId}/accept`
+
+Optional body `{"hunkIndexes": [0, 2]}` (section scope only; applies just those hunks). `200` `{"suggestion": <Comment, accepted>, "node": <OutlineNode>}`. Only a `pending` suggestion (`409 not_pending`). One transaction, with the node row locked: the node's `contentMarkdown` is written (`actualWords` updated, and - like a content `PATCH` - a locked node whose text becomes blank is unlocked), the suggestion becomes `accepted`, the thread it lives in, the review rows in `fixIssueIds` and the comment threads in `addressCommentIds` become `resolved`, and the node's other cards are re-anchored. If the text changed since `baseContentHash` the suggestion is applied to the *current* text or refused, never merged blindly (`api/application/revision_apply.py`): a **range** suggestion re-resolves its (continuously re-anchored) anchor and splices the new range text there if it is found at the stored/exact/whitespace level; a **section** suggestion needs every hunk to find its `removed` text - with its original surroundings as context, a pure insertion is located by the text around it - at exactly one place, without overlaps. Otherwise `409 stale` (nothing changes; the user asks again). Other `409` codes: `node_generating` (a regenerate run owns the node), `run_active` (a full run is queued/running and would overwrite an unlocked node), `invalid_suggestion`. A `contentLocked` node is accepted like a content `PATCH` is allowed (the lock protects against runs). `422` for `hunkIndexes` that are empty or sent for a range suggestion. `404` unless a live suggestion.
+
+#### `POST /api/v1/suggestions/{suggestionId}/reject`
+
+`pending` -> `rejected`, `200` with the `Comment`; `409 not_pending` otherwise.
+
+#### `POST /api/v1/suggestions/{suggestionId}/cancel`
+
+`running` -> `cancelled`, `200` with the `Comment`. Author only (`403`), idempotent for a `cancelled` one, `409 not_running` for the other states. Works from any replica (below).
+
+**Pending suggestions and text that moved.** Cards follow the text: the anchor of a `running`/`pending` suggestion is re-anchored together with the other cards, the status is never touched, and nothing is rewritten. The consequences are decided at accept time (above). There is no automatic "stale" flag; `baseContentHash` is there for clients that want one.
+
+**Jobs, replicas and restarts.** A job is an asyncio task in one API process (its owner); everything other replicas need is in the database. State changes are compare-and-set on the suggestion row (`UPDATE ... WHERE status = <expected>`), so cancel, finish, accept, reject and crash recovery cannot clobber each other (the loser of a race gets a `409`/is a no-op). `revision_jobs` holds the owner id, a heartbeat (every `REVISION_HEARTBEAT_S`, 10 s) and a cancel flag; `revision_events` the progress events. Cancel on a replica that does not own the task flips the row; the owner polls its row every second, sees the status change (or a deleted row) and cancels its task; the owner itself stops at once and records the usage. At most one revision runs per node (unique partial index) and `REVISION_MAX_PER_USER` per user. Each job has an overall limit `REVISION_TIMEOUT_S` (300 s). On startup the process fails the `running` suggestions an earlier process of the same host left (`interrupted`); every replica also sweeps for `running` suggestions whose heartbeat is older than `REVISION_STALE_S` (45 s) and fails them the same way; on shutdown the jobs are cancelled and their suggestions become `interrupted`. Limits: a job dies with its process (the user retries), a process frozen for longer than `REVISION_STALE_S` gets its job failed although it might still finish (its late result is discarded), the per-user cap is checked not locked (two simultaneous starts may exceed it by one).
+
+Source: `api/application/revisions.py` (`RevisionService`, `RevisionRunner`), `api/application/revision_apply.py`, `api/infrastructure/db/revision_repository.py`, `api/presentation/routers/revisions.py`
 
 ## Runs
 

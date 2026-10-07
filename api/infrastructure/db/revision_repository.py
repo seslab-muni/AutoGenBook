@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.domain.models import CommentKind, CommentStatus, RevisionEvent, RevisionJob
@@ -90,9 +90,23 @@ class SqlAlchemyRevisionRepository:
         status, deleted_at, cancel = row
         return CommentStatus(status), deleted_at is not None, bool(cancel)
 
-    async def stale_running(self, cutoff: datetime) -> list[uuid.UUID]:
+    async def stale_running(
+        self,
+        cutoff: datetime,
+        *,
+        owner_prefix: str | None = None,
+        exclude_owner: str | None = None,
+    ) -> list[uuid.UUID]:
         """Live `running` suggestions whose owner stopped heartbeating (or that
-        never got a job row)."""
+        never got a job row). With `owner_prefix`, also those owned by a process
+        whose instance id starts with it (the earlier processes of this host,
+        found on startup) except `exclude_owner` (this process)."""
+        dead = RevisionJobRecord.heartbeat_at < cutoff
+        if owner_prefix is not None:
+            same_host = RevisionJobRecord.owner.startswith(owner_prefix, autoescape=True)
+            if exclude_owner is not None:
+                same_host = same_host & (RevisionJobRecord.owner != exclude_owner)
+            dead = dead | same_host
         rows = (
             await self._session.execute(
                 select(NodeCommentRecord.id)
@@ -103,8 +117,7 @@ class SqlAlchemyRevisionRepository:
                     NodeCommentRecord.kind == CommentKind.SUGGESTION.value,
                     NodeCommentRecord.status == CommentStatus.RUNNING.value,
                     NodeCommentRecord.deleted_at.is_(None),
-                    (RevisionJobRecord.comment_id.is_(None))
-                    | (RevisionJobRecord.heartbeat_at < cutoff),
+                    (RevisionJobRecord.comment_id.is_(None)) | dead,
                 )
             )
         ).scalars()
@@ -122,19 +135,23 @@ class SqlAlchemyRevisionRepository:
     async def append_events(
         self, comment_id: uuid.UUID, events: Sequence[RevisionEvent]
     ) -> None:
-        for event in events:
-            self._session.add(
-                RevisionEventRecord(
-                    comment_id=comment_id,
-                    seq=event.seq,
-                    ts=event.ts,
-                    level=event.level,
-                    stage=event.stage,
-                    message=event.message,
-                    payload=event.payload,
-                )
-            )
-        await self._session.flush()
+        if not events:
+            return
+        await self._session.execute(
+            insert(RevisionEventRecord),
+            [
+                {
+                    "comment_id": comment_id,
+                    "seq": event.seq,
+                    "ts": event.ts,
+                    "level": event.level,
+                    "stage": event.stage,
+                    "message": event.message,
+                    "payload": event.payload,
+                }
+                for event in events
+            ],
+        )
 
     async def list_events(
         self, comment_id: uuid.UUID, after_seq: int, *, limit: int

@@ -318,3 +318,30 @@ async def test_generate_mode_import_creates_cards_for_new_nodes(
         assert len(nodes) == 1 and nodes[0].review_summary["issueCount"] == 1
         rows = (await session.execute(select(NodeCommentRecord))).scalars().all()
         assert len(rows) == 1 and rows[0].node_id == nodes[0].id
+
+
+async def test_the_worker_service_imports_review_cards_with_its_run_id(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    from tests.api.test_generation_service import _make_run, _make_service, _settings
+    from api.infrastructure.storage.memory import InMemoryFileStorage
+
+    session, env = await _env(session_factory, tmp_path)
+    async with session:
+        _write(env.work, _review(_issue()))
+        run = _make_run(env.project.id, env.work)
+        service = _make_service(
+            session, InMemoryFileStorage(), _settings(), comment_repository=env.comments
+        )
+        await service._import_graph(run, env.project)
+        (row,) = await env.rows()
+        assert row.payload["runId"] == str(run.id)
+        # a regenerate of the node goes through import_single_node
+        await service._import_target_node(replace_run(run, env.node.id), env.project)
+        assert len(await env.rows()) == 1
+
+
+def replace_run(run, node_id):
+    from dataclasses import replace
+
+    return replace(run, target_node_id=node_id)

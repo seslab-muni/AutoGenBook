@@ -10,9 +10,10 @@ from api.application.auth import AuthService
 from api.application.comments import CommentService
 from api.application.files import FileService
 from api.application.outline import OutlineService
+from api.application.revisions import RevisionRunner, RevisionService
 from api.application.runs import RunService
 from api.application.system import SystemService
-from api.core.db import get_session
+from api.core.db import get_session, get_sessionmaker
 from api.core.errors import Forbidden, Unauthorized
 from api.core.settings import Settings, get_settings
 from api.domain.models import User
@@ -21,6 +22,7 @@ from api.infrastructure.db.comment_repository import SqlAlchemyCommentRepository
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
+from api.infrastructure.db.revision_repository import SqlAlchemyRevisionRepository
 from api.infrastructure.db.run_artifact_repository import SqlAlchemyRunArtifactRepository
 from api.infrastructure.db.run_repository import (
     SqlAlchemyRunEventRepository,
@@ -137,4 +139,30 @@ def get_run_service(
         outline_repository=SqlAlchemyOutlineRepository(session),
         settings=settings,
         user_repository=SqlAlchemyUserRepository(session),
+    )
+
+
+@lru_cache
+def get_revision_runner() -> RevisionRunner:
+    """The process-wide revision job runner (issue #182): started and closed in
+    the app lifespan; tests override this dependency."""
+    return RevisionRunner(get_sessionmaker(), get_settings())
+
+
+def get_revision_service(
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    runner: RevisionRunner = Depends(get_revision_runner),
+    run_service: RunService = Depends(get_run_service),
+) -> RevisionService:
+    return RevisionService(
+        comment_repository=SqlAlchemyCommentRepository(session),
+        outline_repository=SqlAlchemyOutlineRepository(session),
+        project_repository=SqlAlchemyProjectRepository(session),
+        run_repository=SqlAlchemyRunRepository(session),
+        user_repository=SqlAlchemyUserRepository(session),
+        revision_repository=SqlAlchemyRevisionRepository(session),
+        run_service=run_service,
+        runner=runner,
+        settings=settings,
     )

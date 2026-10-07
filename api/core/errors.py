@@ -92,6 +92,11 @@ class ValidationFailed(ApiError):
     title = "Validation Failed"
 
 
+class TooManyRequests(ApiError):
+    status_code = 429
+    title = "Too Many Requests"
+
+
 class StorageError(ApiError):
     """A dependency the API relies on (DB, object storage) is unreachable."""
 
