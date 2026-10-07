@@ -88,6 +88,15 @@ e2e/            # Playwright e2e/a11y suite — see "End-to-end tests" below, no
 scripts/        # standalone Node scripts (currently just check-bundle-budget.mjs), not part of src/
 ```
 
+The editor pane (`src/features/editor`) puts a section's controls in its header
+and status bar (issue #182): the content-lock button, a Write/Source switcher
+(`stores/editor-store.ts`), a Chapter options popover for the section's
+generation brief and source scope (`chapter-options-popover.tsx`, which replaced
+the old outline-row Properties sheet), a Copilot button (disabled until
+`ManuscriptSheet` gets `onOpenCopilot`), and a status bar with character/word
+counts, an `N sources` drawer and the Source view's caret position. See
+`docs/WEB_UI.md` for the behaviour.
+
 Routes stay thin: a route module owns params/search-param parsing, loader
 wiring, and rendering a feature's top-level component — the actual UI and data
 logic live under `src/features/<name>`.
@@ -97,8 +106,9 @@ Cross-cutting outline rules live next to the feature, not in components:
 `source-scope.ts` (per-node KB scoping, issue #138) and `content-lock.ts`
 (content locks, issue #113 — a locked leaf is kept as-is by full runs and used
 as context for the rest; the helper decides when a node may be locked, and the
-outline row, properties sheet, Copilot panel and start-run dialog all read the
-same wording from it). The row's hover group and context menu toggle the lock,
+outline row, editor header, Copilot panel and start-run dialog all read the
+same wording from it). The row's hover group and context menu toggle the lock
+(as does the editor header's lock button),
 the pane's toolbar offers "Unlock all" (with a confirm) once anything is locked,
 and the start-run dialog shows an "N of M sections are locked" banner with an
 "Unlock all and regenerate everything" shortcut.
