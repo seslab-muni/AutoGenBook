@@ -2,6 +2,7 @@ import { useId, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { problemMessage } from './errors';
 
 export const MAX_COMMENT_LENGTH = 20000;
 
@@ -12,15 +13,18 @@ interface CommentComposerProps {
   submitLabel?: string;
   initialValue?: string;
   autoFocus?: boolean;
-  /** Disables the buttons while the request is in flight. */
-  busy?: boolean;
-  onSubmit: (text: string) => void;
+  /**
+   * Sends the text. The composer stays open, keeping the text, while this runs and again if it
+   * rejects (the server's message is shown); the caller closes it by unmounting it on success.
+   */
+  onSubmit: (text: string) => Promise<unknown>;
   onCancel: () => void;
 }
 
 /**
  * Markdown text box with Submit/Cancel. `Ctrl`/`Cmd`+`Enter` submits, `Escape` cancels (and stops
- * there, so it does not also close an enclosing overlay). `@copilot` is plain text for now.
+ * there, so it does not also close an enclosing overlay). `@copilot` is plain text for now. A second
+ * submit while one is in flight is ignored, and a failed one never loses what was typed.
  */
 export function CommentComposer({
   label,
@@ -28,44 +32,62 @@ export function CommentComposer({
   submitLabel = 'Comment',
   initialValue = '',
   autoFocus = true,
-  busy = false,
   onSubmit,
   onCancel,
 }: CommentComposerProps) {
   const [value, setValue] = useState(initialValue);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
   const hintId = useId();
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const errorId = useId();
   const blank = value.trim().length === 0;
 
-  function submit() {
-    if (!blank && !busy) onSubmit(value.trim());
+  async function submit() {
+    if (blank || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(value.trim());
+    } catch (failure) {
+      setError(problemMessage(failure));
+      inFlight.current = false;
+      setBusy(false);
+    }
+    // On success the caller unmounts this composer; there is nothing left to reset.
   }
 
   return (
     <div className="flex flex-col gap-2">
       <Textarea
-        ref={ref}
         // The composer opens on a deliberate user action (Comment / Reply / Edit), so moving focus to it is the point.
         autoFocus={autoFocus}
         aria-label={label}
-        aria-describedby={hintId}
+        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
+        aria-invalid={error ? true : undefined}
         placeholder={placeholder}
         maxLength={MAX_COMMENT_LENGTH}
         value={value}
-        disabled={busy}
+        readOnly={busy}
         className="min-h-16 bg-background text-sm"
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
-            submit();
+            void submit();
           } else if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
-            onCancel();
+            if (!busy) onCancel();
           }
         }}
       />
+      {error ? (
+        <p id={errorId} role="alert" className="text-xs text-destructive">
+          Not sent: {error}
+        </p>
+      ) : null}
       <div className="flex items-center justify-between gap-2">
         <span id={hintId} className="text-[11px] text-muted-foreground">
           Ctrl+Enter to send · Esc to cancel
@@ -74,8 +96,8 @@ export function CommentComposer({
           <Button type="button" variant="ghost" size="xs" onClick={onCancel} disabled={busy}>
             Cancel
           </Button>
-          <Button type="button" size="xs" onClick={submit} disabled={blank || busy}>
-            {submitLabel}
+          <Button type="button" size="xs" onClick={() => void submit()} disabled={blank || busy}>
+            {busy ? 'Sending…' : submitLabel}
           </Button>
         </div>
       </div>

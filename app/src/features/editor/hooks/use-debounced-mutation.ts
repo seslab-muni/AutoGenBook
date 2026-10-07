@@ -15,6 +15,8 @@ interface UseDebouncedMutationResult<T> {
   schedule: (value: T) => void;
   /** Cancels any pending timer and saves immediately if a value is pending. */
   flush: () => void;
+  /** Drops a value that is waiting to be saved (its timer included); one already in flight finishes. */
+  cancel: () => void;
 }
 
 /**
@@ -96,9 +98,15 @@ export function useDebouncedMutation<T>({
     save();
   }, [clearTimer, save]);
 
+  const cancel = useCallback(() => {
+    clearTimer();
+    pendingRef.current = null;
+    setStatus((current) => (current === 'dirty' ? 'saved' : current));
+  }, [clearTimer]);
+
   // Cancel any in-flight timer on unmount — a caller that wants to persist
   // last-second edits should call `flush()` itself before unmounting.
   useEffect(() => clearTimer, [clearTimer]);
 
-  return { status, schedule, flush };
+  return { status, schedule, flush, cancel };
 }

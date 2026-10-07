@@ -115,4 +115,45 @@ describe('rehypeAnchorSource', () => {
     expect(container.querySelector('[data-src-start]')).toBeNull();
     expect(container.querySelector('mark')).toBeNull();
   });
+
+  it('highlights text around a citation in a paragraph with escapes', () => {
+    const md =
+      'Cost is 5 \\* 3, see [@castro1999] and then the guarantee holds for snake\\_case names.';
+    const container = renderMarked(md, [markFor(md, 'e', 'then the guarantee holds')]);
+    expect(marked(container)).toEqual(['e: then the guarantee holds']);
+  });
+
+  it('highlights and maps selection in a multi-line block quote with a citation', () => {
+    const md =
+      '> First line of the quote [@key1] goes on\n> and the second line ends here.\n\nAfter.';
+    const container = renderMarked(md, [markFor(md, 'q', 'the second line ends')]);
+    expect(marked(container).join('|')).toContain('the second line ends');
+  });
+
+  it('tags a citation chip with its source offsets and highlights a comment anchored inside it', () => {
+    const md = 'As shown in [@castro1999] the protocol is safe.';
+    const container = renderMarked(md, [markFor(md, 'c', '@castro1999')]);
+    const chip = container.querySelector('[data-testid="citation-chip-castro1999"]')!;
+    const tagged = chip.closest('[data-src-start]')!;
+    expect(tagged.getAttribute('data-src-start')).toBe(String(md.indexOf('[@')));
+    expect(tagged.getAttribute('data-anchor-ids')).toBe('c');
+  });
+
+  it('decodes entities while aligning', () => {
+    const md = 'Use a &lt;b&gt; tag and then say the final words here.';
+    const container = renderMarked(md, [markFor(md, 'x', 'say the final words')]);
+    expect(marked(container)).toEqual(['x: say the final words']);
+  });
+
+  it('gives fenced code text a position, so it is highlightable', () => {
+    const md = 'Intro.\n\n```python\ndef quorum_size(n):\n    return n // 2 + 1\n```\n\nDone.';
+    const container = renderMarked(md, [markFor(md, 'k', 'return n // 2')]);
+    expect(marked(container)).toEqual(['k: return n // 2']);
+  });
+
+  it('gives inline code a position', () => {
+    const md = 'Call `quorum_size(n)` to get the threshold used below.';
+    const container = renderMarked(md, [markFor(md, 'k', 'size(n)')]);
+    expect(marked(container)).toEqual(['k: size(n)']);
+  });
 });

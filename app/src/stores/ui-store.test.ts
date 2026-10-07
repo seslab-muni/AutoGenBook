@@ -30,16 +30,16 @@ describe('useUiStore', () => {
     expect(useUiStore.getState().copilotOpen).toBe(false);
   });
 
-  it('shows the margin by default and reveals it from the legacy drawer or a closed pane', () => {
+  it('shows the margin by default, and the narrow overlay has its own unpersisted state', () => {
     expect(useUiStore.getState().rightPane).toBe('margin');
-    useUiStore.getState().setRightPane('copilot');
-    useUiStore.setState({ copilotOpen: false });
-    useUiStore.getState().revealMargin();
-    expect(useUiStore.getState()).toMatchObject({
-      rightPane: 'margin',
-      copilotOpen: true,
-      rightOverlayOpen: true,
-    });
+    useUiStore.getState().setRightOverlayOpen(true);
+    expect(useUiStore.getState().rightOverlayOpen).toBe(true);
+    const persisted = JSON.parse(window.localStorage.getItem('autogenbook-ui') ?? '{}') as {
+      state: Record<string, unknown>;
+    };
+    expect(persisted.state).not.toHaveProperty('rightOverlayOpen');
+    // Opening the overlay never touches the wide-screen preference.
+    expect(useUiStore.getState().copilotOpen).toBe(true);
   });
 
   it('opens and closes exactly one modal at a time', () => {

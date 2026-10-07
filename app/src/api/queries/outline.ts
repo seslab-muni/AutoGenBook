@@ -291,6 +291,13 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
       });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
+      // The server re-anchors the section's comments on every content save (issue #182): pick up
+      // their new positions, and the open/orphaned status that goes with them.
+      if (body.contentMarkdown !== undefined) {
+        void queryClient.invalidateQueries({
+          queryKey: projectKeys.nodeComments(projectId, nodeId),
+        });
+      }
     },
   });
 }

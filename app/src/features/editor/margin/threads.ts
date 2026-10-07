@@ -15,6 +15,8 @@ export interface MarginThread {
   range: TextRange | null;
   /** The anchor has no place in the text any more (never true for a section-level card). */
   orphaned: boolean;
+  /** No position yet but a search for one is still due (e.g. just after an edit): not known to be orphaned. */
+  pending: boolean;
   /** Section-level card: no anchor at all. */
   sectionLevel: boolean;
   /** The quoted text: the live text of the range when there is one, else what the anchor stored. */

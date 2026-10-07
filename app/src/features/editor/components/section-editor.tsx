@@ -3,10 +3,15 @@ import { StreamLanguage } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
 import type { EditorState, Text } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
-import CodeMirror from '@uiw/react-codemirror';
-import { useEffect, useMemo, useRef } from 'react';
+import CodeMirror, { ExternalChange } from '@uiw/react-codemirror';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { anchorHighlightField, anchorIdsAt } from '@/features/editor/lib/cm-anchor-highlights';
+import {
+  anchorHighlightField,
+  anchorIdsAt,
+  anchorRangesOf,
+} from '@/features/editor/lib/cm-anchor-highlights';
+import type { TextRange } from '@/features/editor/lib/anchors';
 
 import type { EditorSelection } from '@/stores/editor-selection-store';
 
@@ -29,6 +34,12 @@ interface SectionEditorProps {
   onCreateEditor?: (view: EditorView) => void;
   /** Fired with the anchor ids under a click on a highlighted range (innermost first). Identity may change freely. */
   onHighlightClick?: (ids: string[]) => void;
+  /**
+   * After every edit: where each tracked highlight sits now (`null` = an edit swallowed it) and
+   * whether the edit was the controlled `value` prop being applied from outside (a replace-all that
+   * says nothing about where anchors went). Identity may change freely.
+   */
+  onHighlightsMapped?: (ranges: Map<string, TextRange | null>, external: boolean) => void;
   className?: string;
 }
 
@@ -49,6 +60,7 @@ export function SectionEditor({
   onSelectionChange,
   onCreateEditor,
   onHighlightClick,
+  onHighlightsMapped,
   className,
 }: SectionEditorProps) {
   // Read through a ref so a new callback never reconfigures the editor.
@@ -56,15 +68,30 @@ export function SectionEditor({
   useEffect(() => {
     highlightClickRef.current = onHighlightClick;
   }, [onHighlightClick]);
+  const mappedRef = useRef(onHighlightsMapped);
+  useEffect(() => {
+    mappedRef.current = onHighlightsMapped;
+  }, [onHighlightsMapped]);
+  const emitMapped = useCallback(
+    (ranges: Map<string, TextRange | null>, external: boolean) =>
+      mappedRef.current?.(ranges, external),
+    [],
+  );
 
   const extensions = useMemo(
     () => [
       language === 'latex' ? StreamLanguage.define(stex) : markdownLang(),
       EditorView.lineWrapping,
       anchorHighlightField,
+      // The listener reaches the latest callbacks through refs when an edit happens, never while rendering.
+      // eslint-disable-next-line react-hooks/refs
       EditorView.updateListener.of((update) => {
         if (update.selectionSet || update.docChanged)
           onSelectionChange?.(selectionOf(update.state));
+        if (update.docChanged) {
+          const external = update.transactions.some((tr) => tr.annotation(ExternalChange) === true);
+          emitMapped(anchorRangesOf(update.state), external);
+        }
       }),
       keymap.of([
         {
@@ -76,7 +103,7 @@ export function SectionEditor({
         },
       ]),
     ],
-    [language, onFlush, onSelectionChange],
+    [language, onFlush, onSelectionChange, emitMapped],
   );
 
   const basicSetup = useMemo(

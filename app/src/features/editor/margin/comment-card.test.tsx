@@ -16,6 +16,8 @@ const CTX: MarginCardContext = {
   currentUserId: MOCK_USER.id,
   copilotActions: false,
   restoreEditorFocus: vi.fn(),
+  applyServerContent: vi.fn(),
+  hasUnsavedEdits: () => false,
 };
 
 /** Seeds the mock API with a thread (so the real mutations have rows to act on) and renders its card. */
@@ -64,14 +66,15 @@ beforeEach(() => {
 });
 
 describe('comment card', () => {
-  it('is a named, focusable region showing the quote, the message and when it was written', () => {
+  it('is a named, focusable region showing the quote, the message and when it was written', async () => {
     renderCard();
+    // The Markdown renderer is loaded lazily; the text shows meanwhile.
+    expect((await screen.findByText('this')).tagName).toBe('STRONG');
     const card = screen.getByRole('region', {
       name: 'Comment by Ada Researcher on “the quoted words”',
     });
     expect(card).toHaveAttribute('tabindex', '0');
     expect(within(card).getByText('the quoted words')).toBeInTheDocument();
-    expect(within(card).getByText('this').tagName).toBe('STRONG');
     expect(within(card).getByText('5 min ago')).toBeInTheDocument();
     expect(within(card).queryByText(/edited/)).not.toBeInTheDocument();
   });

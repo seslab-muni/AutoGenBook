@@ -70,6 +70,15 @@ export function rehypeMathPositions() {
   };
 }
 
+type Position = NonNullable<Element['position']>;
+
+/** An element's own position, or (for a `text` node dressed up as a span) its text child's. */
+function positionOf(element: Element): Position | undefined {
+  if (element.position) return element.position;
+  const first = element.children[0];
+  return first?.type === 'text' ? first.position : undefined;
+}
+
 function annotate(
   properties: NonNullable<Element['properties']>,
   start: number,
@@ -82,6 +91,45 @@ function annotate(
     properties['dataAnchorIds'] = covering.map((mark) => mark.id).join(' ');
     properties['dataAnchorKind'] = covering[0]!.kind;
   }
+}
+
+/**
+ * hast gives a code element's text child no position (only the `pre`/`code` element has one), so
+ * a fenced or indented block could not be selected or highlighted. The text sits inside the node's
+ * source after the opening fence line (and before the closing fence), or is the whole slice for an
+ * indented block; inline code sits between its backtick runs.
+ */
+function positionCodeText(element: Element, source: string): void {
+  const pre = element.tagName === 'pre';
+  const code = pre
+    ? element.children.find((child): child is Element => child.type === 'element')
+    : element;
+  const text = code?.children[0];
+  const position = element.position;
+  if (!code || code.tagName !== 'code' || text?.type !== 'text' || text.position || !position)
+    return;
+  const s = position.start.offset;
+  const e = position.end.offset;
+  if (s == null || e == null) return;
+  const slice = source.slice(s, e);
+  let from = 0;
+  let to = slice.length;
+  if (pre) {
+    if (/^\s*(`{3,}|~{3,})/.test(slice)) {
+      from = slice.indexOf('\n') + 1;
+      const close = slice.lastIndexOf('\n');
+      to = close >= from ? close : slice.length;
+      if (from <= 0) return;
+    }
+  } else {
+    const open = /^`+/.exec(slice)?.[0].length ?? 0;
+    from = open;
+    to = slice.length - open;
+  }
+  text.position = {
+    start: { line: position.start.line, column: position.start.column, offset: s + from },
+    end: { line: position.end.line, column: position.end.column, offset: s + to },
+  };
 }
 
 /**
@@ -111,7 +159,11 @@ export function rehypeAnchorSource(options: AnchorSourceOptions) {
     visit(tree, (node, index, parent) => {
       if (node.type === 'element') {
         const element = node as Element;
-        const position = element.position;
+        const inPre = parent?.type === 'element' && (parent as Element).tagName === 'pre';
+        if (element.tagName === 'pre' || (element.tagName === 'code' && !inPre)) {
+          positionCodeText(element, normalized.text);
+        }
+        const position = positionOf(element);
         if (isOpaque(element)) {
           if (position?.start.offset != null && position.end.offset != null) {
             const s = position.start.offset;
@@ -125,6 +177,7 @@ export function rehypeAnchorSource(options: AnchorSourceOptions) {
                 normalized.toOriginal(e, 'end'),
                 covering,
               );
+              element.properties['dataSrcOpaque'] = true;
               if (covering.length > 0) {
                 element.properties['className'] = [
                   ...classNames(element),

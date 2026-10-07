@@ -6,7 +6,7 @@ import { CommentCardBody } from './comment-card-body';
 import { ReadOnlyCardBody } from './read-only-card-body';
 import type { MarginThread } from './threads';
 
-/** What every card body can use besides its thread. */
+/** What every card part can use besides its thread. */
 export interface MarginCardContext {
   projectId: string;
   nodeId: string;
@@ -16,27 +16,50 @@ export interface MarginCardContext {
   copilotActions: boolean;
   /** Puts keyboard focus back in the text after a composer closes. */
   restoreEditorFocus: () => void;
+  /**
+   * Replaces the open editor's text with `markdown`, which is what the server now holds (for
+   * instance after accepting a suggestion that rewrote the section). Cancels a pending autosave
+   * so the old draft cannot overwrite it, and re-resolves every anchor against the new text.
+   */
+  applyServerContent: (markdown: string) => void;
+  /** True while the editor holds edits the server has not seen (an Accept should warn instead of clobbering them). */
+  hasUnsavedEdits: () => boolean;
 }
 
-export interface MarginCardBodyProps {
+export interface MarginCardPartProps {
   thread: MarginThread;
   ctx: MarginCardContext;
+  /** The anchor has no rendered highlight in the current view: its card sits by the nearest block. */
+  approximate?: boolean;
 }
+/** Kept for the card bodies written before the slots existed. */
+export type MarginCardBodyProps = MarginCardPartProps;
 
 export interface MarginCardKind {
   /** Heading of the card ("Comment"). */
   label: string;
   icon: LucideIcon;
-  /** Renders everything under the card's header and quote. */
-  Body: ComponentType<MarginCardBodyProps>;
+  /**
+   * Header's right-hand side. Default: the Orphaned / Whole section / Resolved badges. A suggestion
+   * card puts its running / pending / failed state here, a review card its severity and type pills.
+   */
+  Status?: ComponentType<MarginCardPartProps>;
+  /**
+   * What the card says it is about. Default: the quoted text. A suggestion card replaces it with
+   * its diff; return `null` for nothing.
+   */
+  Quote?: ComponentType<MarginCardPartProps>;
+  /** Everything under the header and the quote. */
+  Body: ComponentType<MarginCardPartProps>;
 }
 
 /**
- * One entry per `kind` of margin row. `MarginCard` is the shared frame (position, focus,
- * header, quote); the body is what differs. Phase 3 replaces `review` with the reviewer card
- * (severity pills, required fix, Dismiss), phase 4 replaces `suggestion` with the diff card
- * (Accept / Reject / Try again): swap the `Body` here, nothing else changes. Until then those
- * kinds render read-only rather than disappearing.
+ * One entry per `kind` of margin row. `MarginCard` is the shared frame (position, focus, header,
+ * quote); the `Status`, `Quote` and `Body` slots are what differ. Phase 3 replaces `review`
+ * (severity/type pills in `Status`, required fix in `Body`, Fix with Copilot / Dismiss), phase 4
+ * replaces `suggestion` (progress states in `Status`, the diff in `Quote`, Accept / Reject /
+ * Try again in `Body`): swap the entry here, nothing else changes. Until then those kinds render
+ * read-only rather than disappearing.
  */
 export const MARGIN_CARD_KINDS: Record<CommentKind, MarginCardKind> = {
   comment: { label: 'Comment', icon: MessageSquare, Body: CommentCardBody },

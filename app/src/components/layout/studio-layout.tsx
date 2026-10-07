@@ -1,10 +1,10 @@
 import { PanelLeftOpen, PanelRightOpen } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { usePaneResize } from '@/components/layout/use-pane-resize';
-import { useRightPane } from '@/components/layout/use-right-pane';
+import { useRightColumn } from '@/components/layout/use-right-pane';
 import { cn } from '@/lib/utils';
 import {
   DEFAULT_OUTLINE_WIDTH,
@@ -34,12 +34,49 @@ interface StudioLayoutProps {
  * in the centre pane's toolbar. Only pane bodies scroll — this container
  * never does.
  */
+/** Width of the right column / side sheet. */
+const PANEL_WIDTH = 376;
+
 export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLayoutProps) {
   const outlineOpen = useOutlineOpen();
-  const { wide, open: copilotOpen, toggle: toggleRight, close: closeRight } = useRightPane();
+  const { wide, open: copilotOpen, toggle: toggleRight, close: closeRight } = useRightColumn();
   const outlineWidth = useOutlineWidth();
   const toggleOutline = useUiStore((state) => state.toggleOutline);
   const setOutlineWidth = useUiStore((state) => state.setOutlineWidth);
+  const overlay = !wide && copilotOpen;
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Below 1280px the right column is a non-modal side sheet: it closes on a press outside it and on
+  // Escape from anywhere (the editor included), and the editor pane makes room for it, below.
+  useEffect(() => {
+    if (!overlay) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || panelRef.current?.contains(target)) return;
+      // Dialogs, menus and toasts the sheet's own cards open live in portals outside it.
+      if (
+        target.closest(
+          '[role="alertdialog"], [role="dialog"], [role="menu"], [data-sonner-toaster]',
+        )
+      ) {
+        return;
+      }
+      closeRight();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      // The editor's own Escape handler marks the event as handled, so that cannot be the test; a
+      // composer in the sheet stops the event itself, and an open dialog/menu owns this Escape.
+      if (event.key !== 'Escape') return;
+      if (document.querySelector('[role="alertdialog"], [role="dialog"], [role="menu"]')) return;
+      closeRight();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [overlay, closeRight]);
 
   const { handleProps } = usePaneResize({
     width: outlineWidth,
@@ -77,7 +114,11 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
         </div>
       ) : null}
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div
+        className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background"
+        // Leave the side sheet's width free so the text being commented on is not covered by it.
+        style={overlay ? { paddingRight: PANEL_WIDTH } : undefined}
+      >
         <PaneToolbar>
           <div className="flex items-center gap-1">
             {!outlineOpen ? (
@@ -96,7 +137,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Show copilot pane"
+                aria-label="Show right pane"
                 onClick={toggleRight}
               >
                 <PanelRightOpen />
@@ -109,13 +150,11 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
 
       {copilotOpen ? (
         <div
+          ref={panelRef}
           className={cn(
-            'flex w-[376px] shrink-0 flex-col overflow-hidden border-l bg-background',
-            !wide && 'absolute inset-y-0 right-0 z-20 max-w-[92%] shadow-2xl',
+            'flex shrink-0 flex-col overflow-hidden border-l bg-background',
+            wide ? 'w-[376px]' : 'absolute inset-y-0 right-0 z-20 w-[376px] shadow-2xl',
           )}
-          onKeyDown={(event) => {
-            if (!wide && event.key === 'Escape' && !event.defaultPrevented) closeRight();
-          }}
         >
           {copilotPane}
         </div>

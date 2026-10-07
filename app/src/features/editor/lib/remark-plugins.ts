@@ -2,6 +2,8 @@ import { toString as mdastToString } from 'mdast-util-to-string';
 import type { Blockquote, PhrasingContent, Root, Text } from 'mdast';
 import { visit } from 'unist-util-visit';
 
+import { alignValueToSource } from './source-map';
+
 /**
  * Remark plugin: turns pandoc-style `[@key]` / `[@key1; @key2]` citation
  * markers and legacy `\cite{key}` / `\cite{key1,key2}` tokens (the format the
@@ -25,7 +27,8 @@ function splitKeys(raw: string): string[] {
 }
 
 export function remarkCitations() {
-  return (tree: Root) => {
+  return (tree: Root, file: { value?: unknown }) => {
+    const source = typeof file.value === 'string' ? file.value : '';
     visit(tree, 'text', (node: Text, index, parent) => {
       if (!parent || index === undefined) return;
       const value = node.value;
@@ -33,21 +36,25 @@ export function remarkCitations() {
       if (!CITE_PATTERN.test(value)) return;
       CITE_PATTERN.lastIndex = 0;
 
-      // Pieces keep source positions only when the text is its own source (no escapes or
-      // entities); otherwise they stay unpositioned and are skipped by highlights.
+      // Source offsets of each piece, by aligning the text with its source slice (escapes,
+      // entities and block-quote prefixes make them differ); pieces stay unpositioned only when
+      // the alignment fails, and are then skipped by highlights and selection mapping.
       const origin = node.position?.start.offset;
-      const oneToOne =
-        origin != null &&
-        node.position?.end.offset != null &&
-        node.position.end.offset - origin === value.length;
+      const endOffset = node.position?.end.offset;
+      const map =
+        origin != null && endOffset != null && source
+          ? alignValueToSource(value, source.slice(origin, endOffset))
+          : null;
       const placed = <T extends PhrasingContent>(piece: T, from: number, to: number): T => {
-        if (!oneToOne || origin == null || !node.position) return piece;
+        if (!map || origin == null || !node.position || to <= from) return piece;
         const { start, end } = node.position;
+        const startOffset = origin + map[from]!;
+        const endOfPiece = origin + map[to - 1]! + 1;
         return {
           ...piece,
           position: {
-            start: { line: start.line, column: start.column + from, offset: origin + from },
-            end: { line: end.line, column: start.column + to, offset: origin + to },
+            start: { line: start.line, column: start.column, offset: startOffset },
+            end: { line: end.line, column: end.column, offset: endOfPiece },
           },
         };
       };

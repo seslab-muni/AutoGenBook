@@ -1,6 +1,6 @@
 import 'katex/dist/katex.min.css';
 
-import { useMemo } from 'react';
+import { createContext, memo, useContext, useEffect, useMemo, useRef } from 'react';
 import Markdown, { type Components, type ExtraProps } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import rehypeSanitize from 'rehype-sanitize';
@@ -18,6 +18,11 @@ import {
   type AnchorMark,
 } from '@/features/editor/lib/rehype-anchor-source';
 import { remarkCallouts, remarkCitations } from '@/features/editor/lib/remark-plugins';
+import {
+  applyWriteHighlights,
+  highlightIdsAt,
+  supportsCustomHighlights,
+} from '@/features/editor/lib/write-highlights';
 import { mathAwareSchema } from '@/features/editor/lib/sanitize-schema';
 import { cn } from '@/lib/utils';
 
@@ -50,23 +55,31 @@ function withoutNode<P extends ExtraProps>(props: P): Omit<P, 'node'> {
 }
 
 /**
- * `remarkCitations` annotates `[@key]`/`\cite{key}` spans with a `citekey`
- * hast property that isn't part of the DOM `span` type, hence the extra
- * field here alongside the render-time data (`citationsById`/`onCitationClick`)
- * that `MarkdownView` injects via `buildMarkdownComponents`.
+ * What the citation chips need, read through context so the `span` override is one module-level
+ * component: a new `citations` array or click handler re-renders the chips but never remounts the
+ * text around them (which would drop the reader's selection).
+ */
+const MarkdownContext = createContext<{
+  citationsById: Map<string, RagCitation>;
+  onCitationClick: ((citeKey: string) => void) | undefined;
+}>({ citationsById: new Map(), onCitationClick: undefined });
+
+/**
+ * `remarkCitations` annotates `[@key]`/`\cite{key}` spans with a `citekey` hast property that
+ * isn't part of the DOM `span` type, hence the extra field here.
  */
 type CitationSpanProps = React.ComponentProps<'span'> &
   ExtraProps & {
     'data-src-start'?: number;
     'data-src-end'?: number;
+    'data-src-opaque'?: boolean;
     'data-anchor-ids'?: string;
     'data-anchor-kind'?: string;
     citekey?: string;
-    citationsById: Map<string, RagCitation>;
-    onCitationClick?: ((citeKey: string) => void) | undefined;
   };
 
-function CitationSpan({ citationsById, onCitationClick, ...spanProps }: CitationSpanProps) {
+function CitationSpan(spanProps: CitationSpanProps) {
+  const { citationsById, onCitationClick } = useContext(MarkdownContext);
   const { citekey, children, ...rest } = withoutNode(spanProps);
   if (typeof citekey !== 'string') return <span {...rest}>{children}</span>;
   const chip = (
@@ -83,6 +96,7 @@ function CitationSpan({ citationsById, onCitationClick, ...spanProps }: Citation
     <span
       data-src-start={rest['data-src-start']}
       data-src-end={rest['data-src-end']}
+      data-src-opaque={rest['data-src-opaque']}
       data-anchor-ids={rest['data-anchor-ids']}
       data-anchor-kind={rest['data-anchor-kind']}
       className={cn(rest.className)}
@@ -216,37 +230,25 @@ const Img: NonNullable<Components['img']> = (props) => {
   );
 };
 
-/**
- * Builds the `react-markdown` component override map. Kept at module scope
- * (rather than inline in `MarkdownView`) so the overrides are stable
- * component identities across renders; only `span` needs render-time data
- * (`citationsById`/`onCitationClick`), injected here via a thin wrapper.
- */
-function buildMarkdownComponents(
-  citationsById: Map<string, RagCitation>,
-  onCitationClick: ((citeKey: string) => void) | undefined,
-): Components {
-  return {
-    span: (props) => (
-      <CitationSpan {...props} citationsById={citationsById} onCitationClick={onCitationClick} />
-    ),
-    blockquote: Blockquote,
-    h1: H1,
-    h2: H2,
-    h3: H3,
-    p: P,
-    ul: Ul,
-    ol: Ol,
-    a: A,
-    hr: Hr,
-    table: Table,
-    th: Th,
-    td: Td,
-    pre: Pre,
-    code: Code,
-    img: Img,
-  };
-}
+/** Module-level, so the overrides keep one identity for the life of the page. */
+const MARKDOWN_COMPONENTS: Components = {
+  span: CitationSpan,
+  blockquote: Blockquote,
+  h1: H1,
+  h2: H2,
+  h3: H3,
+  p: P,
+  ul: Ul,
+  ol: Ol,
+  a: A,
+  hr: Hr,
+  table: Table,
+  th: Th,
+  td: Td,
+  pre: Pre,
+  code: Code,
+  img: Img,
+};
 
 interface MarkdownViewProps {
   /** Pandoc-style Markdown, as written by the CLI's Markdown-first path (`book_builder.py`). */
@@ -257,6 +259,8 @@ interface MarkdownViewProps {
   onCitationClick?: (citeKey: string) => void;
   /** Comment/suggestion/review ranges to highlight, in UTF-16 offsets over `markdown` (issue #182). */
   anchorMarks?: readonly AnchorMark[];
+  /** The highlight to draw as focused. Changing it (or `anchorMarks`) never re-renders the Markdown. */
+  focusedAnchorId?: string | null;
   /** Tag rendered text with its Markdown offsets so a DOM selection can be mapped back (`sourceRangeFromSelection`). */
   sourceMap?: boolean;
   /** Fired with the anchor ids under a click on a highlight (innermost first). */
@@ -264,18 +268,27 @@ interface MarkdownViewProps {
   className?: string;
 }
 
+const NO_MARKS: readonly AnchorMark[] = [];
+
 /**
  * Renders CLI-generated section Markdown: GFM (tables, strikethrough, task
  * lists) + `$…$`/`$$…$$` math (KaTeX) + theorem/definition/lemma/proof/example
  * callouts + clickable citation chips, sanitized against a math-aware schema
  * (`mathAwareSchema`) so no raw HTML the LLM emits can inject a script or
  * event handler.
+ *
+ * Memoised, and the parsed element is memoised on the Markdown alone: highlight, focus and
+ * citation changes re-render at most the chips and a layout effect, never the remark/rehype/KaTeX
+ * pipeline or the DOM the reader has selected text in. Highlights are painted with the CSS
+ * Custom Highlight API where it exists (`write-highlights.ts`), else wrapped in `<mark>`s by
+ * rehype (which does re-run the pipeline when they change).
  */
-export function MarkdownView({
+export const MarkdownView = memo(function MarkdownView({
   markdown,
   citations,
   onCitationClick,
-  anchorMarks,
+  anchorMarks = NO_MARKS,
+  focusedAnchorId = null,
   sourceMap = false,
   onAnchorClick,
   className,
@@ -285,43 +298,88 @@ export function MarkdownView({
     for (const citation of citations ?? []) map.set(citation.id, citation);
     return map;
   }, [citations]);
-
-  const components = useMemo<Components>(
-    () => buildMarkdownComponents(citationsById, onCitationClick),
+  const context = useMemo(
+    () => ({ citationsById, onCitationClick }),
     [citationsById, onCitationClick],
   );
 
+  const custom = useMemo(() => supportsCustomHighlights(), []);
+  const rootRef = useRef<HTMLDivElement>(null);
   const normalized = useMemo(() => normalizeDisplayMathMapped(markdown), [markdown]);
+  const wrapMarks = custom ? NO_MARKS : anchorMarks;
   const rehypePlugins = useMemo<RehypePlugins>(
     () =>
-      anchorMarks?.length || sourceMap
+      wrapMarks.length || sourceMap
         ? [
             rehypeMathPositions,
             ...BASE_REHYPE_PLUGINS,
-            [rehypeAnchorSource, { normalized, marks: anchorMarks ?? [], sourceMap }],
+            [rehypeAnchorSource, { normalized, marks: wrapMarks, sourceMap }],
           ]
         : BASE_REHYPE_PLUGINS,
-    [normalized, anchorMarks, sourceMap],
+    [normalized, wrapMarks, sourceMap],
   );
-
-  function handleClick(event: React.MouseEvent<HTMLDivElement>) {
-    if (!onAnchorClick || !(event.target instanceof Element)) return;
-    const hit = event.target.closest('[data-anchor-ids]');
-    const ids = hit?.getAttribute('data-anchor-ids')?.split(' ').filter(Boolean);
-    if (ids?.length) onAnchorClick(ids);
-  }
-
-  return (
-    // The click handler only maps a click on a highlight to its margin card (which is itself
-    // keyboard reachable); the wrapper is not interactive.
-    <div className={cn('text-sm text-foreground', className)} onClick={handleClick}>
+  const body = useMemo(
+    () => (
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={rehypePlugins}
-        components={components}
+        components={MARKDOWN_COMPONENTS}
       >
         {normalized.text}
       </Markdown>
-    </div>
+    ),
+    [rehypePlugins, normalized],
   );
-}
+
+  // Custom Highlight API: paint the ranges (no DOM change).
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!custom || !root) return undefined;
+    return applyWriteHighlights(root, markdown, anchorMarks, focusedAnchorId);
+  }, [custom, markdown, anchorMarks, focusedAnchorId, body]);
+
+  // Fallback: the marks are already in the DOM; focus is a class toggle.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (custom || !root) return;
+    for (const mark of root.querySelectorAll('[data-anchor-ids]')) {
+      const ids = mark.getAttribute('data-anchor-ids')?.split(' ') ?? [];
+      mark.classList.toggle(
+        'anchor-focused',
+        focusedAnchorId !== null && ids.includes(focusedAnchorId),
+      );
+    }
+  }, [custom, focusedAnchorId, anchorMarks, body]);
+
+  function handleClick(event: React.MouseEvent<HTMLDivElement>) {
+    const root = rootRef.current;
+    if (!onAnchorClick || !root) return;
+    let ids: string[] = [];
+    if (custom) {
+      // Highlights are not elements: hit-test the caret a plain click leaves behind.
+      const selection = document.getSelection();
+      if (selection && selection.isCollapsed) {
+        ids = highlightIdsAt(root, selection.anchorNode, selection.anchorOffset, event.target);
+      }
+    } else if (event.target instanceof Element) {
+      const hit = event.target.closest('[data-anchor-ids]');
+      ids = hit?.getAttribute('data-anchor-ids')?.split(' ').filter(Boolean) ?? [];
+    }
+    if (ids.length) onAnchorClick(ids);
+  }
+
+  return (
+    <MarkdownContext.Provider value={context}>
+      {/* The click handler only maps a click on a highlight to its margin card (which is itself
+          keyboard reachable); the wrapper is not interactive. */}
+      <div
+        ref={rootRef}
+        data-markdown-root=""
+        className={cn('text-sm text-foreground', className)}
+        onClick={handleClick}
+      >
+        {body}
+      </div>
+    </MarkdownContext.Provider>
+  );
+});

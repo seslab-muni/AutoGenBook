@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
-import { Copy, Download, ExternalLink, Lock, MoreHorizontal, Sparkles } from 'lucide-react';
+import { Copy, Download, ExternalLink, Info, Lock, MoreHorizontal, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import type { EditorView } from '@codemirror/view';
 
@@ -32,17 +32,21 @@ import { SectionJumpSelect } from '@/features/editor/components/section-jump-sel
 import { useEffectiveSources } from '@/features/editor/hooks/use-effective-sources';
 import { useDebouncedMutation } from '@/features/editor/hooks/use-debounced-mutation';
 import { useSectionComments } from '@/features/editor/hooks/use-section-comments';
-import { useWriteSelection } from '@/features/editor/hooks/use-write-selection';
-import { setAnchorHighlights, setFocusedAnchor } from '@/features/editor/lib/cm-anchor-highlights';
-import { CodePointIndex, makeAnchor } from '@/features/editor/lib/anchors';
-import { trimRange } from '@/features/editor/lib/dom-source-selection';
+import {
+  anchorFocusedOf,
+  anchorHighlightsMatch,
+  setAnchorHighlights,
+  setFocusedAnchor,
+} from '@/features/editor/lib/cm-anchor-highlights';
+import { normalizeEol } from '@/features/editor/lib/eol';
+import type { Anchor } from '@/features/editor/lib/anchors';
 import type { MarginCardContext } from '@/features/editor/margin/card-registry';
 import { COPILOT_ACTIONS_ENABLED } from '@/features/editor/margin/flags';
 import { writeGeometry, sourceGeometry } from '@/features/editor/margin/geometry';
 import { useMarginHost } from '@/features/editor/margin/margin-host';
 import { MarginPanel } from '@/features/editor/margin/margin-panel';
 import { useMarginStore } from '@/features/editor/margin/margin-store';
-import { SelectionToolbar } from '@/features/editor/margin/selection-toolbar';
+import { SelectionLayer } from '@/features/editor/margin/selection-layer';
 import { parseRagCitations } from '@/features/editor/lib/rag-citation';
 import { isUnsavedStatus } from '@/features/editor/lib/save-status';
 import { characterCount, wordCount } from '@/features/editor/lib/word-count';
@@ -50,8 +54,8 @@ import { findSectionArtifact } from '@/features/exports/lib/artifacts';
 import { fileContentUrl } from '@/features/exports/lib/file-url';
 import { isLeaf } from '@/features/outline/model';
 import { useEditorSelectionStore } from '@/stores/editor-selection-store';
+import { useRightColumn } from '@/components/layout/use-right-pane';
 import { useEditorStore, useEditorView } from '@/stores/editor-store';
-import { useUiStore } from '@/stores/ui-store';
 
 const SOURCES_DRAWER_ID = 'editor-sources-drawer';
 
@@ -94,13 +98,20 @@ export function ManuscriptSheet({
   const field = useLatex ? 'contentLatex' : 'contentMarkdown';
   const readOnly = node.status === 'drafting';
 
-  const [draft, setDraft] = useState(node[field]);
+  // Counted over LF text everywhere (CodeMirror normalises line endings, so anchors must too).
+  const serverText = normalizeEol(node[field]);
+  const [draft, setDraft] = useState(serverText);
+  /** Bumped when the draft is replaced from outside (server content): anchors are re-resolved from their quotes. */
+  const [resetKey, setResetKey] = useState(0);
+  /** Another change to this section arrived while there were unsaved edits (shown, never applied silently). */
+  const [incoming, setIncoming] = useState<string | null>(null);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [drawerView, setDrawerView] = useState<SourcesDrawerView>('sources');
   const sourcesButtonRef = useRef<HTMLButtonElement>(null);
   const [optionsFocusSources, setOptionsFocusSources] = useState(false);
   const setSelection = useEditorSelectionStore((state) => state.setSelection);
+  const [composeTick, setComposeTick] = useState(0);
   // The text pane's scroll container (Write) and the CodeMirror view (Source): what the margin
   // measures anchors against.
   const [region, setRegion] = useState<HTMLElement | null>(null);
@@ -120,9 +131,15 @@ export function ManuscriptSheet({
   const sectionArtifact = findSectionArtifact(lastRunArtifacts?.items, node.cliKey);
 
   const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
-  const { status, schedule, flush } = useDebouncedMutation<string>({
-    onSave: (text) =>
-      updateMutation.mutateAsync(useLatex ? { contentLatex: text } : { contentMarkdown: text }),
+  // What this editor has sent (and so what coming back from the server is not "someone else's change").
+  const sentRef = useRef(new Set<string>());
+  const { status, schedule, flush, cancel } = useDebouncedMutation<string>({
+    onSave: (text) => {
+      sentRef.current.add(text);
+      return updateMutation.mutateAsync(
+        useLatex ? { contentLatex: text } : { contentMarkdown: text },
+      );
+    },
   });
 
   // `EditorPane` mounts this component with `key={node.id}`, so a different
@@ -154,7 +171,6 @@ export function ManuscriptSheet({
       setCmView(null);
     };
   }, [view, setSelection]);
-  useWriteSelection(region, draft, view === 'write');
 
   const closeSources = useCallback(() => setSourcesOpen(false), []);
   // A citation chip opens the sources drawer on its Citations list (where the old right-pane tab went).
@@ -170,7 +186,7 @@ export function ManuscriptSheet({
       .catch(() => toast.error('Could not copy to clipboard'));
   }
 
-  const citations = parseRagCitations(node.ragCitations);
+  const citations = useMemo(() => parseRagCitations(node.ragCitations), [node.ragCitations]);
   const effectiveSources = useEffectiveSources(projectId, node.id, flatNodes);
   const isDirty = isUnsavedStatus(status);
   // Non-leaf nodes (chapters/parts with children) never get LLM-generated content — only leaf
@@ -179,16 +195,56 @@ export function ManuscriptSheet({
   // 409 guard covers the API side; this covers the UI so the offer isn't made in the first place).
   const nodeIsLeaf = isLeaf(node.id, flatNodes);
 
+  // ---- server content changed under an open editor (an accepted suggestion, another user) ----------
+  const draftRef = useRef(draft);
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+  /** The text the server last had that this editor agrees with: edits are "unsaved" relative to it. */
+  const baselineRef = useRef(serverText);
+
+  const adoptServerContent = useCallback(
+    (text: string) => {
+      const next = normalizeEol(text);
+      cancel();
+      baselineRef.current = next;
+      sentRef.current.clear();
+      setIncoming(null);
+      setDraft(next);
+      setResetKey((key) => key + 1);
+    },
+    [cancel],
+  );
+
+  useEffect(() => {
+    if (serverText === baselineRef.current) return;
+    const unsaved = draftRef.current !== baselineRef.current;
+    const ours = sentRef.current.has(serverText) || serverText === draftRef.current;
+    if (ours) {
+      // Our own save coming back.
+      baselineRef.current = serverText;
+      return;
+    }
+    if (!unsaved) adoptServerContent(serverText);
+    else setIncoming(serverText);
+  }, [serverText, adoptServerContent]);
+
   // ---- margin: comments anchored to ranges of the text (issue #182, phase 2) ------------------
   const marginHost = useMarginHost();
   const { data: me } = useQuery(auth.me());
-  const section = useSectionComments(projectId, node.id, draft);
+  // The server anchors against `contentMarkdown` only: a LaTeX-only section gets no range comments.
+  const anchorsEnabled = !useLatex;
+  const section = useSectionComments(projectId, node.id, draft, {
+    mode: view === 'source' && cmView ? 'cm' : 'diff',
+    resetKey,
+    anchorsEnabled,
+  });
   const focusedId = useMarginStore((state) => state.focusedId);
   const focusThread = useMarginStore((state) => state.focus);
+  const focusCard = useMarginStore((state) => state.focusCard);
   const openComposer = useMarginStore((state) => state.openComposer);
   const resetMargin = useMarginStore((state) => state.reset);
-  const revealMargin = useUiStore((state) => state.revealMargin);
-  const selection = useEditorSelectionStore((state) => state.selection);
+  const { revealMargin } = useRightColumn();
 
   // Margin state is per open section (the sheet is keyed by node id).
   useEffect(() => {
@@ -201,22 +257,39 @@ export function ManuscriptSheet({
     return region ? writeGeometry(region) : null;
   }, [view, cmView, region]);
 
-  // Source: push the highlights (and which one is focused) into CodeMirror's decoration field.
+  // Source: the decoration field tracks every range through the editor's own change sets. Pushed to
+  // only when the resolved set really differs from what it already holds (never per keystroke), and
+  // never in the middle of an IME composition.
   useEffect(() => {
-    if (view !== 'source' || !cmView) return;
-    cmView.dispatch({
-      effects: [setAnchorHighlights.of(section.highlights), setFocusedAnchor.of(focusedId)],
-    });
-  }, [view, cmView, section.highlights, focusedId]);
-
-  // Write: the marks come from the rehype step; focus is a class toggle (no re-render).
-  useEffect(() => {
-    if (view !== 'write' || !region) return;
-    for (const mark of region.querySelectorAll('[data-anchor-ids]')) {
-      const ids = mark.getAttribute('data-anchor-ids')?.split(' ') ?? [];
-      mark.classList.toggle('anchor-focused', focusedId !== null && ids.includes(focusedId));
+    if (view !== 'source' || !cmView) return undefined;
+    const onCompositionEnd = () => setComposeTick((tick) => tick + 1);
+    cmView.dom.addEventListener('compositionend', onCompositionEnd);
+    if (!cmView.composing) {
+      const effects = [];
+      if (!anchorHighlightsMatch(cmView.state, section.highlights)) {
+        effects.push(setAnchorHighlights.of(section.highlights));
+      }
+      if (anchorFocusedOf(cmView.state) !== focusedId) effects.push(setFocusedAnchor.of(focusedId));
+      if (effects.length > 0) cmView.dispatch({ effects });
     }
-  }, [view, region, section.highlights, focusedId, draft]);
+    return () => cmView.dom.removeEventListener('compositionend', onCompositionEnd);
+  }, [view, cmView, section.highlights, focusedId, composeTick]);
+
+  // The editor reports where tracked ranges went after each edit. A replace-all from outside says
+  // nothing about that: the anchors are re-resolved from their quotes instead (`resetKey`).
+  const { reportMapped } = section;
+  const handleHighlightsMapped = useCallback(
+    (ranges: Map<string, { start: number; end: number } | null>, external: boolean) => {
+      if (!external) reportMapped(ranges);
+    },
+    [reportMapped],
+  );
+
+  // Write: highlights are painted over the rendered text without touching it (or the selection).
+  const writeMarks = useMemo(
+    () => section.highlights.filter((highlight) => !highlight.hidden),
+    [section.highlights],
+  );
 
   const handleHighlightClick = useCallback(
     (ids: string[]) => {
@@ -233,6 +306,15 @@ export function ManuscriptSheet({
     else region?.focus();
   }, [view, cmView, region]);
 
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+  const hasUnsavedEdits = useCallback(
+    () => draftRef.current !== baselineRef.current || isUnsavedStatus(statusRef.current),
+    [],
+  );
+
   const cardContext = useMemo<MarginCardContext>(
     () => ({
       projectId,
@@ -240,112 +322,29 @@ export function ManuscriptSheet({
       currentUserId: me?.id ?? null,
       copilotActions: COPILOT_ACTIONS_ENABLED,
       restoreEditorFocus,
+      // These two read refs, but only when a card calls them (never while rendering).
+      // eslint-disable-next-line react-hooks/refs
+      applyServerContent: adoptServerContent,
+      // eslint-disable-next-line react-hooks/refs
+      hasUnsavedEdits,
     }),
-    [projectId, node.id, me?.id, restoreEditorFocus],
+    [projectId, node.id, me?.id, restoreEditorFocus, adoptServerContent, hasUnsavedEdits],
   );
 
-  // ---- selection toolbar ---------------------------------------------------------------------
-  const draftRef = useRef(draft);
-  useEffect(() => {
-    draftRef.current = draft;
-  }, [draft]);
-  const selectionKey =
-    selection && selection.from !== selection.to
-      ? `${view}:${selection.from}:${selection.to}`
-      : null;
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
-  const [toolbarRect, setToolbarRect] = useState<{
-    top: number;
-    bottom: number;
-    left: number;
-    right: number;
-  } | null>(null);
-  const [paneWidth, setPaneWidth] = useState(0);
-  const toolbarVisible = selectionKey !== null && selectionKey !== dismissedKey;
-
-  useEffect(() => {
-    const pane = paneRef.current;
-    if (!toolbarVisible || !pane || !selection) return undefined;
-    let frame: number | null = null;
-    const measure = () => {
-      frame = null;
-      const paneRect = pane.getBoundingClientRect();
-      setPaneWidth(paneRect.width);
-      let box: { top: number; bottom: number; left: number; right: number } | null = null;
-      if (view === 'source' && cmView) {
-        const index = new CodePointIndex(draftRef.current);
-        try {
-          const start = cmView.coordsAtPos(index.toUnit(selection.from), 1);
-          const end = cmView.coordsAtPos(index.toUnit(selection.to), -1);
-          if (start && end) {
-            box = { top: start.top, bottom: end.bottom, left: start.left, right: end.right };
-          }
-        } catch {
-          box = null;
-        }
-      } else {
-        const range = document.getSelection()?.rangeCount
-          ? document.getSelection()!.getRangeAt(0)
-          : null;
-        const rects = range ? Array.from(range.getClientRects()) : [];
-        if (rects.length > 0) {
-          const first = rects[0]!;
-          const last = rects[rects.length - 1]!;
-          box = { top: first.top, bottom: last.bottom, left: first.left, right: last.right };
-        }
-      }
-      // Unmeasurable (no layout, or scrolled out of CodeMirror's rendered window): park the bar
-      // at the pane's top edge rather than hiding the action.
-      setToolbarRect(
-        box
-          ? {
-              top: box.top - paneRect.top,
-              bottom: box.bottom - paneRect.top,
-              left: box.left - paneRect.left,
-              right: box.right - paneRect.left,
-            }
-          : { top: 8, bottom: 8, left: 8, right: 8 },
-      );
-    };
-    const schedule = () => {
-      if (frame === null) frame = requestAnimationFrame(measure);
-    };
-    schedule();
-    const scroller = geometry?.scrollEl;
-    scroller?.addEventListener('scroll', schedule, { passive: true });
-    window.addEventListener('resize', schedule);
-    return () => {
-      scroller?.removeEventListener('scroll', schedule);
-      window.removeEventListener('resize', schedule);
-      if (frame !== null) cancelAnimationFrame(frame);
-    };
-  }, [toolbarVisible, selection, view, cmView, geometry]);
-
-  function startComment() {
-    if (!selection || selection.from === selection.to) return;
-    const text = draftRef.current;
-    const index = new CodePointIndex(text);
-    const trimmed = trimRange(text, index.toUnit(selection.from), index.toUnit(selection.to));
-    if (!trimmed) return;
-    const from = index.toCp(trimmed[0]);
-    const to = index.toCp(trimmed[1]);
-    if (to - from > 20000) {
-      toast.error('Select a shorter passage to comment on (at most 20,000 characters).');
-      return;
-    }
-    setDismissedKey(selectionKey);
-    openComposer(makeAnchor(text, from, to));
-    revealMargin();
-  }
-
-  function handlePaneKeyDown(event: React.KeyboardEvent) {
-    if (event.code === 'KeyM' && event.altKey && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      startComment();
-    } else if (event.key === 'Escape' && toolbarVisible && !event.defaultPrevented) {
-      setDismissedKey(selectionKey);
-    }
-  }
+  const startComment = useCallback(
+    (anchor: Anchor) => {
+      openComposer({ kind: 'comment', anchor });
+      revealMargin();
+    },
+    [openComposer, revealMargin],
+  );
+  const focusThreadCard = useCallback(
+    (id: string) => {
+      revealMargin();
+      focusCard(id);
+    },
+    [revealMargin, focusCard],
+  );
 
   // Blocks in-app navigation (and warns on tab close) while there's an unsaved edit the
   // 800ms debounce hasn't flushed yet — `flush()` on blur/unmount/Ctrl-S covers the rest.
@@ -442,11 +441,27 @@ export function ManuscriptSheet({
           This section is being generated by a run — editing is disabled until it finishes.
         </div>
       ) : null}
-      <div
-        ref={paneRef}
-        className="relative flex min-h-0 flex-1 flex-col"
-        onKeyDown={handlePaneKeyDown}
-      >
+      {incoming !== null ? (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-2 border-b bg-info/10 px-3 py-2 text-xs"
+        >
+          <Info className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            This section was changed elsewhere (another editor, or an accepted suggestion). Your
+            unsaved edits are kept; saving them will overwrite that change.
+          </span>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => adoptServerContent(incoming)}
+          >
+            Load the other version
+          </Button>
+        </div>
+      ) : null}
+      <div ref={paneRef} className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={setRegion}
           className="custom-scrollbar min-h-0 flex-1 overflow-auto"
@@ -466,6 +481,7 @@ export function ManuscriptSheet({
               onSelectionChange={setSelection}
               onCreateEditor={setCmView}
               onHighlightClick={handleHighlightClick}
+              onHighlightsMapped={handleHighlightsMapped}
               className="h-full"
             />
           ) : (
@@ -493,7 +509,8 @@ export function ManuscriptSheet({
                   <LazyMarkdownView
                     markdown={draft}
                     citations={citations}
-                    anchorMarks={section.highlights}
+                    anchorMarks={writeMarks}
+                    focusedAnchorId={focusedId}
                     sourceMap
                     onCitationClick={handleCitationClick}
                     onAnchorClick={handleHighlightClick}
@@ -509,14 +526,19 @@ export function ManuscriptSheet({
             </div>
           )}
         </div>
-        {toolbarVisible && toolbarRect ? (
-          <SelectionToolbar
-            rect={toolbarRect}
-            containerWidth={paneWidth}
-            onComment={startComment}
-            copilotActions={COPILOT_ACTIONS_ENABLED}
-          />
-        ) : null}
+        <SelectionLayer
+          view={view}
+          text={draft}
+          region={region}
+          cmView={cmView}
+          geometry={geometry}
+          paneRef={paneRef}
+          enabled={anchorsEnabled}
+          highlights={section.highlights}
+          onComment={startComment}
+          onFocusThread={focusThreadCard}
+          copilotActions={COPILOT_ACTIONS_ENABLED}
+        />
       </div>
 
       {marginHost
@@ -532,6 +554,11 @@ export function ManuscriptSheet({
               composerRange={section.composerRange}
               composerQuote={section.composerQuote}
               geometry={geometry}
+              anchorNote={
+                anchorsEnabled
+                  ? undefined
+                  : 'Comments on selected text are available for Markdown sections. This section holds LaTeX, so only whole-section comments can be added.'
+              }
             />,
             marginHost,
           )

@@ -33,8 +33,6 @@ interface UiState {
   toggleCopilot: () => void;
   setRightPane: (pane: RightPane) => void;
   setRightOverlayOpen: (open: boolean) => void;
-  /** Makes the margin visible whatever the screen width (e.g. when a comment composer opens). */
-  revealMargin: () => void;
   setOutlineWidth: (width: number) => void;
   openModal: (modal: ModalKind) => void;
   closeModal: () => void;
@@ -76,7 +74,6 @@ export const useUiStore = create<UiState>()(
 );
 
 export const useOutlineOpen = (): boolean => useUiStore((state) => state.outlineOpen);
-export const useRightPane = (): RightPane => useUiStore((state) => state.rightPane);
-export const useCopilotOpen = (): boolean => useUiStore((state) => state.copilotOpen);
+export const useRightPaneMode = (): RightPane => useUiStore((state) => state.rightPane);
 export const useOutlineWidth = (): number => useUiStore((state) => state.outlineWidth);
 export const useActiveModal = (): ModalKind | null => useUiStore((state) => state.activeModal);

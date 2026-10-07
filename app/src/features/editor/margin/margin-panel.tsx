@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type WheelEvent,
+} from 'react';
 import { CheckCheck, MessageSquarePlus } from 'lucide-react';
 
 import { useCreateCommentMutation } from '@/api/queries/comments';
@@ -9,7 +17,7 @@ import type { TextRange } from '@/features/editor/lib/anchors';
 import { cn } from '@/lib/utils';
 import type { MarginCardContext } from './card-registry';
 import { CommentComposer } from './comment-composer';
-import type { MarginGeometry } from './geometry';
+import type { AnchorMeasure, MarginGeometry } from './geometry';
 import { MarginCard } from './margin-card';
 import { layoutMargin, type LayoutItem } from './margin-layout';
 import { DRAFT_ID, useMarginStore, type ComposerDraft } from './margin-store';
@@ -39,6 +47,8 @@ interface MarginPanelProps {
   composerQuote: string;
   /** Null while the text pane is not mounted yet. */
   geometry: MarginGeometry | null;
+  /** Shown under the header when anchored comments are unavailable for this section (LaTeX). */
+  anchorNote?: string | undefined;
 }
 
 /** Fires `callback` once per animation frame at most, however often it is requested. */
@@ -64,11 +74,16 @@ function useFrameScheduler(callback: () => void): () => void {
   }, []);
 }
 
-function sameMap(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean {
+function sameMeasures(
+  a: ReadonlyMap<string, AnchorMeasure>,
+  b: ReadonlyMap<string, AnchorMeasure>,
+): boolean {
   if (a.size !== b.size) return false;
   for (const [key, value] of a) {
     const other = b.get(key);
-    if (other === undefined || Math.abs(other - value) > 0.5) return false;
+    if (!other || other.approximate !== value.approximate || Math.abs(other.y - value.y) > 0.5) {
+      return false;
+    }
   }
   return true;
 }
@@ -76,9 +91,13 @@ function sameMap(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>)
 /**
  * The margin: a filter header and the cards, each beside the text it is about. Cards are placed
  * by `layoutMargin` from two measurements, both batched per animation frame and never made while
- * typing: the y of each anchor (from the text pane's `MarginGeometry`) and each card's height
- * (one `ResizeObserver`). The lane scrolls natively and mirrors the text pane's scroll position
- * (and the reverse), so scrolling moves no cards and triggers no layout.
+ * typing beyond one read pass: the y of each anchor (from the text pane's `MarginGeometry`) and
+ * each card's height (one `ResizeObserver`).
+ *
+ * The card lane does not scroll by itself: it is translated by the text pane's scroll position
+ * (set straight on the element, no re-render), so nothing can feed back into the text pane. A
+ * wheel over the lane, or the browser scrolling it to reveal a focused card, is forwarded to the
+ * text pane instead.
  */
 export function MarginPanel({
   ctx,
@@ -91,41 +110,61 @@ export function MarginPanel({
   composerRange,
   composerQuote,
   geometry,
+  anchorNote,
 }: MarginPanelProps) {
   const filter = useMarginStore((state) => state.filter);
   const showResolved = useMarginStore((state) => state.showResolved);
   const focusedId = useMarginStore((state) => state.focusedId);
+  const focusRequest = useMarginStore((state) => state.focusRequest);
   const setFilter = useMarginStore((state) => state.setFilter);
   const setShowResolved = useMarginStore((state) => state.setShowResolved);
   const focus = useMarginStore((state) => state.focus);
   const openComposer = useMarginStore((state) => state.openComposer);
   const closeComposer = useMarginStore((state) => state.closeComposer);
-  const create = useCreateCommentMutation(ctx.projectId, ctx.nodeId);
+  // Composers close only once the server accepted the text: no optimistic rows for them.
+  const create = useCreateCommentMutation(ctx.projectId, ctx.nodeId, { optimistic: false });
 
   const closedCount = useMemo(() => threads.filter(isClosed).length, [threads]);
 
   // ---- measurements -------------------------------------------------------------------
-  const [anchorY, setAnchorY] = useState<ReadonlyMap<string, number>>(new Map());
+  const [measures, setMeasures] = useState<ReadonlyMap<string, AnchorMeasure>>(new Map());
   const [heights, setHeights] = useState<ReadonlyMap<string, number>>(new Map());
   const pendingHeights = useRef(new Map<string, number>());
   const elements = useRef(new Map<string, HTMLElement>());
   const viewport = useRef<HTMLDivElement>(null);
+  const lane = useRef<HTMLDivElement>(null);
+  /** Screen offset of the text pane's top relative to the lane's top (their headers differ). */
+  const laneOffset = useRef(0);
 
   const anchored = useMemo(
     () => [
       ...visible
         .filter((thread) => thread.range)
         .map((thread) => ({ id: thread.id, start: thread.range!.start })),
-      ...(composer && composerRange ? [{ id: DRAFT_ID, start: composerRange.start }] : []),
+      ...(composer?.kind === 'comment' && composerRange
+        ? [{ id: DRAFT_ID, start: composerRange.start }]
+        : []),
     ],
     [visible, composer, composerRange],
   );
   const anchoredKey = anchored.map((anchor) => `${anchor.id}:${anchor.start}`).join('|');
 
+  const applyTransform = useCallback(() => {
+    if (lane.current && geometry) {
+      lane.current.style.transform = `translate3d(0, ${laneOffset.current - geometry.scrollTop()}px, 0)`;
+    }
+  }, [geometry]);
+
   const measure = useFrameScheduler(() => {
     if (!geometry) return;
     const next = geometry.measure(anchored);
-    setAnchorY((previous) => (sameMap(previous, next) ? previous : next));
+    setMeasures((previous) => (sameMeasures(previous, next) ? previous : next));
+    if (viewport.current) {
+      laneOffset.current =
+        geometry.scrollEl.getBoundingClientRect().top -
+        viewport.current.getBoundingClientRect().top;
+      applyTransform();
+    }
   });
   const commitHeights = useFrameScheduler(() => {
     setHeights(new Map(pendingHeights.current));
@@ -178,7 +217,7 @@ export function MarginPanel({
   // ---- layout -------------------------------------------------------------------------
   const ordered = useMemo(() => {
     const items: { id: string; draft: boolean; thread?: MarginThread; placed: boolean }[] = [];
-    if (composer && composer.anchor === null) {
+    if (composer?.kind === 'comment' && composer.anchor === null) {
       items.push({ id: DRAFT_ID, draft: true, placed: false });
     }
     for (const thread of visible) {
@@ -187,26 +226,26 @@ export function MarginPanel({
     // The composer for a selection sits among the anchored cards at the selection.
     for (const thread of visible) {
       if (thread.range) {
-        items.push({ id: thread.id, draft: false, thread, placed: anchorY.has(thread.id) });
+        items.push({ id: thread.id, draft: false, thread, placed: measures.has(thread.id) });
       }
     }
-    if (composer && composer.anchor !== null) {
-      items.push({ id: DRAFT_ID, draft: true, placed: anchorY.has(DRAFT_ID) });
+    if (composer?.kind === 'comment' && composer.anchor !== null) {
+      items.push({ id: DRAFT_ID, draft: true, placed: measures.has(DRAFT_ID) });
     }
     return items;
-  }, [visible, composer, anchorY]);
+  }, [visible, composer, measures]);
 
   const tops = useMemo(() => {
     const layoutItems: LayoutItem[] = ordered.map((item) => ({
       id: item.id,
-      y: item.placed ? (anchorY.get(item.id) ?? 0) : 0,
+      y: item.placed ? (measures.get(item.id)?.y ?? 0) : 0,
       height: heights.get(item.id) ?? DEFAULT_CARD_HEIGHT,
     }));
     return {
       map: layoutMargin(layoutItems, { gap: CARD_GAP, focusedId }),
       items: layoutItems,
     };
-  }, [ordered, anchorY, focusedId, heights]);
+  }, [ordered, measures, focusedId, heights]);
 
   const extent = useMemo(() => {
     let bottom = 0;
@@ -216,51 +255,46 @@ export function MarginPanel({
     return bottom + 24;
   }, [tops]);
 
-  // ---- scroll mirroring ---------------------------------------------------------------
+  // Cards stacked below the last line must stay reachable: let the text pane scroll that far.
   useEffect(() => {
-    const lane = viewport.current;
-    const text = geometry?.scrollEl;
-    if (!lane || !text) return undefined;
-    const textMax = () => text.scrollHeight - text.clientHeight;
-    const fromText = () => {
-      // When the margin is longer than the text, do not pull it back to the text's end.
-      if (text.scrollTop >= textMax() - 0.5 && lane.scrollTop >= text.scrollTop) return;
-      if (Math.abs(lane.scrollTop - text.scrollTop) > 0.5) lane.scrollTop = text.scrollTop;
-    };
-    const fromLane = () => {
-      if (lane.scrollTop <= textMax() && Math.abs(text.scrollTop - lane.scrollTop) > 0.5) {
-        text.scrollTop = lane.scrollTop;
-      }
-    };
-    text.addEventListener('scroll', fromText, { passive: true });
-    lane.addEventListener('scroll', fromLane, { passive: true });
-    fromText();
-    return () => {
-      text.removeEventListener('scroll', fromText);
-      lane.removeEventListener('scroll', fromLane);
-    };
+    if (!geometry) return undefined;
+    geometry.setExtraBottom(Math.max(0, Math.ceil(extent - geometry.contentHeight())));
+    return () => geometry.setExtraBottom(0);
   }, [geometry, extent]);
 
-  // ---- focus: reveal the focused card in the margin, its text in the pane ----------------
-  // Read through a ref so `handleFocusCard` keeps its identity while typing re-creates `threads`
-  // (a new identity would re-render every card).
+  // ---- scroll: the lane follows the text pane, never the other way round ---------------------
+  useEffect(() => {
+    const text = geometry?.scrollEl;
+    if (!text) return undefined;
+    text.addEventListener('scroll', applyTransform, { passive: true });
+    applyTransform();
+    return () => text.removeEventListener('scroll', applyTransform);
+  }, [geometry, applyTransform]);
+
+  const handleWheel = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      if (!geometry || event.ctrlKey) return;
+      const unit =
+        event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? geometry.viewportHeight() : 1;
+      geometry.scrollBy(event.deltaY * unit);
+    },
+    [geometry],
+  );
+
+  // The browser may scroll the (clipped) lane to reveal a focused card: forward that to the text.
+  const handleLaneScroll = useCallback(() => {
+    const el = viewport.current;
+    if (!el || !geometry || el.scrollTop === 0) return;
+    const delta = el.scrollTop;
+    el.scrollTop = 0;
+    geometry.scrollBy(delta);
+  }, [geometry]);
+
+  // ---- focus ----------------------------------------------------------------------------------
   const threadsRef = useRef(threads);
   useEffect(() => {
     threadsRef.current = threads;
   }, [threads]);
-  useEffect(() => {
-    if (!focusedId) return;
-    const element = elements.current.get(focusedId);
-    const lane = viewport.current;
-    if (element && lane) {
-      const top = element.offsetTop;
-      const bottom = top + element.offsetHeight;
-      if (top < lane.scrollTop) lane.scrollTop = Math.max(0, top - 12);
-      else if (bottom > lane.scrollTop + lane.clientHeight) {
-        lane.scrollTop = bottom - lane.clientHeight + 12;
-      }
-    }
-  }, [focusedId]);
 
   const handleFocusCard = useCallback(
     (id: string) => {
@@ -270,6 +304,16 @@ export function MarginPanel({
     },
     [focus, geometry],
   );
+
+  // A request to move keyboard focus into a card (a highlight's shortcut).
+  const handledNonce = useRef(0);
+  useEffect(() => {
+    if (!focusRequest || focusRequest.nonce === handledNonce.current) return;
+    const element = elements.current.get(focusRequest.id);
+    if (!element) return;
+    handledNonce.current = focusRequest.nonce;
+    element.focus();
+  }, [focusRequest, tops]);
 
   const empty = !loading && !error && visible.length === 0 && !composer;
 
@@ -313,7 +357,7 @@ export function MarginPanel({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Comment on the whole section"
-                onClick={() => openComposer(null)}
+                onClick={() => openComposer({ kind: 'comment', anchor: null })}
               >
                 <MessageSquarePlus />
               </Button>
@@ -322,13 +366,17 @@ export function MarginPanel({
           </Tooltip>
         </div>
       </div>
+      {anchorNote ? (
+        <p className="border-b px-3 py-2 text-xs text-muted-foreground">{anchorNote}</p>
+      ) : null}
 
       <div
         ref={viewport}
         role="region"
         aria-label="Margin cards"
-        tabIndex={-1}
-        className="custom-scrollbar relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        className="relative min-h-0 flex-1 overflow-hidden"
+        onWheel={handleWheel}
+        onScroll={handleLaneScroll}
       >
         {error ? (
           <p role="alert" className="p-4 text-sm text-destructive">
@@ -347,31 +395,30 @@ export function MarginPanel({
           </p>
         ) : null}
 
-        <div className={cn('relative', empty && 'hidden')} style={{ height: extent }}>
+        <div
+          ref={lane}
+          className={cn('absolute inset-x-0 top-0 will-change-transform', empty && 'hidden')}
+          style={{ height: extent }}
+        >
           {ordered.map((item) => {
-            if (item.draft && composer) {
+            if (item.draft && composer?.kind === 'comment') {
               return (
                 <DraftCard
                   key={DRAFT_ID}
                   register={registerCard}
                   top={tops.map.get(DRAFT_ID)}
                   quote={composer.anchor ? composerQuote : null}
-                  busy={create.isPending}
                   onCancel={() => {
                     closeComposer();
                     ctx.restoreEditorFocus();
                   }}
-                  onSubmit={(text) => {
-                    create.mutate(
-                      {
-                        bodyMarkdown: text,
-                        anchor: composer.anchor,
-                      },
-                      {
-                        onSuccess: (comment) => focus(comment.id),
-                      },
-                    );
+                  onSubmit={async (text) => {
+                    const comment = await create.mutateAsync({
+                      bodyMarkdown: text,
+                      anchor: composer.anchor,
+                    });
                     closeComposer();
+                    focus(comment.id);
                     ctx.restoreEditorFocus();
                   }}
                 />
@@ -386,6 +433,7 @@ export function MarginPanel({
                 ctx={ctx}
                 top={tops.map.get(item.id)}
                 focused={focusedId === item.id}
+                approximate={measures.get(item.id)?.approximate ?? false}
                 onFocusCard={handleFocusCard}
               />
             );
@@ -399,16 +447,14 @@ export function MarginPanel({
 function DraftCard({
   top,
   quote,
-  busy,
   register,
   onSubmit,
   onCancel,
 }: {
   top: number | undefined;
   quote: string | null;
-  busy: boolean;
   register: (id: string, element: HTMLElement | null) => void;
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string) => Promise<void>;
   onCancel: () => void;
 }) {
   const ref = useCallback((element: HTMLElement | null) => register(DRAFT_ID, element), [register]);
@@ -431,7 +477,7 @@ function DraftCard({
       ) : (
         <p className="mb-2 text-xs text-muted-foreground">On the whole section</p>
       )}
-      <CommentComposer label="New comment" busy={busy} onSubmit={onSubmit} onCancel={onCancel} />
+      <CommentComposer label="New comment" onSubmit={onSubmit} onCancel={onCancel} />
     </section>
   );
 }

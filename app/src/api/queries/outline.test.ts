@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 
+import { comments } from './comments';
 import { problemResponse } from '@/mocks/problem';
 import { server } from '@/mocks/server';
 import { renderWithQueryClient, waitFor } from '@/test/query-test-utils';
@@ -172,5 +173,29 @@ describe('outline queries', () => {
     expect(result.current.flat.data?.items.some((node) => node.id === 'ch-1')).toBe(true);
     expect(result.current.flat.data?.items.some((node) => node.id === 'sec-1-1')).toBe(true);
     expect(result.current.flat.data?.total).toBe(initialTotal);
+  });
+
+  it("a content save refetches the node's comments (the server re-anchors them), a title change does not", async () => {
+    let commentFetches = 0;
+    server.use(
+      http.get('*/api/v1/projects/:projectId/outline/:nodeId/comments', () => {
+        commentFetches += 1;
+        return HttpResponse.json({ items: [], total: 0, limit: 0, offset: 0 });
+      }),
+    );
+    const { result } = renderWithQueryClient(() => ({
+      comments: useQuery(comments.forNode(PROJECT_ID, 'sec-1-1')),
+      update: useUpdateOutlineNodeMutation(PROJECT_ID, 'sec-1-1'),
+    }));
+    await waitFor(() => expect(result.current.comments.isSuccess).toBe(true));
+    expect(commentFetches).toBe(1);
+
+    result.current.update.mutate({ title: 'Renamed' });
+    await waitFor(() => expect(result.current.update.isSuccess).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(commentFetches).toBe(1);
+
+    result.current.update.mutate({ contentMarkdown: 'New text.' });
+    await waitFor(() => expect(commentFetches).toBe(2));
   });
 });

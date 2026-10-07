@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { CheckCheck, Pencil, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import type { Comment } from '@/api/types';
 import {
@@ -10,10 +11,16 @@ import {
 } from '@/api/queries/comments';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
+import { useNow } from '@/features/editor/lib/use-now';
 import { formatRelativeTime } from '@/features/runs/lib/run-format';
-import type { MarginCardBodyProps } from './card-registry';
+import type { MarginCardPartProps } from './card-registry';
 import { CommentComposer } from './comment-composer';
 import { CommentMarkdown } from './comment-markdown';
+import { problemMessage } from './errors';
+
+function isPending(comment: Comment): boolean {
+  return comment.id.startsWith('optimistic-');
+}
 
 function Message({
   comment,
@@ -23,14 +30,15 @@ function Message({
 }: {
   comment: Comment;
   own: boolean;
-  ctx: MarginCardBodyProps['ctx'];
+  ctx: MarginCardPartProps['ctx'];
   onDelete: (comment: Comment) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const update = useUpdateCommentMutation(ctx.projectId, ctx.nodeId);
+  const update = useUpdateCommentMutation(ctx.projectId, ctx.nodeId, { optimistic: false });
+  const now = useNow();
   const author = comment.authorName ?? 'Someone';
-  const relative = formatRelativeTime(comment.createdAt);
-  const pending = comment.id.startsWith('optimistic-');
+  const relative = formatRelativeTime(comment.createdAt, now);
+  const pending = isPending(comment);
 
   return (
     <li className="group/message flex flex-col gap-1" aria-busy={pending || undefined}>
@@ -50,14 +58,13 @@ function Message({
           label={`Edit comment by ${author}`}
           submitLabel="Save"
           initialValue={comment.bodyMarkdown}
-          busy={update.isPending}
           onCancel={() => {
             setEditing(false);
             ctx.restoreEditorFocus();
           }}
-          onSubmit={(text) => {
+          onSubmit={async (text) => {
             if (text !== comment.bodyMarkdown) {
-              update.mutate({ commentId: comment.id, bodyMarkdown: text });
+              await update.mutateAsync({ commentId: comment.id, bodyMarkdown: text });
             }
             setEditing(false);
           }}
@@ -65,13 +72,14 @@ function Message({
       ) : (
         <>
           <CommentMarkdown>{comment.bodyMarkdown}</CommentMarkdown>
-          {own && !pending ? (
+          {own ? (
             <div className="flex gap-1">
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-xs"
                 aria-label={`Edit comment by ${author}`}
+                disabled={pending}
                 onClick={() => setEditing(true)}
               >
                 <Pencil />
@@ -81,6 +89,7 @@ function Message({
                 variant="ghost"
                 size="icon-xs"
                 aria-label={`Delete comment by ${author}`}
+                disabled={pending}
                 onClick={() => onDelete(comment)}
               >
                 <Trash2 />
@@ -95,22 +104,27 @@ function Message({
 
 /**
  * Body of a human comment thread: the messages (oldest first), a reply composer, Resolve /
- * Reopen, and Edit / Delete on the user's own messages. `Send to Copilot` waits for phase 4
- * (`ctx.copilotActions`).
+ * Reopen, and Edit / Delete on the user's own messages. Composers stay open with their text until
+ * the server accepts it. `Send to Copilot` waits for phase 4 (`ctx.copilotActions`).
  */
-export function CommentCardBody({ thread, ctx }: MarginCardBodyProps) {
+export function CommentCardBody({ thread, ctx }: MarginCardPartProps) {
   const [replying, setReplying] = useState(false);
   const [deleting, setDeleting] = useState<Comment | null>(null);
-  const create = useCreateCommentMutation(ctx.projectId, ctx.nodeId);
+  const create = useCreateCommentMutation(ctx.projectId, ctx.nodeId, { optimistic: false });
   const resolve = useResolveCommentMutation(ctx.projectId, ctx.nodeId);
   const remove = useDeleteCommentMutation(ctx.projectId, ctx.nodeId);
   const resolved = thread.status === 'resolved';
   const messages = [thread.root, ...thread.replies];
+  const rootPending = isPending(thread.root);
+
+  function failed(action: string) {
+    return (error: unknown) => toast.error(`Could not ${action}: ${problemMessage(error)}`);
+  }
 
   function requestDelete(comment: Comment) {
-    // Deleting a reply is cheap to redo; deleting the root drops everyone's replies with it.
-    if (comment.id === thread.root.id && thread.replies.length > 0) setDeleting(comment);
-    else remove.mutate(comment.id);
+    // Deleting a root drops everyone's replies with it, and there is no undo: always confirm it.
+    if (comment.id === thread.root.id) setDeleting(comment);
+    else remove.mutate(comment.id, { onError: failed('delete the reply') });
   }
 
   return (
@@ -132,26 +146,37 @@ export function CommentCardBody({ thread, ctx }: MarginCardBodyProps) {
           label="Reply"
           placeholder="Reply…"
           submitLabel="Reply"
-          busy={create.isPending}
           onCancel={() => {
             setReplying(false);
             ctx.restoreEditorFocus();
           }}
-          onSubmit={(text) => {
-            create.mutate({ bodyMarkdown: text, parentId: thread.root.id });
+          onSubmit={async (text) => {
+            await create.mutateAsync({ bodyMarkdown: text, parentId: thread.root.id });
             setReplying(false);
           }}
         />
       ) : (
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button type="button" variant="outline" size="xs" onClick={() => setReplying(true)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            disabled={rootPending}
+            onClick={() => setReplying(true)}
+          >
             Reply
           </Button>
           <Button
             type="button"
             variant="outline"
             size="xs"
-            onClick={() => resolve.mutate({ commentId: thread.root.id, resolved: !resolved })}
+            disabled={rootPending || resolve.isPending}
+            onClick={() =>
+              resolve.mutate(
+                { commentId: thread.root.id, resolved: !resolved },
+                { onError: failed(resolved ? 'reopen the thread' : 'resolve the thread') },
+              )
+            }
           >
             {resolved ? <RotateCcw /> : <CheckCheck />}
             {resolved ? 'Reopen' : 'Resolve'}
@@ -170,11 +195,15 @@ export function CommentCardBody({ thread, ctx }: MarginCardBodyProps) {
         onOpenChange={(open) => {
           if (!open) setDeleting(null);
         }}
-        title="Delete this thread?"
-        description={`This also deletes ${thread.replies.length} ${thread.replies.length === 1 ? 'reply' : 'replies'}.`}
-        confirmLabel="Delete thread"
+        title={thread.replies.length > 0 ? 'Delete this thread?' : 'Delete this comment?'}
+        description={
+          thread.replies.length > 0
+            ? `This also deletes ${thread.replies.length} ${thread.replies.length === 1 ? 'reply' : 'replies'}. It cannot be undone.`
+            : 'It cannot be undone.'
+        }
+        confirmLabel={thread.replies.length > 0 ? 'Delete thread' : 'Delete comment'}
         onConfirm={() => {
-          if (deleting) remove.mutate(deleting.id);
+          if (deleting) remove.mutate(deleting.id, { onError: failed('delete the comment') });
           setDeleting(null);
         }}
       />

@@ -56,13 +56,3 @@ export function layoutMargin(
   }
   return new Map(sorted.map((item, i) => [item.id, tops[i]!]));
 }
-
-/** The y below the last card, for sizing the margin's scroll extent. */
-export function layoutBottom(
-  items: readonly LayoutItem[],
-  tops: ReadonlyMap<string, number>,
-): number {
-  let bottom = 0;
-  for (const item of items) bottom = Math.max(bottom, (tops.get(item.id) ?? 0) + item.height);
-  return bottom;
-}

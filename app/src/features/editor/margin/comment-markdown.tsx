@@ -1,63 +1,28 @@
-import Markdown, { type Components } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { lazy, Suspense } from 'react';
 
 import { cn } from '@/lib/utils';
 
-const COMPONENTS: Components = {
-  a: ({ node, className, ...props }) => {
-    void node;
-    return (
-      <a
-        {...props}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={cn('text-primary underline underline-offset-2', className)}
-      />
-    );
-  },
-  img: ({ alt }) => <span className="text-muted-foreground">[image: {alt ?? ''}]</span>,
-  p: ({ node, ...props }) => {
-    void node;
-    return <p className="my-1 first:mt-0 last:mb-0" {...props} />;
-  },
-  ul: ({ node, ...props }) => {
-    void node;
-    return <ul className="my-1 ml-4 list-disc" {...props} />;
-  },
-  ol: ({ node, ...props }) => {
-    void node;
-    return <ol className="my-1 ml-4 list-decimal" {...props} />;
-  },
-  code: ({ node, ...props }) => {
-    void node;
-    return <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]" {...props} />;
-  },
-  pre: ({ node, ...props }) => {
-    void node;
-    return (
-      <pre
-        className="custom-scrollbar my-1 overflow-x-auto rounded bg-muted p-2 text-xs"
-        {...props}
-      />
-    );
-  },
-  blockquote: ({ node, ...props }) => {
-    void node;
-    return <blockquote className="my-1 border-l-2 pl-2 text-muted-foreground" {...props} />;
-  },
-};
+// `react-markdown` and `remark-gfm` are heavy and shared with the manuscript view's chunk: load them
+// when the first comment is shown rather than with the editor sheet.
+const Impl = lazy(() => import('./comment-markdown-impl'));
 
-/**
- * A comment's Markdown body. Deliberately small (GFM, no HTML, no images, no headings styling):
- * the default `react-markdown` pipeline escapes raw HTML, so nothing a collaborator types can
- * inject markup.
- */
-export function CommentMarkdown({ children, className }: { children: string; className?: string }) {
+/** A comment's Markdown body (GFM, no HTML); plain text while the renderer loads. */
+export function CommentMarkdown({
+  children,
+  className,
+}: {
+  children: string;
+  className?: string | undefined;
+}) {
   return (
-    <div className={cn('text-sm leading-snug break-words', className)}>
-      <Markdown remarkPlugins={[remarkGfm]} components={COMPONENTS} skipHtml>
-        {children}
-      </Markdown>
-    </div>
+    <Suspense
+      fallback={
+        <div className={cn('text-sm leading-snug break-words whitespace-pre-wrap', className)}>
+          {children}
+        </div>
+      }
+    >
+      <Impl className={className}>{children}</Impl>
+    </Suspense>
   );
 }

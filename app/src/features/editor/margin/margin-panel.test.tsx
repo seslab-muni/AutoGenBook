@@ -17,14 +17,27 @@ const CTX: MarginCardContext = {
   currentUserId: 'user-mock-1',
   copilotActions: false,
   restoreEditorFocus: vi.fn(),
+  applyServerContent: vi.fn(),
+  hasUnsavedEdits: () => false,
 };
 
 function geometry(y: Record<string, number>): MarginGeometry {
   const scrollEl = document.createElement('div');
   return {
     scrollEl,
+    contentHeight: () => 0,
+    setExtraBottom: () => {},
+    scrollTop: () => scrollEl.scrollTop,
+    scrollBy: (dy) => {
+      scrollEl.scrollTop += dy;
+    },
+    viewportHeight: () => 700,
     measure: (anchors) =>
-      new Map(anchors.filter((anchor) => anchor.id in y).map((a) => [a.id, y[a.id]!])),
+      new Map(
+        anchors
+          .filter((anchor) => anchor.id in y)
+          .map((a) => [a.id, { y: y[a.id]!, approximate: false }]),
+      ),
     reveal: vi.fn(),
     subscribe: () => () => {},
   };
@@ -143,14 +156,15 @@ describe('MarginPanel', () => {
     renderPanel([], {});
     expect(screen.getByText(/No comments yet/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Comment on the whole section' }));
-    expect(useMarginStore.getState().composer).toEqual({ anchor: null });
+    expect(useMarginStore.getState().composer).toEqual({ kind: 'comment', anchor: null });
   });
 
   it('renders the composer card at the selection and cancels with Escape', async () => {
     const user = userEvent.setup();
-    useMarginStore
-      .getState()
-      .openComposer({ quote: 'picked', prefix: '', suffix: '', start: 3, end: 9 });
+    useMarginStore.getState().openComposer({
+      kind: 'comment',
+      anchor: { quote: 'picked', prefix: '', suffix: '', start: 3, end: 9 },
+    });
     renderPanel(
       [],
       { draft: 77 },

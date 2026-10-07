@@ -368,3 +368,65 @@ describe('context first, boundaries never', () => {
     expect(orphans / trials).toBeLessThan(0.02);
   });
 });
+
+describe('resolver edge cases (review round 1)', () => {
+  it('a context cut short by the text edge only agrees with a hit at that edge', () => {
+    const a = makeAnchor('foo bar foo', 8, 11);
+    expect(a.suffix).toBe('');
+    // Text inserted before the last `foo`: it is still the last one.
+    expect(resolveAnchor('foo bar baz foo', a).start).toBe(12);
+    // Nothing at the end any more: the first `foo` is another occurrence, not this one.
+    expect(isOrphaned(resolveAnchor('foo bar baz', a))).toBe(true);
+    expect(isOrphaned(resolveAnchor('foo bar baz foo qux', a))).toBe(true);
+  });
+
+  it('never re-attaches a short quote to another occurrence after its text was replaced', () => {
+    const text =
+      'The energy of the system is conserved here. ' +
+      'x'.repeat(40) +
+      ' But the energy is lost later on.';
+    const first = text.indexOf('energy');
+    const a = makeAnchor(text, first, first + 6);
+    const edited = text.replace('energy', 'power');
+    expect(isOrphaned(resolveAnchor(edited, a))).toBe(true);
+    // Untouched surroundings still find it.
+    expect(resolveAnchor('Intro. ' + text, a).start).toBe(first + 7);
+  });
+
+  it('counts context in code points, so astral characters do not look like a text edge', () => {
+    const text = '😀'.repeat(40) + 'target' + '𝔖'.repeat(40);
+    const a = makeAnchor(text, 40, 46);
+    expect(codePointLength(a.prefix)).toBe(32);
+    expect(codePointLength(a.suffix)).toBe(32);
+    expect(resolveAnchor('NEW ' + text, a).start).toBe(44);
+  });
+
+  it('never re-attaches to another occurrence (small vocabulary, deleted quotes)', () => {
+    let seed = 777;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    const vocab = ['a', 'b', 'c', 'ab', 'bc'];
+    let wrong = 0;
+    for (let round = 0; round < 400; round += 1) {
+      const text = Array.from({ length: 60 }, () => vocab[Math.floor(rand() * vocab.length)]).join(
+        ' ',
+      );
+      const start = 40 + Math.floor(rand() * 60);
+      const end = start + 1 + Math.floor(rand() * 5);
+      const anchor = makeAnchor(text, start, end);
+      // Delete the quote itself (and sometimes a neighbour).
+      const edited = text.slice(0, start) + text.slice(end);
+      const resolved = resolveAnchor(edited, anchor);
+      if (!isOrphaned(resolved)) {
+        // Allowed only if the match really carries the stored context on one side.
+        const at = resolved.start!;
+        const before = edited.slice(Math.max(0, at - anchor.prefix.length), at);
+        const after = edited.slice(resolved.end!, resolved.end! + anchor.suffix.length);
+        if (before !== anchor.prefix && after !== anchor.suffix) wrong += 1;
+      }
+    }
+    expect(wrong).toBe(0);
+  });
+});

@@ -2,12 +2,12 @@ import { PanelRightClose } from 'lucide-react';
 
 import type { OutlineNode, Project } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
-import { useRightPane } from '@/components/layout/use-right-pane';
+import { useRightColumn } from '@/components/layout/use-right-pane';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { CopilotDrawer, type CopilotTab } from '@/features/editor/components/copilot-drawer';
-import { useUiStore, useRightPane as useRightPaneMode, type RightPane } from '@/stores/ui-store';
+import { useUiStore, useRightPaneMode, type RightPane } from '@/stores/ui-store';
 
 interface RightColumnProps {
   projectId: string;
@@ -34,7 +34,7 @@ export function RightColumn({
 }: RightColumnProps) {
   const mode = useRightPaneMode();
   const setMode = useUiStore((state) => state.setRightPane);
-  const { close } = useRightPane();
+  const { close } = useRightColumn();
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -51,7 +51,7 @@ export function RightColumn({
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label="Hide copilot pane"
+          aria-label="Close right pane"
           onClick={close}
         >
           <PanelRightClose />

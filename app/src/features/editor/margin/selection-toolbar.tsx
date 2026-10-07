@@ -11,8 +11,9 @@ const QUICK_CHIPS = ['Add proof', 'More rigorous', 'Shorter', 'Cite'] as const;
 interface SelectionToolbarProps {
   /** Selection rectangle relative to the toolbar's positioned parent. */
   rect: { top: number; bottom: number; left: number; right: number };
-  /** Width of the positioned parent, to keep the bar inside the pane. */
+  /** Size of the positioned parent, to keep the bar inside the pane. */
   containerWidth: number;
+  containerHeight?: number;
   onComment: () => void;
   /** `Prompt…` and the quick chips (phase 4); see `flags.ts`. Off: only `Comment` renders. */
   copilotActions?: boolean;
@@ -29,6 +30,7 @@ interface SelectionToolbarProps {
 export function SelectionToolbar({
   rect,
   containerWidth,
+  containerHeight = Number.POSITIVE_INFINITY,
   onComment,
   copilotActions = false,
   onPrompt,
@@ -42,7 +44,8 @@ export function SelectionToolbar({
 
   const height = 36;
   const above = rect.top - height - 8;
-  const top = above >= 4 ? above : rect.bottom + 8;
+  const wanted = above >= 4 ? above : rect.bottom + 8;
+  const top = Math.max(4, Math.min(wanted, containerHeight - height - 4));
   const left = Math.max(8, Math.min(rect.left, containerWidth - width - 8));
 
   return (
@@ -61,7 +64,7 @@ export function SelectionToolbar({
         size="xs"
         className="text-background hover:bg-background/15 hover:text-background"
         aria-keyshortcuts="Control+Alt+M"
-        title={`Comment (${COMMENT_SHORTCUT})`}
+        title={`Comment (${COMMENT_SHORTCUT}). With the caret inside a highlight, ${COMMENT_SHORTCUT} jumps to its card instead.`}
         onClick={onComment}
       >
         <MessageSquarePlus />

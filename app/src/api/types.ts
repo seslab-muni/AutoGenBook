@@ -75,7 +75,6 @@ export type OutlineTreeReplace = components['schemas']['OutlineTreeReplaceNode']
 /** Margin cards (issue #182): human comments and replies now; suggestions and review issues later. */
 export type Comment = components['schemas']['Comment'];
 export type CommentKind = components['schemas']['CommentKind'];
-export type CommentStatus = components['schemas']['CommentStatus'];
 /** Response anchor: every field may be missing or `null` (orphaned) — see `features/editor/lib/anchors.ts`. */
 export type CommentAnchor = components['schemas']['CommentAnchorOut'];
 export type CommentAnchorIn = components['schemas']['CommentAnchorIn'];

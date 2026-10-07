@@ -135,15 +135,20 @@ function anchorFromUnits(text: string, index: CodePointIndex, start: number, end
 
 /** Up to `CONTEXT` code points ending at UTF-16 offset `unit`. */
 function sliceCodePointsBefore(text: string, unit: number): string {
-  let from = Math.max(0, unit - CONTEXT);
-  if (from > 0 && isLow(text.charCodeAt(from)) && isHigh(text.charCodeAt(from - 1))) from -= 1;
-  // `CONTEXT` units can hold fewer than CONTEXT code points; the API allows "up to".
+  let from = unit;
+  for (let n = 0; n < CONTEXT && from > 0; n += 1) {
+    from -=
+      from > 1 && isLow(text.charCodeAt(from - 1)) && isHigh(text.charCodeAt(from - 2)) ? 2 : 1;
+  }
   return text.slice(from, unit);
 }
 
+/** Up to `CONTEXT` code points starting at UTF-16 offset `unit`. */
 function sliceCodePointsAfter(text: string, unit: number): string {
-  let to = Math.min(text.length, unit + CONTEXT);
-  if (to < text.length && isLow(text.charCodeAt(to)) && isHigh(text.charCodeAt(to - 1))) to += 1;
+  let to = unit;
+  for (let n = 0; n < CONTEXT && to < text.length; n += 1) {
+    to += isHigh(text.charCodeAt(to)) && isLow(text.charCodeAt(to + 1)) ? 2 : 1;
+  }
   return text.slice(unit, to);
 }
 
@@ -264,10 +269,52 @@ function contextScore(hay: string, i: number, j: number, prefix: string, suffix:
   return score;
 }
 
+/** A quote too short for fuzzy matching is also too short to trust without matching context. */
+function isShortQuote(needle: string): boolean {
+  const trimmed = needle.trim();
+  return trimmed.length < MIN_FUZZY_CHARS || wordCount(trimmed) < MIN_FUZZY_WORDS;
+}
+
+interface ContextEdges {
+  /** The stored prefix/suffix was shorter than `CONTEXT`: the quote sat at that edge of the text. */
+  prefixEdge: boolean;
+  suffixEdge: boolean;
+}
+
 /**
- * Among several exact hits: most prefix/suffix agreement, then nearest to the stored start. Returns
- * null when the best hit is not clearly better than the runner-up (identical context and no
- * unambiguous nearest hit): the caller then orphans rather than guess.
+ * Whether the stored context agrees at a hit `[i, j)` of `hay`, each side on its own: the stored
+ * text must be exactly what is there, and a context shorter than `CONTEXT` (the quote was at the
+ * text's edge) only agrees with a hit at that same edge. An empty side is "at the edge" too.
+ */
+function sidesAgree(
+  hay: string,
+  i: number,
+  j: number,
+  prefix: string,
+  suffix: string,
+  edges: ContextEdges,
+): { p: boolean; s: boolean } {
+  const p =
+    i >= prefix.length &&
+    hay.startsWith(prefix, i - prefix.length) &&
+    (!edges.prefixEdge || i === prefix.length);
+  const s =
+    j + suffix.length <= hay.length &&
+    hay.startsWith(suffix, j) &&
+    (!edges.suffixEdge || j + suffix.length === hay.length);
+  return { p, s };
+}
+
+/**
+ * Among exact hits (one or many): context decides, never word boundaries.
+ *
+ *  1. hits where both stored sides agree (then nearest to the stored start);
+ *  2. hits where one side agrees in full;
+ *  3. only for a quote long enough to be distinctive: the single hit, or the best partial match.
+ *
+ * A short quote with no agreeing side is never accepted (even as the only hit: the text it was
+ * attached to may be gone and another occurrence just happens to exist). Returns null when
+ * nothing qualifies or the best hit is not clearly better than the runner-up.
  */
 function pickPosition(
   hay: string,
@@ -276,6 +323,7 @@ function pickPosition(
   prefix: string,
   suffix: string,
   hint: number | null,
+  edges: ContextEdges,
 ): number | null {
   let candidates: number[];
   if (positions === 'many') {
@@ -291,11 +339,11 @@ function pickPosition(
   } else {
     candidates = positions;
   }
-  if (candidates.length === 1 && positions !== 'many') return candidates[0]!;
 
   const length = needle.length;
   const scored = candidates.map((i) => ({
     i,
+    ...sidesAgree(hay, i, i + length, prefix, suffix, edges),
     ctx: contextScore(hay, i, i + length, prefix, suffix),
     dist: hint === null ? 0 : Math.abs(i - hint),
   }));
@@ -309,22 +357,16 @@ function pickPosition(
       : null;
   };
 
-  // No context to tell the hits apart (and several of them): never trust stale offsets.
-  const fullContext = prefix.length + suffix.length;
-  if (fullContext === 0) return null;
-  // Context first, word boundaries never: hits where the whole stored prefix and suffix agree.
-  // (At the start or end of the text the context is cut short: what is there must still agree.)
-  const agreeing = scored.filter((c) => {
-    const before = hay.slice(Math.max(0, c.i - prefix.length), c.i);
-    const after = hay.slice(c.i + length, c.i + length + suffix.length);
-    return (
-      commonSuffix(before, prefix) === before.length && commonPrefix(after, suffix) === after.length
-    );
-  });
-  if (agreeing.length > 0) return nearest(agreeing);
-  // Only partial agreement: fine for a long quote, not for a short one (a shared space proves nothing).
-  const trimmed = needle.trim();
-  if (trimmed.length < MIN_FUZZY_CHARS || wordCount(trimmed) < MIN_FUZZY_WORDS) return null;
+  const noContext = prefix === '' && suffix === '';
+  if (!noContext) {
+    const both = scored.filter((c) => c.p && c.s);
+    if (both.length > 0) return nearest(both);
+    const one = scored.filter((c) => c.p || c.s);
+    if (one.length > 0) return nearest(one);
+  }
+  if (isShortQuote(needle)) return null;
+  if (scored.length === 1 && positions !== 'many') return scored[0]!.i;
+  if (noContext) return null;
   const best = Math.max(...scored.map((c) => c.ctx));
   return nearest(scored.filter((c) => c.ctx === best));
 }
@@ -336,11 +378,12 @@ function locateExact(
   prefix: string,
   suffix: string,
   hint: number | null,
+  edges: ContextEdges,
 ): TextRange | 'none' | null {
   const positions = findAll(view.s, quote);
   if (positions !== 'many' && positions.length === 0) return 'none';
   const hintV = viewToUnit(view, hint);
-  const at = pickPosition(view.s, positions, quote, prefix, suffix, hintV);
+  const at = pickPosition(view.s, positions, quote, prefix, suffix, hintV, edges);
   return at === null ? null : viewToOrig(view, at, at + quote.length);
 }
 
@@ -617,7 +660,11 @@ export function resolveAnchor(text: string, anchor: AnchorInput): Anchor {
  * Same as {@link resolveAnchor} but answers in UTF-16 units (what CodeMirror and the DOM use),
  * `null` when orphaned.
  */
-export function resolveAnchorUnits(text: string, anchor: AnchorInput): TextRange | null {
+export function resolveAnchorUnits(
+  text: string,
+  anchor: AnchorInput,
+  options: { fuzzy?: boolean } = {},
+): TextRange | null {
   const quote = anchor.quote ?? '';
   if (!quote) return null;
   const index = indexFor(text);
@@ -626,13 +673,14 @@ export function resolveAnchorUnits(text: string, anchor: AnchorInput): TextRange
     prefix: anchor.prefix ?? '',
     suffix: anchor.suffix ?? '',
     start: anchor.start ?? null,
+    fuzzy: options.fuzzy ?? true,
   });
 }
 
 function locateUnits(
   text: string,
   index: CodePointIndex,
-  anchor: { quote: string; prefix: string; suffix: string; start: number | null },
+  anchor: { quote: string; prefix: string; suffix: string; start: number | null; fuzzy?: boolean },
 ): TextRange | null {
   const { quote, prefix, suffix } = anchor;
   const hintCp =
@@ -647,7 +695,11 @@ function locateUnits(
   }
 
   // 2. Exact, then whitespace-normalised.
-  const exact = locateExact(IDENTITY(text), quote, prefix, suffix, hint);
+  const edges: ContextEdges = {
+    prefixEdge: codePointLength(prefix) < CONTEXT,
+    suffixEdge: codePointLength(suffix) < CONTEXT,
+  };
+  const exact = locateExact(IDENTITY(text), quote, prefix, suffix, hint, edges);
   if (exact === null) return null;
   if (exact !== 'none') return exact;
 
@@ -660,12 +712,14 @@ function locateUnits(
       collapseString(prefix),
       collapseString(suffix),
       hint,
+      edges,
     );
     if (folded === null) return null;
     if (folded !== 'none') return folded;
   }
 
-  // 3. Fuzzy.
+  // 3. Fuzzy (the slow step; callers on a hot path ask to skip it and retry later).
+  if (anchor.fuzzy === false) return null;
   return locateFuzzy(text, quote, prefix, suffix, hint);
 }
 

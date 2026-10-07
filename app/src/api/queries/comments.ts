@@ -89,7 +89,11 @@ export interface CreateCommentVariables {
  * `optimistic-` id, and a new open root bumps the outline row's badge; both roll back on error.
  * Always refetches the node's threads and the outline afterwards for the server's view.
  */
-export function useCreateCommentMutation(projectId: string, nodeId: string) {
+export function useCreateCommentMutation(
+  projectId: string,
+  nodeId: string,
+  { optimistic = true }: { optimistic?: boolean } = {},
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: CreateCommentVariables) =>
@@ -104,6 +108,8 @@ export function useCreateCommentMutation(projectId: string, nodeId: string) {
         }),
       ),
     onMutate: async (body) => {
+      // A composer that stays open until the server answers has no use for a pretend row.
+      if (!optimistic) return { previous: undefined, bumped: 0 };
       const previous = await snapshot(queryClient, projectId, nodeId);
       const me = queryClient.getQueryData<AuthUser>(authKeys.me());
       const now = new Date().toISOString();
@@ -148,7 +154,7 @@ export function useCreateCommentMutation(projectId: string, nodeId: string) {
       return { previous, bumped };
     },
     onError: (_error, _body, context) => {
-      if (!context) return;
+      if (!context || !optimistic) return;
       queryClient.setQueryData(projectKeys.nodeComments(projectId, nodeId), context.previous);
       bumpOpenCount(queryClient, projectId, nodeId, -context.bumped);
     },
@@ -156,8 +162,12 @@ export function useCreateCommentMutation(projectId: string, nodeId: string) {
   });
 }
 
-/** Edits a message's body (author only). Optimistic; marks it edited. */
-export function useUpdateCommentMutation(projectId: string, nodeId: string) {
+/** Edits a message's body (author only). Optimistic by default; marks it edited. */
+export function useUpdateCommentMutation(
+  projectId: string,
+  nodeId: string,
+  { optimistic = true }: { optimistic?: boolean } = {},
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ commentId, bodyMarkdown }: { commentId: string; bodyMarkdown: string }) =>
@@ -168,6 +178,7 @@ export function useUpdateCommentMutation(projectId: string, nodeId: string) {
         }),
       ),
     onMutate: async ({ commentId, bodyMarkdown }) => {
+      if (!optimistic) return { previous: undefined };
       const previous = await snapshot(queryClient, projectId, nodeId);
       const now = new Date().toISOString();
       patchComments(queryClient, projectId, nodeId, (items) =>
@@ -178,7 +189,7 @@ export function useUpdateCommentMutation(projectId: string, nodeId: string) {
       return { previous };
     },
     onError: (_error, _vars, context) => {
-      if (context)
+      if (context && optimistic)
         queryClient.setQueryData(projectKeys.nodeComments(projectId, nodeId), context.previous);
     },
     onSettled: () => invalidateAfterWrite(queryClient, projectId, nodeId),

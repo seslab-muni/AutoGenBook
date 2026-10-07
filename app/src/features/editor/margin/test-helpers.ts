@@ -46,6 +46,7 @@ export function makeThread(
     status: root.status,
     range,
     orphaned: !sectionLevel && range === null,
+    pending: false,
     sectionLevel,
     quote: options.quote ?? root.anchor?.quote ?? '',
   };

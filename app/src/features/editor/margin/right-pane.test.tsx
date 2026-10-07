@@ -77,7 +77,7 @@ describe('right column', () => {
   it('hides the pane from its own button', async () => {
     const user = userEvent.setup();
     renderColumn();
-    await user.click(screen.getByRole('button', { name: 'Hide copilot pane' }));
+    await user.click(screen.getByRole('button', { name: 'Close right pane' }));
     expect(useUiStore.getState().copilotOpen).toBe(false);
   });
 });
