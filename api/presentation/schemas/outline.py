@@ -43,6 +43,11 @@ class OutlineNode(BaseSchema):
     rag_citations: list[dict] = Field(default_factory=list)
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
+    # Issue #182: the section's latest reviewer verdict, written by the graph
+    # import: `{okToKeep, issueCount, suggestedEdits[], retrievalQueries[],
+    # runId, reviewedAt}`; null = never reviewed. Read-only. The individual
+    # issues are `kind=review` comments.
+    review_summary: dict | None = None
     structure_locked: bool
     # Issue #113: keep this leaf's `contentMarkdown` as-is across full runs
     # (it is still used as context for the sections generated after it).

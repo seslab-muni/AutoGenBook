@@ -40,6 +40,7 @@ def _to_domain(record: OutlineNodeRecord) -> OutlineNode:
             float(record.reviewer_score) if record.reviewer_score is not None else None
         ),
         reviewer_notes=record.reviewer_notes,
+        review_summary=dict(record.review_summary) if record.review_summary else None,
         structure_locked=record.structure_locked,
         content_locked=record.content_locked,
         created_at=_as_aware_utc(record.created_at),
@@ -72,6 +73,7 @@ _ALL_MUTABLE_FIELDS = (
     "rag_citations",
     "reviewer_score",
     "reviewer_notes",
+    "review_summary",
     "structure_locked",
     "content_locked",
     "source_scope",
@@ -163,9 +165,40 @@ class SqlAlchemyOutlineRepository:
         await self._session.refresh(record)
         return _to_domain(record)
 
+    async def commit(self) -> None:
+        await self._session.commit()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
+
+    async def get_for_update(self, node_id: uuid.UUID) -> OutlineNode | None:
+        """Like `get`, but takes a row lock (`FOR UPDATE`; a no-op on SQLite)
+        for the rest of the transaction and reads the current row, so a writer
+        that must base its change on the node's content (accepting a
+        suggestion) cannot interleave with another one."""
+        record = (
+            await self._session.execute(
+                select(OutlineNodeRecord)
+                .where(OutlineNodeRecord.id == node_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if record is None or record.deleted_at is not None:
+            return None
+        return _to_domain(record)
+
     async def update(
-        self, node: OutlineNode, *, fields: Sequence[str] | None = None
+        self,
+        node: OutlineNode,
+        *,
+        fields: Sequence[str] | None = None,
+        commit: bool = True,
     ) -> OutlineNode:
+        """Write `node` (only `fields`, if given). `commit=False` leaves the
+        transaction open (flushed) so the caller can make further writes -
+        card re-anchoring, review rows - atomic with this one and commit via
+        `commit()`."""
         await self._assert_live_parent(node.parent_id)
         record = await self._session.get(OutlineNodeRecord, node.id)
         if record is None:
@@ -176,7 +209,10 @@ class SqlAlchemyOutlineRepository:
             # a confusing `AttributeError` instead; issue #62).
             raise NotFound(f"outline node {node.id} does not exist")
         _apply_domain_to_record(node, record, fields=fields)
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
         await self._session.refresh(record)
         return _to_domain(record)
 

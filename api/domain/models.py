@@ -213,6 +213,11 @@ class OutlineNode:
     # `OutlineService` from one grouped `node_comments` query per request.
     open_comment_count: int = 0
     pending_suggestion_count: int = 0
+    # Issue #182: the latest reviewer verdict for this section, set by the
+    # graph import (`api.application.review_import`): `{okToKeep, issueCount,
+    # suggestedEdits[], retrievalQueries[], runId, reviewedAt}`; None = never
+    # reviewed. Replaced wholesale by every new review of the node.
+    review_summary: dict | None = None
 
 
 class CommentKind(str, enum.Enum):
@@ -272,6 +277,29 @@ class NodeComment:
     edited_at: datetime | None = None
     # Derived, never persisted - joined in from `users.display_name`.
     author_name: str | None = None
+
+
+@dataclass
+class RevisionEvent:
+    """One progress event of a revision job (stages `retrieve`, `revise`,
+    `diff` from `engine.revise`); `seq` is 1-based per suggestion."""
+
+    seq: int
+    ts: datetime
+    level: str
+    stage: str
+    message: str
+    payload: dict | None = None
+
+
+@dataclass
+class RevisionJob:
+    """Liveness record of a running revision (see `RevisionJobRecord`)."""
+
+    comment_id: uuid.UUID
+    owner: str
+    heartbeat_at: datetime
+    cancel_requested: bool = False
 
 
 class FileKind(str, enum.Enum):

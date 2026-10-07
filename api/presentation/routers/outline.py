@@ -48,6 +48,7 @@ def to_schema(node: OutlineNodeDomain) -> OutlineNode:
         rag_citations=node.rag_citations,
         reviewer_score=node.reviewer_score,
         reviewer_notes=node.reviewer_notes,
+        review_summary=node.review_summary,
         structure_locked=node.structure_locked,
         content_locked=node.content_locked,
         source_scope=node.source_scope,

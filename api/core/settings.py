@@ -132,6 +132,25 @@ class Settings(BaseSettings):
     # whatever the deployment sets.
     llm_user_key_concurrency: int = Field(default=4, ge=1, alias="LLM_USER_KEY_CONCURRENCY")
 
+    # Issue #182: in-process copilot revisions (`api/application/revisions.py`).
+    # At most one running revision per outline node (enforced by a unique
+    # index); these bound the rest.
+    revision_max_per_user: int = Field(default=3, ge=1, alias="REVISION_MAX_PER_USER")
+    # Wall-clock limit of one revision job (the model call plus retrieval and
+    # diffing); the job fails with code `timeout` beyond it.
+    revision_timeout_s: float = Field(default=300.0, gt=0, alias="REVISION_TIMEOUT_S")
+    revision_max_instruction_chars: int = Field(
+        default=4000, ge=1, alias="REVISION_MAX_INSTRUCTION_CHARS"
+    )
+    # Concurrent LLM requests the shared revision client pool allows per
+    # endpoint+key (the engine's adaptive limiter backs off on 429 on top).
+    revision_llm_concurrency: int = Field(default=4, ge=1, alias="REVISION_LLM_CONCURRENCY")
+    # A job's owner refreshes its heartbeat every `revision_heartbeat_s`; any
+    # replica fails a `running` suggestion whose heartbeat is older than
+    # `revision_stale_s` (its process died) with code `interrupted`.
+    revision_heartbeat_s: float = Field(default=10.0, gt=0, alias="REVISION_HEARTBEAT_S")
+    revision_stale_s: float = Field(default=45.0, gt=0, alias="REVISION_STALE_S")
+
     @field_validator("llm_key_encryption_key", mode="before")
     @classmethod
     def _validate_llm_key_encryption_key(cls, value: object) -> str | None:

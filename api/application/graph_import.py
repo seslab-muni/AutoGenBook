@@ -27,6 +27,13 @@ which is exactly the mismatch that check looks for. A freshly created node
 that's never been part of an import has no run to derive a key from, so it
 carries `cli_key=None` until one is assigned here.
 
+Issue #182: margin cards follow every content write made here. Whenever an
+imported node's `content_markdown` changes, its live cards are re-anchored
+(`api.application.reanchor.reanchor_node_cards`) and its reviewer issues are
+synced as `kind=review` rows (`api.application.review_import`), in the same
+transaction as the content write; a failure in the card work is logged and the
+content is written without it. Both need the optional `comment_repository`.
+
 A CLI key present in `structure_graph.json` but absent from that recomputed
 map is a node the CLI subdivided on its own (`book_pipeline.py`'s
 `subdivide_graph`, always allowed for unlocked nodes) - inserted here as a
@@ -46,9 +53,11 @@ from typing import Any, Literal
 
 from starlette.concurrency import run_in_threadpool
 
+from api.application.reanchor import reanchor_node_cards
+from api.application.review_import import ParsedIssue, parse_review, sync_node_reviews
 from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project, SourceStatus
 from api.domain.outline import assign_positions, word_budget_for
-from api.domain.ports import OutlineRepository, SourceRepository
+from api.domain.ports import CommentRepository, OutlineRepository, SourceRepository
 from api.infrastructure.cli.book_command import OUT_DIRNAME
 
 _CITATION_TOKEN_RE = re.compile(r"\[([A-Za-z0-9_.:-]+)\]")
@@ -125,6 +134,17 @@ def _format_review_issue(issue: Any) -> str:
     return f"[{severity}] {issue_type}: {description} → {required_fix}"
 
 
+async def _read_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | None:
+    """The section's review file as the engine wrote it (`<key>_revised.json`
+    preferred over `<key>.json`), or None when there is none."""
+    reviews_dir = out_dir / "section_reviews"
+    for name in (f"{cli_key}_revised.json", f"{cli_key}.json"):
+        data = await _load_json(reviews_dir / name)
+        if isinstance(data, dict):
+            return data
+    return None
+
+
 async def _load_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | None:
     """Read back a section's reviewer output
     (`autogenbook/schemas/book_review.py:BookSectionReviewerOutput`):
@@ -135,17 +155,14 @@ async def _load_section_review(out_dir: Path, cli_key: str) -> dict[str, Any] | 
     would be an arbitrary heuristic with no basis in what the CLI actually
     reports, and it's simpler to add later once there's a real signal for it
     than to walk back a guessed one every existing row already has."""
-    reviews_dir = out_dir / "section_reviews"
-    for name in (f"{cli_key}_revised.json", f"{cli_key}.json"):
-        data = await _load_json(reviews_dir / name)
-        if data is None:
-            continue
-        result: dict[str, Any] = {}
-        issues = data.get("issues")
-        if isinstance(issues, list) and issues:
-            result["notes"] = "\n".join(_format_review_issue(issue) for issue in issues)
-        return result or None
-    return None
+    data = await _read_section_review(out_dir, cli_key)
+    if data is None:
+        return None
+    result: dict[str, Any] = {}
+    issues = data.get("issues")
+    if isinstance(issues, list) and issues:
+        result["notes"] = "\n".join(_format_review_issue(issue) for issue in issues)
+    return result or None
 
 
 def _read_section_sync(content_path: Path) -> str | None:
@@ -155,12 +172,19 @@ def _read_section_sync(content_path: Path) -> str | None:
 
 
 async def _leaf_content_changes(
-    out_dir: Path, cli_key: str, kb_index: dict[str, Any] | None
-) -> dict[str, Any]:
+    out_dir: Path,
+    cli_key: str,
+    kb_index: dict[str, Any] | None,
+    run_id: uuid.UUID | None = None,
+) -> tuple[dict[str, Any], list[ParsedIssue] | None]:
+    """`(column changes, reviewer issues)` of one leaf: the section text and
+    everything derived from it, and the parsed `kind=review` issues of its
+    review file (None when it has none - an existing review is then left
+    alone)."""
     content_path = out_dir / "sections" / f"{cli_key}.md"
     content = await run_in_threadpool(_read_section_sync, content_path)
     if content is None:
-        return {}
+        return {}, None
     changes: dict[str, Any] = {
         "content_markdown": content,
         "actual_words": len(content.split()),
@@ -171,15 +195,21 @@ async def _leaf_content_changes(
     review = await _load_section_review(out_dir, cli_key)
     if review and "notes" in review:
         # `reviewer_score` is deliberately never set from this - see
-        # `_load_section_review`'s docstring (issue #81).
+        # `_load_section_review`'s docstring (issue #81). Kept populated for
+        # the legacy Review tab; the cards below are its successor.
         changes["reviewer_notes"] = review["notes"]
-    return changes
+    issues: list[ParsedIssue] | None = None
+    review_data = await _read_section_review(out_dir, cli_key)
+    if review_data is not None:
+        issues, summary = await run_in_threadpool(parse_review, review_data, content, run_id)
+        changes["review_summary"] = summary
+    return changes, issues
 
 
 async def _matched_node_changes(
     node: OutlineNode, cli_node: dict[str, Any], out_dir: Path, cli_key: str,
-    kb_index: dict[str, Any] | None,
-) -> dict[str, Any]:
+    kb_index: dict[str, Any] | None, run_id: uuid.UUID | None = None,
+) -> tuple[dict[str, Any], list[ParsedIssue] | None]:
     changes: dict[str, Any] = {}
     cli_title = str(cli_node.get("title", "")).strip()
     if cli_title and cli_title != node.title:
@@ -220,15 +250,17 @@ async def _matched_node_changes(
                 node.id,
                 cli_key,
             )
-        return changes
-    changes.update(await _leaf_content_changes(out_dir, cli_key, kb_index))
-    return changes
+        return changes, None
+    leaf_changes, issues = await _leaf_content_changes(out_dir, cli_key, kb_index, run_id)
+    changes.update(leaf_changes)
+    return changes, issues
 
 
 async def _new_node(
     project: Project, cli_node: dict[str, Any], parent_id: uuid.UUID | None, cli_key: str,
     out_dir: Path, kb_index: dict[str, Any] | None, order_index: int, now: datetime,
-) -> OutlineNode:
+    run_id: uuid.UUID | None = None,
+) -> tuple[OutlineNode, list[ParsedIssue] | None]:
     title = str(cli_node.get("title", "")).strip() or cli_key
     summary = str(cli_node.get("summary", "")).strip()
     cli_pages = cli_node.get("n_pages")
@@ -265,8 +297,41 @@ async def _new_node(
         # persistence story, issue #62).
         cli_key=cli_key,
     )
-    changes = await _leaf_content_changes(out_dir, cli_key, kb_index)
-    return dataclass_replace(node, **changes) if changes else node
+    changes, issues = await _leaf_content_changes(out_dir, cli_key, kb_index, run_id)
+    return (dataclass_replace(node, **changes) if changes else node), issues
+
+
+async def _write_node(
+    outline_repository: OutlineRepository,
+    comment_repository: CommentRepository | None,
+    updated: OutlineNode,
+    *,
+    content_changed: bool,
+    issues: list[ParsedIssue] | None,
+) -> None:
+    """Write an imported node and, in the same transaction, re-anchor its
+    cards (when its text changed) and sync its reviewer issues. A failure of
+    the card work must not lose the import: it is logged and the node is
+    written on its own."""
+    if comment_repository is None or not (content_changed or issues is not None):
+        await outline_repository.update(updated)
+        return
+    try:
+        await outline_repository.update(updated, commit=False)
+        if content_changed:
+            await reanchor_node_cards(comment_repository, updated.id, updated.content_markdown)
+        if issues is not None:
+            await sync_node_reviews(
+                comment_repository,
+                project_id=updated.project_id,
+                node_id=updated.id,
+                issues=issues,
+            )
+        await outline_repository.commit()
+    except Exception:  # noqa: BLE001 - cards are best-effort, the content is not
+        logger.exception("syncing the margin cards of outline node %s failed", updated.id)
+        await outline_repository.rollback()
+        await outline_repository.update(updated)
 
 
 async def _sync_source_chunk_counts(
@@ -293,6 +358,8 @@ async def import_graph(
     source_repository: SourceRepository,
     *,
     outline_mode: Literal["project", "generate"] = "project",
+    comment_repository: CommentRepository | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> None:
     out_dir = work_dir / OUT_DIRNAME
     data = await _load_json(out_dir / "structure_graph.json")
@@ -312,11 +379,13 @@ async def import_graph(
 
     if outline_mode == "generate":
         await _replace_outline_from_cli_graph(
-            project, nodes_json, children_by_parent, out_dir, kb_index, outline_repository, now
+            project, nodes_json, children_by_parent, out_dir, kb_index, outline_repository, now,
+            comment_repository, run_id,
         )
     else:
         await _merge_cli_graph_into_outline(
-            project, nodes_json, children_by_parent, out_dir, kb_index, outline_repository, now
+            project, nodes_json, children_by_parent, out_dir, kb_index, outline_repository, now,
+            comment_repository, run_id,
         )
 
     if kb_index is not None:
@@ -331,6 +400,8 @@ async def _merge_cli_graph_into_outline(
     kb_index: dict[str, Any] | None,
     outline_repository: OutlineRepository,
     now: datetime,
+    comment_repository: CommentRepository | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> None:
     """`outline="project"`: the CLI structured this run from the project's
     own outline (`GenerationService._prepare_work_dir` only writes
@@ -351,20 +422,33 @@ async def _merge_cli_graph_into_outline(
         cli_node = nodes_json.get(cli_key) or {}
         node = by_cli_key.get(cli_key)
         if node is not None:
-            changes = await _matched_node_changes(node, cli_node, out_dir, cli_key, kb_index)
+            changes, issues = await _matched_node_changes(
+                node, cli_node, out_dir, cli_key, kb_index, run_id
+            )
             if changes:
-                await outline_repository.update(
-                    dataclass_replace(node, **changes, updated_at=now)
+                await _write_node(
+                    outline_repository,
+                    comment_repository,
+                    dataclass_replace(node, **changes, updated_at=now),
+                    content_changed=(
+                        "content_markdown" in changes
+                        and changes["content_markdown"] != node.content_markdown
+                    ),
+                    issues=issues,
                 )
             node_id = node.id
         else:
             order_index = next_order_by_parent.get(parent_id, 0)
             next_order_by_parent[parent_id] = order_index + 1
-            new_node = await _new_node(
-                project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now
+            new_node, issues = await _new_node(
+                project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now, run_id
             )
             created = await outline_repository.add(new_node)
             node_id = created.id
+            if comment_repository is not None and issues is not None:
+                await _write_new_node_reviews(
+                    outline_repository, comment_repository, created, issues
+                )
 
         for child_key in children_by_parent.get(cli_key, []):
             await walk(child_key, node_id)
@@ -382,6 +466,8 @@ async def _replace_outline_from_cli_graph(
     kb_index: dict[str, Any] | None,
     outline_repository: OutlineRepository,
     now: datetime,
+    comment_repository: CommentRepository | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> None:
     """`outline="generate"`: the CLI structured this run entirely on its
     own (no project outline was ever sent to it), so its keys have no
@@ -392,13 +478,16 @@ async def _replace_outline_from_cli_graph(
     /outline` already uses, so the previous outline stays recoverable in
     the database rather than merged/clobbered in place."""
     flat_nodes: list[OutlineNode] = []
+    reviewed: list[tuple[OutlineNode, list[ParsedIssue]]] = []
 
     async def build(cli_key: str, parent_id: uuid.UUID | None, order_index: int) -> None:
         cli_node = nodes_json.get(cli_key) or {}
-        node = await _new_node(
-            project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now
+        node, issues = await _new_node(
+            project, cli_node, parent_id, cli_key, out_dir, kb_index, order_index, now, run_id
         )
         flat_nodes.append(node)
+        if issues is not None:
+            reviewed.append((node, issues))
         for index, child_key in enumerate(children_by_parent.get(cli_key, [])):
             await build(child_key, node.id, index)
 
@@ -406,6 +495,27 @@ async def _replace_outline_from_cli_graph(
         await build(root_key, None, index)
 
     await outline_repository.replace_all(project.id, flat_nodes)
+    if comment_repository is not None:
+        for node, issues in reviewed:
+            await _write_new_node_reviews(outline_repository, comment_repository, node, issues)
+
+
+async def _write_new_node_reviews(
+    outline_repository: OutlineRepository,
+    comment_repository: CommentRepository,
+    node: OutlineNode,
+    issues: list[ParsedIssue],
+) -> None:
+    """Reviewer issues of a node created by this import (no cards to
+    re-anchor; none to merge with)."""
+    try:
+        await sync_node_reviews(
+            comment_repository, project_id=node.project_id, node_id=node.id, issues=issues
+        )
+        await outline_repository.commit()
+    except Exception:  # noqa: BLE001 - cards are best-effort
+        logger.exception("importing the reviewer issues of outline node %s failed", node.id)
+        await outline_repository.rollback()
 
 
 async def import_single_node(
@@ -413,6 +523,9 @@ async def import_single_node(
     work_dir: Path,
     node_id: uuid.UUID,
     outline_repository: OutlineRepository,
+    *,
+    comment_repository: CommentRepository | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> bool:
     """Sync-back for a succeeded `regenerate_section` run (issue #11) - unlike
     `import_graph`, touches only the one node that was regenerated. A
@@ -446,10 +559,14 @@ async def import_single_node(
         return False
 
     kb_index = await _load_json(out_dir / "kb_sources.json")
-    changes = await _leaf_content_changes(out_dir, node.cli_key, kb_index)
+    changes, issues = await _leaf_content_changes(out_dir, node.cli_key, kb_index, run_id)
     if not changes:
         return False
-    await outline_repository.update(
-        dataclass_replace(node, **changes, updated_at=datetime.now(timezone.utc))
+    await _write_node(
+        outline_repository,
+        comment_repository,
+        dataclass_replace(node, **changes, updated_at=datetime.now(timezone.utc)),
+        content_changed=changes.get("content_markdown") != node.content_markdown,
+        issues=issues,
     )
     return True

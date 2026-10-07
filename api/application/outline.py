@@ -5,6 +5,7 @@ from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
+from api.application.reanchor import reanchor_node_cards
 from api.core.errors import Conflict, NotFound, ValidationFailed
 from api.domain.models import MathLevel, NodeStatus, OutlineNode, Project, SourceScope
 from api.domain.outline import (
@@ -374,7 +375,27 @@ class OutlineService:
         # debounced content autosave racing a `structureLocked`/`status`
         # toggle) would otherwise each silently revert the other's change
         # with their own stale copy of it (issue #56).
-        await self._outline_repository.update(updated, fields=tuple(changes.keys()))
+        content_changed = (
+            "content_markdown" in changes
+            and (changes["content_markdown"] or "") != (node.content_markdown or "")
+            and self._comment_repository is not None
+        )
+        if content_changed:
+            # The cards beside the text follow it (issue #182): re-anchored in
+            # the same transaction as the content write.
+            await self._outline_repository.update(
+                updated, fields=tuple(changes.keys()), commit=False
+            )
+            try:
+                await reanchor_node_cards(
+                    self._comment_repository, node_id, changes["content_markdown"] or ""
+                )
+            except BaseException:
+                await self._outline_repository.rollback()
+                raise
+            await self._outline_repository.commit()
+        else:
+            await self._outline_repository.update(updated, fields=tuple(changes.keys()))
 
         if touches_position:
             if parent_changed:
@@ -511,6 +532,7 @@ class OutlineService:
                     # and the target project has no run of its own yet to
                     # have derived one from (issue #62).
                     cli_key=None,
+                    review_summary=None,
                     source_scope=copied_scope,
                     source_ids=copied_source_ids,
                     created_at=now,

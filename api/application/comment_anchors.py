@@ -9,68 +9,50 @@ An anchor is a W3C text-quote selector over a section's Markdown source
 exclusive; both `None` = orphaned. `prefix`/`suffix` are up to `CONTEXT_LEN`
 code points of surrounding text.
 
-`resolve_anchor` is the single hook that decides where an anchor points in a
-given content. This track ships the cheap strategy (client offsets if they
-verify, else a unique exact match, else orphaned). The full resolver (exact ->
-whitespace-normalised -> fuzzy near the stored offset, `engine/util/anchors.py`)
-replaces the body of this function later; callers: `CommentService.create`
-today. Contract for the full resolver: on a normalised/fuzzy re-anchor the
-stored `quote` is rewritten to the text actually matched.
+The resolver is the engine's (`engine/util/anchors.py`, ENGINE_REWRITE.md
+4.9): stored offsets if they still hold the quote, else exact -> whitespace-
+normalised -> NFC -> bounded fuzzy matching near the stored offset, else
+orphaned. A false-positive match is worse than an orphan. On a normalised or
+fuzzy re-anchor the returned `quote` is the text actually matched, so
+`content[start:end] == quote` always holds for a resolved anchor. Client
+offsets on create are only a hint; the server resolves.
+
+`api.application.reanchor` re-resolves all the live cards of a node when its
+text changes; `resolve_anchors` is the batch (CPU-bound, thread-friendly)
+entry point it uses.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-CONTEXT_LEN = 32
+from engine.util.anchors import CONTEXT as CONTEXT_LEN
+from engine.util.anchors import resolve_anchor_detailed
 
-
-def _with_context(content: str, quote: str, start: int, end: int) -> dict[str, Any]:
-    return {
-        "quote": quote,
-        "prefix": content[max(0, start - CONTEXT_LEN) : start],
-        "suffix": content[end : end + CONTEXT_LEN],
-        "start": start,
-        "end": end,
-    }
-
-
-def _find_all(content: str, quote: str) -> list[int]:
-    found, pos = [], content.find(quote)
-    while pos != -1:
-        found.append(pos)
-        pos = content.find(quote, pos + 1)
-    return found
+# Levels at which a match is trusted without question (the same set
+# `engine.revise` accepts for a range revision).
+ACCEPTED_LEVELS = ("stored", "exact", "whitespace")
 
 
 def resolve_anchor(content: str, anchor: Mapping[str, Any]) -> dict[str, Any]:
     """Return `anchor` re-resolved against `content`: `start`/`end` set (and
     `prefix`/`suffix` refreshed from `content`) when the quote was found, both
     `None` (original prefix/suffix kept) when it was not."""
-    quote = anchor["quote"]
-    start, end = anchor.get("start"), anchor.get("end")
-    if start is not None and end is not None and content[start:end] == quote:
-        return _with_context(content, quote, start, end)
-    matches = _find_all(content, quote)
-    if len(matches) > 1:
-        # Several exact matches: keep those whose surroundings agree with the
-        # stored prefix/suffix (only when there is context to compare).
-        prefix, suffix = anchor.get("prefix", ""), anchor.get("suffix", "")
-        if prefix or suffix:
-            matches = [
-                m
-                for m in matches
-                if content.endswith(prefix, 0, m) and content.startswith(suffix, m + len(quote))
-            ]
-    if len(matches) == 1:
-        return _with_context(content, quote, matches[0], matches[0] + len(quote))
-    return {
-        "quote": quote,
-        "prefix": anchor.get("prefix", ""),
-        "suffix": anchor.get("suffix", ""),
-        "start": None,
-        "end": None,
-    }
+    return resolve_anchor_detailed(content, dict(anchor))[0]
+
+
+def resolve_anchor_level(content: str, anchor: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    """`resolve_anchor` plus the engine's match level (`stored`, `exact`,
+    `whitespace`, `tolerant`, `fuzzy` or `orphan`)."""
+    return resolve_anchor_detailed(content, dict(anchor))
+
+
+def resolve_anchors(
+    content: str, anchors: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """`resolve_anchor` for many anchors against the same text. Pure CPU, no
+    I/O: callers with large inputs run it in a worker thread."""
+    return [resolve_anchor(content, anchor) for anchor in anchors]
 
 
 def is_resolved(anchor: Mapping[str, Any]) -> bool:
