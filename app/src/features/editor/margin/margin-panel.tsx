@@ -242,10 +242,12 @@ export function MarginPanel({
   }, [geometry, extent]);
 
   // ---- focus: reveal the focused card in the margin, its text in the pane ----------------
-  const threadById = useMemo(
-    () => new Map(threads.map((thread) => [thread.id, thread])),
-    [threads],
-  );
+  // Read through a ref so `handleFocusCard` keeps its identity while typing re-creates `threads`
+  // (a new identity would re-render every card).
+  const threadsRef = useRef(threads);
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
   useEffect(() => {
     if (!focusedId) return;
     const element = elements.current.get(focusedId);
@@ -258,15 +260,15 @@ export function MarginPanel({
         lane.scrollTop = bottom - lane.clientHeight + 12;
       }
     }
-  }, [focusedId, tops]);
+  }, [focusedId]);
 
   const handleFocusCard = useCallback(
     (id: string) => {
       focus(id);
-      const thread = threadById.get(id);
+      const thread = threadsRef.current.find((candidate) => candidate.id === id);
       if (thread?.range) geometry?.reveal(id, thread.range.start);
     },
-    [focus, geometry, threadById],
+    [focus, geometry],
   );
 
   const empty = !loading && !error && visible.length === 0 && !composer;
