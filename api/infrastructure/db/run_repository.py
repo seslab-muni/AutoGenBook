@@ -9,7 +9,7 @@ from sqlalchemy import case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.errors import NotFound
-from api.domain.models import Run, RunEvent, RunOptions, RunStatus
+from api.domain.models import Run, RunEvent, RunKind, RunOptions, RunStatus
 from api.infrastructure.db.models import RunEventRecord, RunRecord, UserRecord
 
 _ACTIVE_STATUSES = (RunStatus.queued, RunStatus.running)
@@ -182,10 +182,13 @@ class SqlAlchemyRunRepository:
         offset: int,
         *,
         statuses: Sequence[RunStatus] | None = None,
+        kinds: Sequence[RunKind] | None = None,
     ) -> tuple[list[Run], int]:
         conditions = [RunRecord.project_id == project_id]
         if statuses:
             conditions.append(RunRecord.status.in_(statuses))
+        if kinds:
+            conditions.append(RunRecord.kind.in_(kinds))
         total = await self._session.scalar(
             select(func.count()).select_from(RunRecord).where(*conditions)
         )

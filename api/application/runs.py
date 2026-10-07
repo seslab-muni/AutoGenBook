@@ -52,6 +52,7 @@ from api.domain.models import (
 )
 from api.domain.outline import OutlineTree, assign_positions, build_tree
 from api.domain.ports import (
+    CommentRepository,
     FileRepository,
     FileStorage,
     OutlineRepository,
@@ -1011,6 +1012,7 @@ class GenerationService:
         drain_poll_interval_s: float = _DRAIN_POLL_INTERVAL_S,
         worker_id: str | None = None,
         user_repository: UserRepository | None = None,
+        comment_repository: CommentRepository | None = None,
     ) -> None:
         self._runs = run_repository
         self._events = run_event_repository
@@ -1043,6 +1045,9 @@ class GenerationService:
         self._cli_started = False
         # Resolves `run.started_by` to their stored per-user LLM key (per-user LLM key).
         self._users = user_repository
+        # Issue #182: reviewer issues become `review` cards and existing cards
+        # follow rewritten text (`graph_import`); None = cards are skipped.
+        self._comments = comment_repository
 
     async def _resolve_user_llm_key(self, run: Run) -> tuple[str, str, int] | None:
         """`(plain key, last4, concurrency)` for the user who started `run`, or `None` when the
@@ -1862,6 +1867,8 @@ class GenerationService:
                 self._outline,
                 self._sources,
                 outline_mode=run.options.outline,
+                comment_repository=self._comments,
+                run_id=run.id,
             )
             project.last_run_id = run.id
             project.updated_at = datetime.now(timezone.utc)
@@ -1874,7 +1881,12 @@ class GenerationService:
             return
         try:
             changed = await graph_import.import_single_node(
-                project, Path(run.work_dir), run.target_node_id, self._outline
+                project,
+                Path(run.work_dir),
+                run.target_node_id,
+                self._outline,
+                comment_repository=self._comments,
+                run_id=run.id,
             )
             if not changed:
                 # A "succeeded" run that produced no content change (e.g.

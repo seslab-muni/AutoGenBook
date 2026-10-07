@@ -115,10 +115,27 @@ class SqlAlchemyCommentRepository:
             merged.extend(sorted(by_thread[root.id], key=lambda c: (c.created_at, c.id)))
         return merged
 
-    async def get(self, comment_id: uuid.UUID) -> NodeComment | None:
+    async def get(
+        self, comment_id: uuid.UUID, *, include_deleted: bool = False
+    ) -> NodeComment | None:
+        """One card, read fresh from the database (an instance already in the
+        session is refreshed). `include_deleted` also returns a soft-deleted
+        card (and one of a deleted node/project) - used to finish the job of a
+        suggestion that was deleted while running."""
+        if include_deleted:
+            record = (
+                await self._session.execute(
+                    select(NodeCommentRecord)
+                    .where(NodeCommentRecord.id == comment_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            return _to_domain(record) if record is not None else None
         row = (
             await self._session.execute(
-                self._select().where(NodeCommentRecord.id == comment_id)
+                self._select()
+                .where(NodeCommentRecord.id == comment_id)
+                .execution_options(populate_existing=True)
             )
         ).first()
         return _to_domain(row[0], row[1]) if row is not None else None
@@ -155,7 +172,13 @@ class SqlAlchemyCommentRepository:
         roots = [_to_domain(record, name) for record, name in rows]
         return await self._with_replies(roots), int(total or 0)
 
-    async def add(self, comment: NodeComment) -> NodeComment:
+    async def commit(self) -> None:
+        await self._session.commit()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
+
+    async def add(self, comment: NodeComment, *, commit: bool = True) -> NodeComment:
         """Insert. A reply first locks its thread root (`FOR UPDATE`, a no-op
         on SQLite) and re-checks it is still live in this transaction, so a
         concurrent thread delete can't leave a live reply under a deleted
@@ -197,10 +220,15 @@ class SqlAlchemyCommentRepository:
             updated_at=comment.updated_at,
         )
         self._session.add(record)
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
         return _to_domain(record, comment.author_name)
 
-    async def update(self, comment: NodeComment, *, fields: Sequence[str]) -> NodeComment:
+    async def update(
+        self, comment: NodeComment, *, fields: Sequence[str], commit: bool = True
+    ) -> NodeComment:
         record = await self._session.get(NodeCommentRecord, comment.id)
         if record is None or record.deleted_at is not None:
             raise NotFound(f"comment {comment.id} does not exist")
@@ -210,11 +238,247 @@ class SqlAlchemyCommentRepository:
             value = getattr(comment, name)
             setattr(record, name, value.value if isinstance(value, CommentStatus) else value)
         record.updated_at = comment.updated_at
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
         updated = await self.get(comment.id)
         if updated is None:
             raise NotFound(f"comment {comment.id} does not exist")
         return updated
+
+    # ------------------------------------------------------------ bulk / CAS
+    # Used by re-anchoring, the reviewer import and the revision service. None
+    # of these commit unless asked to: their callers make several writes (and
+    # a node's content write) one transaction.
+
+    async def list_anchored_for_node(self, node_id: uuid.UUID) -> list[NodeComment]:
+        """Every live row of the node whose anchor must follow its text when
+        that changes, in one query: root `comment`/`review` rows with an
+        anchor (any status - a resolved card keeps its place) and
+        `suggestion` rows still `running`/`pending` (at any depth: a
+        suggestion may sit inside a comment thread)."""
+        active = [s.value for s in SUGGESTION_ACTIVE_STATUSES]
+        statement = self._select().where(
+            NodeCommentRecord.node_id == node_id,
+            NodeCommentRecord.anchor.is_not(None),
+            (
+                (
+                    NodeCommentRecord.kind.in_(
+                        [CommentKind.COMMENT.value, CommentKind.REVIEW.value]
+                    )
+                    & NodeCommentRecord.parent_id.is_(None)
+                )
+                | (
+                    (NodeCommentRecord.kind == CommentKind.SUGGESTION.value)
+                    & NodeCommentRecord.status.in_(active)
+                )
+            ),
+        )
+        rows = (await self._session.execute(statement)).all()
+        # A JSON `null` stored as a value (not SQL NULL) is no anchor either.
+        return [_to_domain(record, name) for record, name in rows if record.anchor]
+
+    async def update_anchors(
+        self,
+        updates: Sequence[tuple[uuid.UUID, dict | None, CommentStatus | None]],
+        *,
+        commit: bool = False,
+    ) -> None:
+        """Bulk-write `(id, anchor, status)`; a `None` status leaves the
+        status alone. One UPDATE per distinct change set, keyed by primary
+        key (executemany)."""
+        now = datetime.now(timezone.utc)
+        with_status = [
+            {"id": i, "anchor": a, "status": s.value, "updated_at": now}
+            for i, a, s in updates
+            if s is not None
+        ]
+        anchor_only = [
+            {"id": i, "anchor": a, "updated_at": now} for i, a, s in updates if s is None
+        ]
+        for batch in (with_status, anchor_only):
+            if batch:
+                await self._session.execute(update(NodeCommentRecord), batch)
+        if commit:
+            await self._session.commit()
+
+    async def bulk_update(self, rows: Sequence[dict]) -> None:
+        """Write `anchor`/`status`/`payload` of many rows by primary key
+        (`{"id": ..., "anchor": ..., "status": "open", "payload": {...}}`; every
+        dict needs the same keys). No commit."""
+        if not rows:
+            return
+        now = datetime.now(timezone.utc)
+        await self._session.execute(
+            update(NodeCommentRecord), [{**row, "updated_at": now} for row in rows]
+        )
+
+    async def list_reviews_for_node(
+        self, node_id: uuid.UUID
+    ) -> tuple[list[NodeComment], dict[uuid.UUID, int]]:
+        """Every `review` root row of the node *including soft-deleted ones*
+        (the importer must not resurrect an issue the user deleted), plus the
+        number of live replies per thread."""
+        statement = (
+            select(NodeCommentRecord)
+            .where(
+                NodeCommentRecord.node_id == node_id,
+                NodeCommentRecord.kind == CommentKind.REVIEW.value,
+                NodeCommentRecord.parent_id.is_(None),
+            )
+            .order_by(NodeCommentRecord.created_at, NodeCommentRecord.id)
+        )
+        roots = [_to_domain(r) for r in (await self._session.execute(statement)).scalars().all()]
+        counts: dict[uuid.UUID, int] = {}
+        if roots:
+            rows = (
+                await self._session.execute(
+                    select(NodeCommentRecord.thread_id, func.count())
+                    .where(
+                        NodeCommentRecord.thread_id.in_([r.id for r in roots]),
+                        NodeCommentRecord.parent_id.is_not(None),
+                        NodeCommentRecord.deleted_at.is_(None),
+                    )
+                    .group_by(NodeCommentRecord.thread_id)
+                )
+            ).all()
+            counts = {thread_id: int(n) for thread_id, n in rows}
+        return roots, counts
+
+    async def add_many(self, comments: Sequence[NodeComment]) -> None:
+        for comment in comments:
+            self._session.add(
+                NodeCommentRecord(
+                    id=comment.id,
+                    project_id=comment.project_id,
+                    node_id=comment.node_id,
+                    kind=comment.kind.value,
+                    author_id=comment.author_id,
+                    anchor=comment.anchor,
+                    status=comment.status.value,
+                    thread_id=comment.thread_id,
+                    parent_id=comment.parent_id,
+                    body_markdown=comment.body_markdown,
+                    payload=comment.payload,
+                    created_at=comment.created_at,
+                    updated_at=comment.updated_at,
+                )
+            )
+        await self._session.flush()
+
+    async def supersede(self, comment_ids: Sequence[uuid.UUID]) -> None:
+        """Soft-delete rows an import replaced, marking `payload.superseded`
+        so a later import can tell them from rows a user deleted."""
+        if not comment_ids:
+            return
+        now = datetime.now(timezone.utc)
+        records = (
+            (
+                await self._session.execute(
+                    select(NodeCommentRecord).where(NodeCommentRecord.id.in_(list(comment_ids)))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for record in records:
+            record.payload = {**(record.payload or {}), "superseded": True}
+            record.deleted_at = now
+            record.updated_at = now
+        await self._session.flush()
+
+    async def set_status_many(
+        self, comment_ids: Sequence[uuid.UUID], status: CommentStatus
+    ) -> None:
+        """Set `status` on live rows (resolve cards in bulk)."""
+        if not comment_ids:
+            return
+        await self._session.execute(
+            update(NodeCommentRecord)
+            .where(
+                NodeCommentRecord.id.in_(list(comment_ids)),
+                NodeCommentRecord.deleted_at.is_(None),
+            )
+            .values(status=status.value, updated_at=datetime.now(timezone.utc))
+        )
+
+    async def get_many(self, comment_ids: Sequence[uuid.UUID]) -> list[NodeComment]:
+        if not comment_ids:
+            return []
+        rows = (
+            await self._session.execute(
+                self._select().where(NodeCommentRecord.id.in_(list(comment_ids)))
+            )
+        ).all()
+        return [_to_domain(record, name) for record, name in rows]
+
+    async def list_threads(self, thread_ids: Sequence[uuid.UUID]) -> list[NodeComment]:
+        """The roots `thread_ids` and every live reply, in one query (oldest first)."""
+        if not thread_ids:
+            return []
+        rows = (
+            await self._session.execute(
+                self._select().where(NodeCommentRecord.thread_id.in_(list(thread_ids)))
+            )
+        ).all()
+        return [_to_domain(record, name) for record, name in rows]
+
+    async def list_thread(self, thread_id: uuid.UUID) -> list[NodeComment]:
+        """The root and every live reply of one thread, oldest first."""
+        rows = (
+            await self._session.execute(
+                self._select().where(NodeCommentRecord.thread_id == thread_id)
+            )
+        ).all()
+        return [_to_domain(record, name) for record, name in rows]
+
+    async def transition_suggestion(
+        self,
+        comment_id: uuid.UUID,
+        expected: CommentStatus,
+        *,
+        status: CommentStatus,
+        payload: dict | None = None,
+        body_markdown: str | None = None,
+        commit: bool = True,
+        include_deleted: bool = False,
+    ) -> bool:
+        """Compare-and-set a live `suggestion` row's status: True when the row
+        was in `expected` (and now is `status`), False when somebody else got
+        there first. The state machine's single write path."""
+        values: dict = {"status": status.value, "updated_at": datetime.now(timezone.utc)}
+        if payload is not None:
+            values["payload"] = payload
+        if body_markdown is not None:
+            values["body_markdown"] = body_markdown
+        conditions = [
+            NodeCommentRecord.id == comment_id,
+            NodeCommentRecord.kind == CommentKind.SUGGESTION.value,
+            NodeCommentRecord.status == expected.value,
+        ]
+        if not include_deleted:
+            conditions.append(NodeCommentRecord.deleted_at.is_(None))
+        result = await self._session.execute(
+            update(NodeCommentRecord).where(*conditions).values(**values)
+        )
+        if commit:
+            await self._session.commit()
+        return bool(result.rowcount)
+
+    async def count_running_suggestions(
+        self, *, node_id: uuid.UUID | None = None, author_id: uuid.UUID | None = None
+    ) -> int:
+        statement = select(func.count()).select_from(NodeCommentRecord).where(
+            NodeCommentRecord.kind == CommentKind.SUGGESTION.value,
+            NodeCommentRecord.status == CommentStatus.RUNNING.value,
+            NodeCommentRecord.deleted_at.is_(None),
+        )
+        if node_id is not None:
+            statement = statement.where(NodeCommentRecord.node_id == node_id)
+        if author_id is not None:
+            statement = statement.where(NodeCommentRecord.author_id == author_id)
+        return int(await self._session.scalar(statement) or 0)
 
     async def soft_delete_thread(self, thread_id: uuid.UUID) -> None:
         # Lock the root first so a racing reply insert (which locks it too)

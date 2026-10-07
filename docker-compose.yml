@@ -133,6 +133,11 @@ services:
       # Issue #134: how many `queued` runs one project may hold at once (`RunService`'s
       # `queue_admission_blocker`) - `api`-only, the worker never admits runs itself.
       MAX_QUEUED_RUNS_PER_PROJECT: ${MAX_QUEUED_RUNS_PER_PROJECT:-5}
+      # Issue #182: in-process copilot revisions (`api/application/revisions.py`) - `api`-only.
+      REVISION_MAX_PER_USER: ${REVISION_MAX_PER_USER:-3}
+      REVISION_TIMEOUT_S: ${REVISION_TIMEOUT_S:-300}
+      REVISION_MAX_KB_BYTES: ${REVISION_MAX_KB_BYTES:-268435456}
+      REVISION_MAX_SECTION_CHARS: ${REVISION_MAX_SECTION_CHARS:-60000}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     expose:
       - "8000"

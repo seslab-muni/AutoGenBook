@@ -5,36 +5,29 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from api.application.comment_anchors import is_resolved, resolve_anchor
+from api.application.reanchor import reanchored_status
 from api.core.errors import Conflict, Forbidden, NotFound
 from api.domain.models import CommentKind, CommentStatus, NodeComment, OutlineNode, User
 from api.domain.ports import CommentRepository, OutlineRepository, ProjectRepository
 
-# Extension points for later tracks of issue #182:
-#  * `kind=review` rows: `graph_import.py` calls `CommentRepository.add` with
-#    `author_id=None`, `kind=REVIEW`, status OPEN, an anchor from the engine and
-#    the review fields in `payload`.
-#  * `kind=suggestion` rows: a revision service adds them (status RUNNING, then
-#    PENDING / FAILED / CANCELLED, then ACCEPTED / REJECTED) via `add` / `update`
-#    (fields `status`, `payload`). `parent_id`/`thread_id` stay legal on them, so
-#    a suggestion may later live inside a comment thread.
-#  * Re-anchoring must live in ONE function (built on `resolve_anchor`, with
-#    `reanchored_status` for the row status) that is called from BOTH
-#    `OutlineService.update` (a `contentMarkdown` PATCH) AND the graph-import
-#    writes in `graph_import.py` (`_merge_cli_graph_into_outline`,
-#    `import_single_node`): the worker writes content without going through the
-#    service, so hooking only the service would miss runs.
+# Related modules of issue #182:
+#  * `api.application.reanchor.reanchor_node_cards` - the single function that
+#    re-anchors a node's live cards when its text changes (called from the
+#    outline service, the graph import and suggestion accept).
+#  * `api.application.review_import` - writes `kind=review` rows (author NULL)
+#    from the engine's `section_reviews/<key>.json`.
+#  * `api.application.revisions` - the revision service: `kind=suggestion`
+#    rows (running -> pending/failed/cancelled -> accepted/rejected), possibly
+#    nested in a comment thread (`parent_id`/`thread_id` = the root).
 
 _RESOLVABLE_KINDS = (CommentKind.COMMENT, CommentKind.REVIEW)
-
-
-def reanchored_status(comment: NodeComment, anchor: dict | None) -> CommentStatus:
-    """Status of a comment/review row after its `anchor` was (re-)resolved:
-    resolved rows stay resolved, otherwise open <-> orphaned follows the anchor."""
-    if comment.status == CommentStatus.RESOLVED:
-        return CommentStatus.RESOLVED
-    if anchor is not None and not is_resolved(anchor):
-        return CommentStatus.ORPHANED
-    return CommentStatus.OPEN
+_TERMINAL_SUGGESTION = (
+    CommentStatus.ACCEPTED,
+    CommentStatus.REJECTED,
+    CommentStatus.FAILED,
+    CommentStatus.CANCELLED,
+)
+HEAVY_PAYLOAD_KEYS = frozenset({"originalMarkdown", "replacementMarkdown"})
 
 
 class CommentService:
@@ -76,11 +69,28 @@ class CommentService:
             for c in comments
         ]
 
+    @staticmethod
+    def _trim(comment: NodeComment) -> NodeComment:
+        """The project-wide list (and, for finished suggestions, the node list) leaves out a suggestion's heavy texts
+        (`originalMarkdown`, `replacementMarkdown`); the node list and
+        `GET /comments/{id}` carry them."""
+        if comment.kind != CommentKind.SUGGESTION or not (HEAVY_PAYLOAD_KEYS & comment.payload.keys()):
+            return comment
+        return replace(
+            comment,
+            payload={k: v for k, v in comment.payload.items() if k not in HEAVY_PAYLOAD_KEYS},
+        )
+
     async def _present_one(self, comment: NodeComment) -> NodeComment:
         if comment.parent_id is None or comment.kind != CommentKind.COMMENT:
             return comment
         root = await self._comments.get(comment.thread_id)
         return self._present([root, comment])[1] if root is not None else comment
+
+    async def get(self, comment_id: uuid.UUID) -> NodeComment:
+        """One card with its full payload (a suggestion's original and
+        replacement text included)."""
+        return await self._present_one(await self._get_comment(comment_id))
 
     async def list_for_node(
         self,
@@ -92,9 +102,11 @@ class CommentService:
     ) -> list[NodeComment]:
         """Whole threads (root + live replies); the filters select roots."""
         await self._get_node(project_id, node_id)
-        return self._present(
+        rows = self._present(
             await self._comments.list_threads_for_node(node_id, kind=kind, status=status)
         )
+        # Finished suggestions keep their diff but not both full texts.
+        return [self._trim(c) if c.status in _TERMINAL_SUGGESTION else c for c in rows]
 
     async def list_for_project(
         self,
@@ -111,7 +123,7 @@ class CommentService:
         rows, total = await self._comments.list_threads_for_project(
             project_id, kind=kind, status=status, limit=limit, offset=offset
         )
-        return self._present(rows), total
+        return [self._trim(c) for c in self._present(rows)], total
 
     async def create(
         self,

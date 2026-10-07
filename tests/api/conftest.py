@@ -19,8 +19,10 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
 # dev" case `AUTH_COOKIE_SECURE=0` documents.
 os.environ.setdefault("AUTH_COOKIE_SECURE", "0")
 
+import sys
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -31,12 +33,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from api.application.auth import AuthService
+from api.application.revisions import RevisionRunner
+from api.core.settings import get_settings
 from api.core.db import Base, get_session, get_sessionmaker
 from api.domain.models import User
 from api.infrastructure.db.user_repository import SqlAlchemyUserRepository
 from api.infrastructure.storage.memory import InMemoryFileStorage
 from api.main import create_app
-from api.presentation.deps import get_file_storage
+from api.presentation.deps import get_file_storage, get_revision_runner
+
+# The engine's in-process fake LLM (no network): `FakeLLM.transport()` is handed
+# to the revision runner's client pool. `fake_llm.py` imports its `responders`
+# module by bare name, hence the path entry.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
+from fake_llm import FakeLLM  # noqa: E402
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "sqlite+aiosqlite://")
 
@@ -91,12 +101,91 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
 
 
 @pytest_asyncio.fixture
+async def isolated_session_factory(tmp_path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Like `session_factory`, but on SQLite every session gets its own
+    connection (a file database, WAL) instead of all sharing one in-memory
+    connection. Needed by tests that run a background job (the revision
+    runner) next to HTTP requests: on a shared connection one session's
+    rollback silently undoes another session's uncommitted statements, which
+    Postgres (the real thing) never does. Modules use it by overriding
+    `session_factory` with a fixture that yields this."""
+    if not _uses_sqlite(TEST_DATABASE_URL):
+        async with _open_engine() as factory:
+            yield factory
+        return
+    url = f"sqlite+aiosqlite:///{tmp_path / 'isolated.db'}"
+    engine = create_async_engine(url, connect_args={"timeout": 30})
+    event.listen(engine.sync_engine, "connect", _enable_sqlite_fk_enforcement)
+
+    def _wal(dbapi_connection, connection_record) -> None:  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
+
+    event.listen(engine.sync_engine, "connect", _wal)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+
+
+class _open_engine:
+    """Postgres variant of the fresh-schema engine used by `session_factory`."""
+
+    async def __aenter__(self) -> async_sessionmaker[AsyncSession]:
+        self.engine = create_async_engine(TEST_DATABASE_URL)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        return async_sessionmaker(self.engine, expire_on_commit=False)
+
+    async def __aexit__(self, *exc) -> None:
+        await self.engine.dispose()
+
+
+@pytest_asyncio.fixture
 def file_storage() -> InMemoryFileStorage:
     return InMemoryFileStorage()
 
 
 @pytest_asyncio.fixture
-async def app(session_factory: async_sessionmaker[AsyncSession], file_storage: InMemoryFileStorage):
+def fake_llm() -> FakeLLM:
+    return FakeLLM()
+
+
+@pytest_asyncio.fixture
+async def revision_runner(
+    session_factory: async_sessionmaker[AsyncSession], fake_llm: FakeLLM
+) -> AsyncIterator[RevisionRunner]:
+    """A per-test revision runner whose LLM is the engine's fake (endpoint
+    `http://fake.local/v1`, a deployment key, no pricing lookups)."""
+    runner = RevisionRunner(
+        session_factory,
+        get_settings(),
+        transport=fake_llm.transport(),
+        env={
+            "AUTOGENBOOK_LLM_BASE_URL": "http://fake.local/v1",
+            "OPENROUTER_API_KEY": "sk-deployment-test-key",
+            "OPENROUTER_PRICING_DISABLE": "1",
+            "OPENROUTER_MAX_RETRIES": "0",
+        },
+        hostname="testhost",
+        poll_interval_s=0.05,
+    )
+    try:
+        yield runner
+    finally:
+        await runner.aclose()
+
+
+@pytest_asyncio.fixture
+async def app(
+    session_factory: async_sessionmaker[AsyncSession],
+    file_storage: InMemoryFileStorage,
+    revision_runner: RevisionRunner,
+):
     application = create_app()
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
@@ -106,6 +195,7 @@ async def app(session_factory: async_sessionmaker[AsyncSession], file_storage: I
     application.dependency_overrides[get_session] = override_get_session
     application.dependency_overrides[get_sessionmaker] = lambda: session_factory
     application.dependency_overrides[get_file_storage] = lambda: file_storage
+    application.dependency_overrides[get_revision_runner] = lambda: revision_runner
     try:
         yield application
     finally:

@@ -121,6 +121,8 @@ Pipelines return non-zero exit codes for missing inputs or audit failures and pr
 
 The CLI described above is also wrapped by a separate FastAPI service (`api/core`, `api/domain`, `api/application`, `api/infrastructure`, `api/presentation`, `api/worker`) plus a React/TanStack frontend (`app/`), run together via Docker Compose. The worker invokes the same CLI (`main.py`) as a subprocess per generation run rather than importing pipeline code directly, so this layer adds a service boundary around the CLI without changing the architecture above it. This is a distinct architecture from — and not covered further by — this document; see `docs/WEB_API_REFERENCE.md` for the HTTP API/worker design and `docs/OPERATIONS.md` for the Compose service topology.
 
+One exception to "the CLI as a subprocess": the Studio copilot (issue #182) calls the new engine in-process from the API (`api/application/revisions.py` -> `engine.revise`, one shared `ReviseClientPool`; jobs are asyncio tasks with their state, heartbeat and progress events in the database so any replica can stream or cancel them). The margin cards beside a section (`node_comments`: comments, reviewer issues imported from `section_reviews/`, copilot suggestions) are kept attached to the text by one re-anchoring function (`api/application/reanchor.py`, built on `engine/util/anchors.py`) that every writer of a node's content calls in its transaction.
+
 ## Extension points
 
 - Add a new mode by creating a pipeline module, registering it in the orchestrator, and adding CLI flags. (`autogenbook/orchestrator.py:run`, `main.py:parse_args`)

@@ -334,6 +334,9 @@ class OutlineNodeRecord(Base):
     )
     reviewer_score: Mapped[float | None] = mapped_column(sa.Numeric, nullable=True)
     reviewer_notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Issue #182: latest reviewer verdict of this section (see
+    # `OutlineNode.review_summary`); NULL = never reviewed.
+    review_summary: Mapped[dict | None] = mapped_column(_jsonb(), nullable=True)
     structure_locked: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=True, server_default=sa.true()
     )
@@ -400,6 +403,17 @@ class NodeCommentRecord(Base):
         ),
         sa.Index("ix_node_comments_thread_id", "thread_id"),
         sa.Index("ix_node_comments_parent_id", "parent_id"),
+        # Issue #182 (revision service): at most one revision job runs per
+        # node. The DB is the arbiter, so two racing POST .../revisions cannot
+        # both start (and, with several API replicas, neither can slip past a
+        # per-process check).
+        sa.Index(
+            "uq_node_comments_running_suggestion",
+            "node_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'suggestion' AND status = 'running' AND deleted_at IS NULL"),
+            sqlite_where=sa.text("kind = 'suggestion' AND status = 'running' AND deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
@@ -444,6 +458,55 @@ class NodeCommentRecord(Base):
     edited_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
+
+
+class RevisionJobRecord(Base):
+    """Liveness of one in-process revision job (issue #182): the suggestion row
+    `comment_id` is `running` while an API process owns the job. `owner` is that
+    process's instance id; it refreshes `heartbeat_at` every few seconds and a
+    sweeper (any replica) fails `running` suggestions whose heartbeat went stale
+    (`interrupted`). `cancel_requested` is the cross-replica cancel signal."""
+
+    __tablename__ = "revision_jobs"
+
+    comment_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("node_comments.id", ondelete="CASCADE"), primary_key=True
+    )
+    owner: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    cancel_requested: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+
+class RevisionEventRecord(Base):
+    """Progress events of a revision job (the engine's `retrieve` / `revise` /
+    `diff` stages), tailed by `GET /suggestions/{id}/events/stream`. Written
+    only by the owning process, so `seq` (1-based, per suggestion) needs no
+    allocation race handling."""
+
+    __tablename__ = "revision_events"
+    __table_args__ = (
+        sa.UniqueConstraint("comment_id", "seq", name="uq_revision_events_comment_id_seq"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    comment_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("node_comments.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    ts: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    level: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    stage: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    message: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(_jsonb(), nullable=True)
 
 
 class RunRecord(Base):

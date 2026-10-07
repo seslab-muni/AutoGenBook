@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from api.application.runs import GenerationService, sweep_orphaned_work_dirs, sweep_stale_work_dirs
 from api.core.db import get_engine, get_sessionmaker
 from api.core.settings import get_settings
+from api.infrastructure.db.comment_repository import SqlAlchemyCommentRepository
 from api.infrastructure.db.file_repository import SqlAlchemyFileRepository
 from api.infrastructure.db.outline_repository import SqlAlchemyOutlineRepository
 from api.infrastructure.db.repositories import SqlAlchemyProjectRepository
@@ -75,6 +76,7 @@ async def _claim_and_execute(
             settings=settings,
             worker_id=worker_id,
             user_repository=SqlAlchemyUserRepository(session),
+            comment_repository=SqlAlchemyCommentRepository(session),
         )
         try:
             finished = await service.execute(run, shutdown_event=stop_event)
