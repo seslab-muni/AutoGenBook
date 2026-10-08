@@ -75,7 +75,7 @@ test.describe('accessibility', () => {
     await expect(page.getByRole('complementary', { name: 'Margin' })).toBeVisible();
     await expectNoSeriousViolations(page, 'studio with a section and its margin');
     // ...and the prompt window, the one new surface that opens from the header.
-    await page.getByRole('button', { name: 'Copilot' }).click();
+    await page.getByRole('button', { name: 'Copilot', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Prompt the copilot' })).toBeVisible();
     await expectNoSeriousViolations(page, 'studio with the prompt window open');
     await page.keyboard.press('Escape');

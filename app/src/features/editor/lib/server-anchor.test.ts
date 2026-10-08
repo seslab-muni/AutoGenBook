@@ -44,13 +44,33 @@ describe('toServerAnchor', () => {
     });
   });
 
-  it('leaves the offsets out for a section the server stores with CR LF', () => {
-    expect(
-      toServerAnchor(
-        { quote: 'abc', prefix: 'p', suffix: 's', start: 4, end: 7 },
-        { omitOffsets: true },
-      ),
-    ).toEqual({ quote: 'abc', prefix: 'p', suffix: 's', start: null, end: null });
+  it('keeps the offsets of a single-line quote that spans exactly its length', () => {
+    expect(toServerAnchor({ quote: 'abc', start: 4, end: 7 })).toMatchObject({ start: 4, end: 7 });
+  });
+
+  it('drops offsets that do not match the quote length', () => {
+    expect(toServerAnchor({ quote: 'abc', start: 4, end: 9 })).toMatchObject({
+      start: null,
+      end: null,
+    });
+  });
+
+  it('turns line breaks into CR LF and drops the offsets for a CR LF section', () => {
+    const anchor = toServerAnchor(
+      { quote: 'a\nb', prefix: 'x\n', suffix: '\ny', start: 4, end: 7 },
+      { crlf: true },
+    );
+    expect(anchor).toEqual({
+      quote: 'a\r\nb',
+      prefix: 'x\r\n',
+      suffix: '\r\ny',
+      start: null,
+      end: null,
+    });
+  });
+
+  it('returns null for an empty quote', () => {
+    expect(toServerAnchor({ quote: '', start: 0, end: 0 })).toBeNull();
   });
 
   it('sends only the fields the server allows', () => {

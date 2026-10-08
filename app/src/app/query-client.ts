@@ -28,10 +28,13 @@ export function createQueryClient(): QueryClient {
       },
     },
     mutationCache: new MutationCache({
-      onError: (error) => {
+      onError: (error, _variables, _context, mutation) => {
+        reportError(error, { source: 'mutationCache' });
+        // A mutation that shows its own refusal (inline, in words) is marked `meta.handlesErrors`: a
+        // second, raw toast of the same failure would contradict what it says.
+        if (mutation.meta?.['handlesErrors']) return;
         const problem = error instanceof ApiError ? error.problem : undefined;
         toast.error(problem?.title ?? 'Something went wrong', { description: problem?.detail });
-        reportError(error, { source: 'mutationCache' });
       },
     }),
   });

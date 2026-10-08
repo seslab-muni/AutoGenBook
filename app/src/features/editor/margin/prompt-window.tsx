@@ -379,7 +379,7 @@ export function PromptDraftCard({
               type="button"
               variant="link"
               size="xs"
-              className="h-auto p-0 text-xs"
+              className="h-auto p-0 text-xs text-foreground"
               onClick={() => openModal('start-run')}
             >
               Start full run
@@ -390,7 +390,7 @@ export function PromptDraftCard({
               type="button"
               variant="link"
               size="xs"
-              className="h-auto p-0 text-xs"
+              className="h-auto p-0 text-xs text-foreground"
               disabled={unlock.isPending}
               onClick={() => unlock.mutate({ contentLocked: false })}
             >
@@ -405,14 +405,14 @@ export function PromptDraftCard({
         </p>
       ) : null}
       {error ? (
-        <div id={errorId} role="alert" className="mt-2 text-xs text-destructive">
+        <div id={errorId} role="alert" className="mt-2 text-xs text-destructive-text">
           <p>{error.message}</p>
           {error.code === 'llm_key_required' ? (
             <Button
               type="button"
               variant="link"
               size="xs"
-              className="h-auto p-0 text-xs"
+              className="h-auto p-0 text-xs text-foreground"
               onClick={() => openModal('account')}
             >
               Account settings

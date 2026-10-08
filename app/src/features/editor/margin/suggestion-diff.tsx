@@ -96,7 +96,7 @@ function Block({
           type="button"
           variant="link"
           size="xs"
-          className="mt-1 h-auto p-0 text-[11px]"
+          className="mt-1 h-auto p-0 text-[11px] text-foreground"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
@@ -153,7 +153,7 @@ export function SuggestionDiff({
           type="button"
           variant="link"
           size="xs"
-          className="h-auto self-start p-0 text-[11px]"
+          className="h-auto self-start p-0 text-[11px] text-foreground"
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >

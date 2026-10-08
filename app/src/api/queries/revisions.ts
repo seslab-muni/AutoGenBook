@@ -96,6 +96,7 @@ export function currentStatus(
 export function useStartRevisionMutation(projectId: string, nodeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { handlesErrors: true },
     mutationFn: (body: RevisionCreate): Promise<StartedRevision> =>
       unwrap(
         apiClient.POST('/api/v1/projects/{project_id}/outline/{node_id}/revisions', {
@@ -133,6 +134,7 @@ export interface AcceptVariables {
 export function useAcceptSuggestionMutation(projectId: string, nodeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { handlesErrors: true },
     mutationFn: ({
       suggestionId,
       hunkIndexes,
@@ -177,6 +179,7 @@ export function useAcceptSuggestionMutation(projectId: string, nodeId: string) {
 function useSuggestionTransition(projectId: string, nodeId: string, action: 'reject' | 'cancel') {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { handlesErrors: true },
     mutationFn: (suggestionId: string): Promise<Comment> =>
       unwrap(
         action === 'reject'
@@ -211,6 +214,7 @@ export function useCancelSuggestionMutation(projectId: string, nodeId: string) {
 export function useRestoreContentMutation(projectId: string, nodeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { handlesErrors: true },
     mutationFn: ({
       contentMarkdown,
       expectedContentHash,

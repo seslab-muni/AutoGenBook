@@ -116,7 +116,7 @@ export function CommentComposer({
         }}
       />
       {error ? (
-        <p id={errorId} role="alert" className="text-xs text-destructive">
+        <p id={errorId} role="alert" className="text-xs text-destructive-text">
           Not sent: {error}
         </p>
       ) : null}

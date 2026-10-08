@@ -12,11 +12,11 @@ const ICONS: Record<SaveStatus, typeof Check> = {
 };
 
 const COLORS: Record<SaveStatus, string> = {
-  idle: 'text-success',
-  saved: 'text-success',
+  idle: 'text-success-text',
+  saved: 'text-success-text',
   dirty: 'text-muted-foreground',
   saving: 'text-muted-foreground',
-  error: 'text-destructive',
+  error: 'text-destructive-text',
 };
 
 interface SaveStatusBadgeProps {

@@ -29,6 +29,8 @@ interface UseDebouncedMutationResult<T> {
    * cannot be saved is never reported as flushed), or if saving is held while something is pending.
    */
   flushEdits: () => Promise<void>;
+  /** Resolves once no save is in flight (at once if none is); never rejects, whatever the save did. */
+  whenIdle: () => Promise<void>;
   /**
    * Drops a value that is waiting to be saved (its timer included); one already in flight finishes.
    * A failed save's error state goes with it (the caller has decided what happens to that text).
@@ -54,6 +56,7 @@ export function useDebouncedMutation<T>({
   const savingRef = useRef(false);
   const heldRef = useRef(new Set<string>());
   const waitersRef = useRef<{ resolve: () => void; reject: (error: unknown) => void }[]>([]);
+  const idleWaitersRef = useRef<(() => void)[]>([]);
 
   // Latest `onSave`/`save` behind refs, updated in an effect rather than during
   // render: `save` recurses (a value scheduled mid-flight saves right after),
@@ -83,6 +86,7 @@ export function useDebouncedMutation<T>({
       .current(value)
       .then(() => {
         savingRef.current = false;
+        for (const idle of idleWaitersRef.current.splice(0)) idle();
         if (pendingRef.current !== null) {
           saveRef.current();
         } else {
@@ -92,6 +96,7 @@ export function useDebouncedMutation<T>({
       })
       .catch((error: unknown) => {
         savingRef.current = false;
+        for (const idle of idleWaitersRef.current.splice(0)) idle();
         // The value stays pending (unless something newer replaced it): a failed save leaves the
         // draft unsaved, and `flushEdits` must keep saying so instead of resolving over it.
         pendingRef.current ??= { value };
@@ -141,6 +146,14 @@ export function useDebouncedMutation<T>({
     });
   }, [clearTimer, save]);
 
+  const whenIdle = useCallback(
+    () =>
+      savingRef.current
+        ? new Promise<void>((resolve) => idleWaitersRef.current.push(resolve))
+        : Promise.resolve(),
+    [],
+  );
+
   const cancel = useCallback(() => {
     clearTimer();
     pendingRef.current = null;
@@ -152,5 +165,5 @@ export function useDebouncedMutation<T>({
   // last-second edits should call `flush()` itself before unmounting.
   useEffect(() => clearTimer, [clearTimer]);
 
-  return { status, schedule, flush, cancel, hold, flushEdits };
+  return { status, schedule, flush, cancel, hold, flushEdits, whenIdle };
 }

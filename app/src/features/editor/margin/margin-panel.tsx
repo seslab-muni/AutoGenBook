@@ -489,9 +489,9 @@ export function MarginPanel({
         onScroll={handleLaneScroll}
       >
         {error ? (
-          <p role="alert" className="p-4 text-sm text-destructive">
+          <p role="alert" className="p-4 text-sm text-destructive-text">
             Couldn&apos;t load the comments.{' '}
-            <Button type="button" variant="link" size="xs" className="h-auto p-0" onClick={onRetry}>
+            <Button type="button" variant="link" size="xs" className="h-auto p-0 text-foreground" onClick={onRetry}>
               Retry
             </Button>
           </p>

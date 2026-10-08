@@ -10,9 +10,9 @@ const STATUS_LABEL: Record<NodeStatus, string> = {
 
 const STATUS_CLASSES: Record<NodeStatus, string> = {
   not_started: 'bg-muted text-muted-foreground',
-  drafting: 'bg-warning/15 text-warning',
-  review_ready: 'bg-info/15 text-info',
-  compiled: 'bg-success/15 text-success',
+  drafting: 'bg-warning/15 text-warning-text',
+  review_ready: 'bg-info/15 text-info-text',
+  compiled: 'bg-success/15 text-success-text',
 };
 
 interface StatusBadgeProps {

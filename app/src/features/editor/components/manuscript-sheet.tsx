@@ -41,6 +41,8 @@ import {
 } from '@/features/editor/lib/cm-anchor-highlights';
 import { normalizeEol } from '@/features/editor/lib/eol';
 import { sha256Hex } from '@/lib/content-hash';
+import { problemMessage } from '@/features/editor/margin/errors';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import type { Anchor } from '@/features/editor/lib/anchors';
 import type { MarginCardContext } from '@/features/editor/margin/card-registry';
 import { writeGeometry, sourceGeometry } from '@/features/editor/margin/geometry';
@@ -141,7 +143,9 @@ export function ManuscriptSheet({
   });
   const sectionArtifact = findSectionArtifact(lastRunArtifacts?.items, node.cliKey);
 
-  const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
+  const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id, { handlesErrors: true });
+  /** Why the last save failed, when it was not a conflict (the badge says "Error saving", this says why). */
+  const [saveError, setSaveError] = useState<string | null>(null);
   const queryClient = useQueryClient();
   // What this editor has sent (and so what coming back from the server is not "someone else's change").
   const sentRef = useRef(new Set<string>());
@@ -154,42 +158,66 @@ export function ManuscriptSheet({
   const baselineRef = useRef(normalizeEol(node[field]));
   const baseRawRef = useRef(node[field]);
   const baseHashRef = useRef<string | null>(useLatex ? null : (node.contentHash ?? null));
-  const moveBaseline = useCallback((raw: string, hash: string | null | undefined) => {
-    baselineRef.current = normalizeEol(raw);
-    baseRawRef.current = raw;
-    baseHashRef.current = hash ?? null;
-  }, []);
-
-  const { status, schedule, flush, cancel, hold, flushEdits } = useDebouncedMutation<string>({
-    onSave: async (text) => {
-      // Bounded: only the last few saves matter for recognising our own content coming back.
-      sentRef.current.add(text);
-      if (sentRef.current.size > 8) sentRef.current.delete(sentRef.current.values().next().value!);
-      const body: OutlineNodeUpdate = useLatex ? { contentLatex: text } : { contentMarkdown: text };
-      if (!useLatex) {
-        // Without the hash of the text this draft was based on the server would take the write as
-        // last-write-wins and overwrite an accepted suggestion or another editor's save.
-        const expectedContentHash =
-          baseHashRef.current ?? (await sha256Hex(baseRawRef.current)) ?? undefined;
-        if (expectedContentHash) body.expectedContentHash = expectedContentHash;
-      }
-      try {
-        const saved = await updateMutation.mutateAsync(body);
-        // What this save wrote is the new baseline, with the hash the server gave it.
-        moveBaseline(text, useLatex ? null : (saved.contentHash ?? (await sha256Hex(text))));
-        return saved;
-      } catch (error) {
-        if (error instanceof ApiError && error.problem?.code === 'content_conflict') {
-          // The section changed under this draft: fetch the other version. The effect below turns
-          // it into the "changed elsewhere" notice (Keep mine / Load the other version) - the save
-          // is never retried over it.
-          sentRef.current.delete(text);
-          void queryClient.fetchQuery({ ...outlineQueries.node(projectId, node.id), staleTime: 0 });
-        }
-        throw error;
-      }
+  /** Hashes of baselines this editor has moved past, and the newest `updatedAt` it has seen. */
+  const supersededRef = useRef(new Set<string>());
+  const knownUpdatedAtRef = useRef(node.updatedAt);
+  const moveBaseline = useCallback(
+    (raw: string, hash: string | null | undefined, updatedAt?: string) => {
+      const previous = baseHashRef.current;
+      if (previous && previous !== hash) supersededRef.current.add(previous);
+      baselineRef.current = normalizeEol(raw);
+      baseRawRef.current = raw;
+      baseHashRef.current = hash ?? null;
+      if (updatedAt && updatedAt > knownUpdatedAtRef.current) knownUpdatedAtRef.current = updatedAt;
     },
-  });
+    [],
+  );
+
+  const { status, schedule, flush, cancel, hold, flushEdits, whenIdle } =
+    useDebouncedMutation<string>({
+      onSave: async (text) => {
+        // Bounded: only the last few saves matter for recognising our own content coming back.
+        sentRef.current.add(text);
+        if (sentRef.current.size > 8)
+          sentRef.current.delete(sentRef.current.values().next().value!);
+        const body: OutlineNodeUpdate = useLatex
+          ? { contentLatex: text }
+          : { contentMarkdown: text };
+        if (!useLatex) {
+          // Without the hash of the text this draft was based on the server would take the write as
+          // last-write-wins and overwrite an accepted suggestion or another editor's save.
+          const expectedContentHash =
+            baseHashRef.current ?? (await sha256Hex(baseRawRef.current)) ?? undefined;
+          if (expectedContentHash) body.expectedContentHash = expectedContentHash;
+        }
+        try {
+          const saved = await updateMutation.mutateAsync(body);
+          // What this save wrote is the new baseline, with the hash the server gave it.
+          moveBaseline(
+            text,
+            useLatex ? null : (saved.contentHash ?? (await sha256Hex(text))),
+            saved.updatedAt,
+          );
+          setSaveError(null);
+          return saved;
+        } catch (error) {
+          if (error instanceof ApiError && error.problem?.code === 'content_conflict') {
+            // The section changed under this draft: fetch the other version. The effect below turns
+            // it into the "changed elsewhere" notice (Keep mine / Load the other version) - the save
+            // is never retried over it.
+            sentRef.current.delete(text);
+            setSaveError(null);
+            // Cancelled by a save or an accept that starts meanwhile: nothing to report.
+            queryClient
+              .fetchQuery({ ...outlineQueries.node(projectId, node.id), staleTime: 0 })
+              .catch(() => undefined);
+          } else {
+            setSaveError(problemMessage(error));
+          }
+          throw error;
+        }
+      },
+    });
 
   // `EditorPane` mounts this component with `key={node.id}`, so a different
   // node selection remounts it fresh (new `useState` initial value) rather
@@ -199,7 +227,16 @@ export function ManuscriptSheet({
   useEffect(() => {
     flushRef.current = flush;
   }, [flush]);
-  useEffect(() => () => flushRef.current(), []);
+  /** Set when the person chose to leave and discard: nothing is saved on the way out. */
+  const discardRef = useRef(false);
+  useEffect(
+    () => () => {
+      // Leaving saves what is pending - unless it was discarded on purpose, or the server's text moved
+      // under it (the save would only be refused again).
+      if (!discardRef.current && incomingRef.current === null) flushRef.current();
+    },
+    [],
+  );
 
   // Stable identities (here, `closeSources` and the store's `setSelection`) keep `SectionEditor`'s
   // CodeMirror extensions from being reconfigured on every keystroke or caret move.
@@ -237,7 +274,6 @@ export function ManuscriptSheet({
 
   const citations = useMemo(() => parseRagCitations(node.ragCitations), [node.ragCitations]);
   const effectiveSources = useEffectiveSources(projectId, node.id, flatNodes);
-  const isDirty = isUnsavedStatus(status);
   // Non-leaf nodes (chapters/parts with children) never get LLM-generated content — only leaf
   // sections do (book_builder.py's generate_contents walks leaves only) — so the empty-state
   // copy and the copilot must not offer generation for them (issue #77's 409 guard covers the API
@@ -257,10 +293,10 @@ export function ManuscriptSheet({
   const incomingRef = useRef<{ raw: string; hash: string | null } | null>(null);
 
   const adoptServerContent = useCallback(
-    (raw: string, hash?: string | null) => {
+    (raw: string, hash?: string | null, updatedAt?: string) => {
       const next = normalizeEol(raw);
       cancel();
-      moveBaseline(raw, hash);
+      moveBaseline(raw, hash, updatedAt);
       sentRef.current.clear();
       incomingRef.current = null;
       setIncoming(null);
@@ -283,11 +319,20 @@ export function ManuscriptSheet({
   useEffect(() => {
     const current = nodeRef.current;
     if (serverText === baselineRef.current) return;
+    // A fetch that began before this editor's own save or adoption can answer with the text from
+    // before it: never take a version older than what was last adopted or saved as "the server's".
+    if (
+      current.contentHash &&
+      supersededRef.current.has(current.contentHash) &&
+      current.updatedAt <= knownUpdatedAtRef.current
+    ) {
+      return;
+    }
     const unsaved = draftRef.current !== baselineRef.current;
     const ours = sentRef.current.has(serverText) || serverText === draftRef.current;
     if (ours) {
       // Our own save coming back (or the other side reverted to what we have).
-      moveBaseline(current[field], current.contentHash);
+      moveBaseline(current[field], current.contentHash, current.updatedAt);
       incomingRef.current = null;
       setIncoming(null);
       // The server holds exactly the draft (a refused save whose other version turned out equal):
@@ -295,7 +340,7 @@ export function ManuscriptSheet({
       if (serverText === draftRef.current) cancel();
       return;
     }
-    if (!unsaved) adoptServerContent(current[field], current.contentHash);
+    if (!unsaved) adoptServerContent(current[field], current.contentHash, current.updatedAt);
     else showIncoming(current[field], current.contentHash);
   }, [serverText, field, adoptServerContent, showIncoming, moveBaseline, cancel]);
 
@@ -306,15 +351,19 @@ export function ManuscriptSheet({
   }, [incoming, hold]);
 
   /** "Keep mine": the other version is deliberately overwritten by the draft, based on its hash. */
-  const keepMine = useCallback(() => {
+  const keepMine = useCallback(async () => {
+    // Behind this editor's own save, if one is still in flight: its outcome can change what the other
+    // version is (or whether there is one), and moving the baseline under it would make them race.
+    await whenIdle();
     const other = incomingRef.current;
-    if (other) moveBaseline(other.raw, other.hash);
+    if (!other) return;
+    moveBaseline(other.raw, other.hash);
     incomingRef.current = null;
     setIncoming(null);
     hold(false);
     schedule(draftRef.current);
     flush();
-  }, [hold, schedule, flush, moveBaseline]);
+  }, [hold, schedule, flush, moveBaseline, whenIdle]);
 
   // ---- margin: comments anchored to ranges of the text (issue #182, phase 2) ------------------
   const marginHost = useMarginHost();
@@ -453,7 +502,7 @@ export function ManuscriptSheet({
   // point at the wrong place, so they are left out and the server finds the quote itself.
   const serverAnchor = useCallback(
     (anchor: Parameters<typeof toServerAnchor>[0]) =>
-      toServerAnchor(anchor, { omitOffsets: baseRawRef.current.includes('\r') }),
+      toServerAnchor(anchor, { crlf: baseRawRef.current.includes('\r') }),
     [],
   );
   const copilot = useCopilot({
@@ -592,12 +641,23 @@ export function ManuscriptSheet({
     [revealMargin, focusCard],
   );
 
-  // Blocks in-app navigation (and warns on tab close) while there's an unsaved edit the
-  // 800ms debounce hasn't flushed yet — `flush()` on blur/unmount/Ctrl-S covers the rest.
-  useBlocker({
-    shouldBlockFn: () => isDirty,
-    enableBeforeUnload: true,
+  // Leaving with work the server does not have - typed and not yet saved, a save that failed, an
+  // incoming version the person has not chosen about - asks first, for every way out of the section
+  // (an outline row, Add chapter, a route change) and for closing the tab. "Leave and discard" saves
+  // nothing on the way out.
+  const unsavedWork = useCallback(
+    () =>
+      draftRef.current !== baselineRef.current ||
+      incomingRef.current !== null ||
+      statusRef.current === 'error' ||
+      isUnsavedStatus(statusRef.current),
+    [],
+  );
+  const blocker = useBlocker({
+    shouldBlockFn: unsavedWork,
+    enableBeforeUnload: unsavedWork,
     disabled: readOnly,
+    withResolver: true,
   });
 
   return (
@@ -702,7 +762,7 @@ export function ManuscriptSheet({
             This section was changed elsewhere (another editor, or an accepted suggestion). Your
             unsaved edits are kept and nothing is saved until you choose.
           </span>
-          <Button type="button" size="xs" variant="outline" onClick={keepMine}>
+          <Button type="button" size="xs" variant="outline" onClick={() => void keepMine()}>
             Keep mine
           </Button>
           <Button
@@ -715,6 +775,12 @@ export function ManuscriptSheet({
           >
             Load the other version
           </Button>
+        </div>
+      ) : null}
+      {saveError !== null && incoming === null ? (
+        <div role="alert" className="border-b bg-destructive/10 px-3 py-2 text-xs text-foreground">
+          Your latest edits could not be saved: {saveError} They are kept here; they are saved again
+          on your next edit or with Ctrl+S.
         </div>
       ) : null}
       <div ref={paneRef} className="relative flex min-h-0 flex-1 flex-col">
@@ -854,6 +920,23 @@ export function ManuscriptSheet({
           }}
         />
       ) : null}
+
+      <ConfirmDialog
+        open={blocker.status === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.status === 'blocked') blocker.reset();
+        }}
+        tone="warning"
+        title="You have edits that are not saved"
+        description="Stay to keep them here (they can still be saved), or leave and discard them."
+        confirmLabel="Leave and discard"
+        cancelLabel="Stay"
+        onConfirm={() => {
+          discardRef.current = true;
+          cancel();
+          blocker.proceed?.();
+        }}
+      />
 
       <EditorStatusBar
         characters={characterCount(draft)}

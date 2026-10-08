@@ -44,6 +44,14 @@
   --info: oklch(68.5% 0.147 237.3);
   --info-foreground: oklch(97.9% 0.013 236.6);
 
+  /* Text colours for the status hues (the fills above are too light/dark to read as text: 2-3:1).
+     Each reaches at least 4.5:1 on the page, card, muted and accent surfaces and on its own 5-15%
+     tint over them, in its theme. Use these for coloured text; keep the fills for backgrounds. */
+  --success-text: oklch(47% 0.12 160.1);
+  --warning-text: oklch(50% 0.12 70.08);
+  --info-text: oklch(48% 0.13 237.3);
+  --destructive-text: oklch(51% 0.19 15.3);
+
   --border: oklch(92.9% 0.013 255.5);
   --input: oklch(92.9% 0.013 255.5);
   --ring: oklch(51.1% 0.222 266.5);
@@ -101,6 +109,11 @@
   --info: oklch(54.8% 0.12 237.3);
   --info-foreground: oklch(97.9% 0.013 236.6);
 
+  --success-text: oklch(73% 0.12 160.1);
+  --warning-text: oklch(80% 0.12 70.08);
+  --info-text: oklch(74% 0.13 237.3);
+  --destructive-text: oklch(78% 0.19 15.3);
+
   --border: oklch(100% 0 0 / 12%);
   --input: oklch(100% 0 0 / 16%);
   --ring: oklch(63.7% 0.194 264.5);
@@ -147,6 +160,10 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-success-text: var(--success-text);
+  --color-warning-text: var(--warning-text);
+  --color-info-text: var(--info-text);
+  --color-destructive-text: var(--destructive-text);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

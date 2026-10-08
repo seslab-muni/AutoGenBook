@@ -77,7 +77,7 @@ function ClampedText({ text, className }: { text: string; className: string }) {
           type="button"
           variant="link"
           size="xs"
-          className="h-auto self-start p-0 text-[11px]"
+          className="h-auto self-start p-0 text-[11px] text-foreground"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >

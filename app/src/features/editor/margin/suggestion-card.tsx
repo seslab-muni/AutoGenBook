@@ -397,7 +397,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
   );
 
   const failureNote = failure ? (
-    <p role="alert" className="text-xs text-destructive">
+    <p role="alert" className="text-xs text-destructive-text">
       {failure.message}
     </p>
   ) : null;

@@ -230,9 +230,16 @@ export async function baseContentHash(
   return (await sha256Hex(node.contentMarkdown)) ?? undefined;
 }
 
-export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) {
+export function useUpdateOutlineNodeMutation(
+  projectId: string,
+  nodeId: string,
+  { handlesErrors = false }: { handlesErrors?: boolean } = {},
+) {
   const queryClient = useQueryClient();
   return useMutation({
+    // The editor's autosave shows its own failures (the save badge, a message under the toolbar, the
+    // "changed elsewhere" notice for a conflict); a raw toast on top would contradict Keep mine.
+    ...(handlesErrors ? { meta: { handlesErrors: true } } : {}),
     mutationFn: (body: OutlineNodeUpdate) =>
       unwrap(
         apiClient.PATCH('/api/v1/projects/{project_id}/outline/{node_id}', {
@@ -307,7 +314,13 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
     onError: (_error, _body, context) => {
       if (context) restoreFlat(queryClient, context.previous);
     },
-    onSuccess: (node, body) => {
+    onSuccess: async (node, body) => {
+      // A section fetch that started while this save was in flight answers with the text from before
+      // it: cancelled here (the `onMutate` cancel only covers fetches that began earlier), so it can
+      // neither land after the save nor be adopted by the editor as "the server's version".
+      if (body.contentMarkdown !== undefined) {
+        await queryClient.cancelQueries({ queryKey: projectKeys.outlineNode(projectId, nodeId) });
+      }
       // Merge only what this PATCH sent (plus what the server derives from it) over the cached
       // node: two PATCHes can be in flight at once (an autosave and a lock toggle), and a late
       // response carrying the other one's older fields must not overwrite them.
