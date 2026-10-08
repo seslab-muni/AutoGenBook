@@ -17,10 +17,9 @@ interface SelectionToolbarProps {
   containerHeight?: number;
   onComment: () => void;
   /**
-   * `Prompt…` and the quick chips (phase 4); see `flags.ts`. Each renders only with the flag on *and*
-   * its handler supplied; with neither, only `Comment` renders.
+   * `Prompt…` and the quick chips: each renders only with its handler supplied (none for a section the
+   * copilot cannot revise); with neither, only `Comment` renders.
    */
-  copilotActions?: boolean;
   onPrompt?: (() => void) | undefined;
   onChip?: ((chip: string) => void) | undefined;
 }
@@ -36,7 +35,6 @@ export function SelectionToolbar({
   containerWidth,
   containerHeight = Number.POSITIVE_INFINITY,
   onComment,
-  copilotActions = false,
   onPrompt,
   onChip,
 }: SelectionToolbarProps) {
@@ -44,7 +42,7 @@ export function SelectionToolbar({
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
     if (ref.current) setWidth(ref.current.offsetWidth);
-  }, [copilotActions]);
+  }, [onPrompt, onChip]);
 
   const height = 36;
   const above = rect.top - height - 8;
@@ -74,7 +72,7 @@ export function SelectionToolbar({
         <MessageSquarePlus />
         Comment
       </Button>
-      {copilotActions && onPrompt ? (
+      {onPrompt ? (
         <Button
           type="button"
           variant="ghost"
@@ -88,7 +86,7 @@ export function SelectionToolbar({
           Prompt…
         </Button>
       ) : null}
-      {copilotActions && onChip ? (
+      {onChip ? (
         <>
           {QUICK_CHIPS.map((chip) => (
             <Button

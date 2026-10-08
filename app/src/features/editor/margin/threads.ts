@@ -94,6 +94,12 @@ export function compareThreads(a: MarginThread, b: MarginThread): number {
   const pinnedA = a.range === null;
   const pinnedB = b.range === null;
   if (pinnedA !== pinnedB) return pinnedA ? -1 : 1;
+  // Whole-section and orphaned cards: majors before minors among review issues, then oldest first.
+  if (pinnedA && a.kind === 'review' && b.kind === 'review') {
+    const severity = reviewPayload(a.root).severity === 'major' ? 0 : 1;
+    const other = reviewPayload(b.root).severity === 'major' ? 0 : 1;
+    if (severity !== other) return severity - other;
+  }
   if (a.range && b.range && (a.range.start !== b.range.start || a.range.end !== b.range.end)) {
     return a.range.start - b.range.start || a.range.end - b.range.end;
   }

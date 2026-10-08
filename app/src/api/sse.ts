@@ -1,4 +1,4 @@
-import { apiBaseUrl, apiClient, unwrap } from './client';
+import { ApiError, apiBaseUrl, apiClient, unwrap } from './client';
 import type {
   Comment,
   Run,
@@ -284,6 +284,11 @@ export function subscribeSuggestionEvents(
       }
     } catch (cause) {
       onError?.(cause);
+      // The suggestion is gone (deleted, or its node was): there is nothing left to wait for.
+      if (cause instanceof ApiError && cause.status === 404) {
+        finish('cancelled', null);
+        return;
+      }
     }
     if (!stopped) pollTimer = setTimeout(() => void pollOnce(), pollIntervalMs);
   }

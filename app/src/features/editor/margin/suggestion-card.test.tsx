@@ -16,6 +16,7 @@ import type { MarginCardContext } from './card-registry';
 import { MarginCard } from './margin-card';
 import { useMarginStore } from './margin-store';
 import { useSuggestionProgress } from './suggestion-progress';
+import { useUndoneSuggestions } from './use-suggestion-actions';
 import { makeComment, makeContext, makeSuggestion, makeThread } from './test-helpers';
 
 const toasts = vi.hoisted(() => ({
@@ -309,7 +310,9 @@ describe('suggestion card: ready to review', () => {
   });
 
   it('warns that the text changed under a range suggestion whose anchor is orphaned, and still offers Accept and Try again', async () => {
-    const { row } = await pendingSuggestion({ scope: 'range', params: { moreProofs: true } });
+    const { row: made } = await pendingSuggestion({ scope: 'range', params: { moreProofs: true } });
+    // The range is gone from the text: the suggestion's own anchor has no offsets any more.
+    const row = { ...made, anchor: { ...made.anchor!, start: null, end: null } } as Comment;
     renderSuggestion(row, { orphaned: true });
     expect(screen.getByText(/The text changed since this was suggested/)).toBeInTheDocument();
     expect(screen.getByText('Orphaned')).toBeInTheDocument();
@@ -380,7 +383,10 @@ describe('suggestion card: accept', () => {
     ]);
     expect(db.comments.get(row.id)?.status).toBe('accepted');
     expect(nodeRow().contentMarkdown).toBe(revision.replacement);
-    expect(ctx.applyServerContent).toHaveBeenCalledWith(revision.replacement);
+    expect(ctx.applyServerContent).toHaveBeenCalledWith(
+      revision.replacement,
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+    );
     expect(ctx.restoreEditorFocus).toHaveBeenCalled();
   });
 
@@ -511,15 +517,6 @@ describe('suggestion card: accept', () => {
     expect(ctx.applyServerContent).not.toHaveBeenCalled();
   });
 
-  it('keeps a draft the user typed during the accept: the section notice decides, nothing is adopted over it', async () => {
-    const user = userEvent.setup();
-    const { row } = await pendingSuggestion({ params: { moreProofs: true } });
-    const { ctx } = renderSuggestion(row, { ctx: { hasUnsavedEdits: () => true } });
-    await user.click(screen.getByRole('button', { name: 'Accept' }));
-    await waitFor(() => expect(db.comments.get(row.id)?.status).toBe('accepted'));
-    expect(ctx.applyServerContent).not.toHaveBeenCalled();
-  });
-
   it('offers an Undo that writes the previous text back, guarded by the hash the accept returned', async () => {
     const user = userEvent.setup();
     const { row, revision, original } = await pendingSuggestion({ params: { moreProofs: true } });
@@ -543,9 +540,14 @@ describe('suggestion card: accept', () => {
     await waitFor(() => expect(nodeRow().contentMarkdown).toBe(original));
     expect(patches[0]?.expectedContentHash).toBe(await sha256Hex(revision.replacement));
     expect(patches[0]?.contentMarkdown).toBe(original);
-    await waitFor(() => expect(ctx.applyServerContent).toHaveBeenLastCalledWith(original));
+    await waitFor(() =>
+      expect(ctx.applyServerContent).toHaveBeenLastCalledWith(
+        original,
+        expect.stringMatching(/^[0-9a-f]{64}$/),
+      ),
+    );
     expect(calls.filter((call) => call === 'hold')).toHaveLength(2);
-    expect(toasts.success).toHaveBeenCalledWith('Suggestion undone');
+    expect(toasts.success).toHaveBeenCalledWith('Text restored', expect.anything());
   });
 
   it('leaves the section alone and says why when the text was edited after the accept', async () => {
@@ -584,13 +586,25 @@ describe('suggestion card: finished', () => {
     expect(ctx.restoreEditorFocus).toHaveBeenCalled();
   });
 
-  it('shows a cancelled suggestion with Try again and Dismiss', () => {
-    const row = makeSuggestion({ status: 'cancelled' });
+  it('shows a cancelled suggestion with Try again and Dismiss, naming who stopped it', () => {
+    const row = makeSuggestion({ status: 'cancelled' }, { cancelledBy: 'user-mock-1' });
     db.comments.set(row.id, row);
     renderSuggestion(row);
     expect(screen.getByText('Cancelled')).toBeInTheDocument();
     expect(screen.getByText(/You stopped this revision/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+  });
+
+  it('does not say "you" for a revision someone else cancelled, and offers no Dismiss to a non-author', () => {
+    const row = makeSuggestion(
+      { status: 'cancelled', authorId: 'u-2', authorName: 'Grace' },
+      { cancelledBy: 'u-2' },
+    );
+    db.comments.set(row.id, row);
+    renderSuggestion(row);
+    expect(screen.getByText(/This revision was cancelled before it finished/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 
   it.each([
@@ -637,5 +651,133 @@ describe('suggestion inside a comment thread', () => {
     expect(screen.getByRole('button', { name: 'Accept' })).toBeInTheDocument();
     // The comment's own actions are still there.
     expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
+  });
+
+  describe('a finished suggestion from the node list (no original text, only hunks)', () => {
+    const hunks = [
+      { start: 3, end: 8, removed: 'quick', added: 'slow' },
+      { start: 20, end: 20, removed: '', added: ' very' },
+      { start: 30, end: 35, removed: 'jumps', added: 'leaps' },
+    ];
+
+    it('still shows what was removed and added, without any context', () => {
+      const row = makeSuggestion({ status: 'accepted' }, { hunks });
+      db.comments.set(row.id, row);
+      renderSuggestion(row);
+      const card = screen.getByRole('region', { name: /^Suggestion/ });
+      expect(card.querySelectorAll('del')).toHaveLength(2);
+      expect(card.querySelectorAll('ins')).toHaveLength(3);
+      expect(card.querySelector('del')).toHaveTextContent('Removed: quick');
+      expect(card.querySelector('ins')).toHaveTextContent('Added: slow');
+    });
+
+    it("after a partial accept shows only the applied changes, and not the model's summary of all of them", () => {
+      const row = makeSuggestion(
+        { status: 'accepted', bodyMarkdown: 'Replaced three words.' },
+        { hunks, appliedHunks: [0, 2] },
+      );
+      db.comments.set(row.id, row);
+      renderSuggestion(row);
+      const card = screen.getByRole('region', { name: /^Suggestion/ });
+      expect(within(card).getAllByRole('group', { name: /^Change \d+ of 2$/ })).toHaveLength(2);
+      expect(card).not.toHaveTextContent('very');
+      expect(within(card).getByText('2 of 3 changes applied.')).toBeInTheDocument();
+      expect(card).not.toHaveTextContent('Replaced three words.');
+    });
+
+    it('says Accepted, then undone, when this tab undid it', () => {
+      const row = makeSuggestion({ status: 'accepted' }, { hunks });
+      db.comments.set(row.id, row);
+      useUndoneSuggestions.getState().mark(row.id);
+      renderSuggestion(row);
+      expect(
+        screen.getByText(/Accepted, then undone: the text was restored\./),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe('Try again on a range suggestion', () => {
+    it('does not widen to the whole section when its own range is gone: it opens the window instead', async () => {
+      const user = userEvent.setup();
+      const { row: made } = await pendingSuggestion({
+        scope: 'range',
+        params: { moreProofs: true },
+      });
+      const row = { ...made, anchor: { ...made.anchor!, start: null, end: null } } as Comment;
+      const startRevision = vi.fn(() => Promise.resolve({ kind: 'suggestion' } as never));
+      const onTryAgain = vi.fn();
+      renderSuggestion(row, { ctx: { startRevision, onTryAgain } });
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+      await user.click(await screen.findByRole('menuitem', { name: 'Ask again as it was' }));
+      expect(startRevision).not.toHaveBeenCalled();
+      expect(onTryAgain).toHaveBeenCalledWith(
+        expect.objectContaining({ id: row.id }),
+        expect.anything(),
+      );
+    });
+
+    it("resends with the suggestion's own range, dropping references to cards that were deleted", async () => {
+      const user = userEvent.setup();
+      const { row } = await pendingSuggestion({
+        scope: 'range',
+        params: {
+          moreProofs: true,
+          fixIssueIds: ['live', 'deleted'],
+          addressCommentIds: ['deleted-too'],
+        },
+        overrides: { threadId: 'thread-gone' },
+      });
+      const calls: unknown[] = [];
+      renderSuggestion(row, {
+        ctx: {
+          startRevision: (request) => {
+            calls.push(request);
+            return Promise.resolve({ kind: 'suggestion' } as never);
+          },
+          knownIds: () => new Set(['live']),
+        },
+      });
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+      await user.click(await screen.findByRole('menuitem', { name: 'Ask again as it was' }));
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toMatchObject({
+        scope: 'range',
+        anchor: { quote: expect.any(String) },
+        params: { moreProofs: true, fixIssueIds: ['live'], addressCommentIds: [] },
+      });
+      expect(calls[0]).not.toHaveProperty('threadId');
+    });
+  });
+
+  describe('double submission', () => {
+    it('disables the actions for the whole accept, including the save before it', async () => {
+      const user = userEvent.setup();
+      const { row } = await pendingSuggestion({ params: { moreProofs: true } });
+      let release!: () => void;
+      const { calls } = renderSuggestion(row, {
+        ctx: {
+          holdSaving: () =>
+            new Promise((resolve) => {
+              release = () => resolve(() => {});
+            }),
+        },
+      });
+      void calls;
+      await user.click(screen.getByRole('button', { name: 'Accept' }));
+      // The save before the accept has not finished: nothing can be clicked a second time.
+      expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled();
+      release();
+      await waitFor(() => expect(db.comments.get(row.id)?.status).toBe('accepted'));
+    });
+
+    it('blocks Accept, Reject-free actions and Try again while the section has a conflicting incoming version', async () => {
+      const { row } = await pendingSuggestion({ params: { moreProofs: true } });
+      renderSuggestion(row, { ctx: { editBlockedReason: 'Resolve the other version first.' } });
+      expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled();
+      expect(screen.getByText('Resolve the other version first.')).toBeVisible();
+    });
   });
 });

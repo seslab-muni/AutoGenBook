@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Bot } from 'lucide-react';
 
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
 import { MARGIN_CARD_KINDS, type MarginCardContext } from './card-registry';
 import { MarginCard } from './margin-card';
 import { makeComment, makeThread } from './test-helpers';
@@ -11,12 +12,16 @@ const CTX: MarginCardContext = {
   projectId: 'p',
   nodeId: 'n',
   currentUserId: null,
-  copilotActions: false,
   restoreEditorFocus: vi.fn(),
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
   flushEdits: () => Promise.resolve(),
   holdSaving: () => Promise.resolve(() => {}),
+  serverAnchor: toServerAnchor,
+  editBlockedReason: null,
+  revisable: true,
+  rewriteBlock: null,
+  knownIds: () => new Set<string>(),
 };
 
 const original = { ...MARGIN_CARD_KINDS };

@@ -176,8 +176,9 @@ describe('line endings', () => {
     const view = editorView();
     expect(view.state.doc.toString()).toBe(TEXT);
 
-    // A new comment on a range after a line break is anchored over LF text.
-    let posted: { anchor: { start: number; end: number; quote: string } } | undefined;
+    // A new comment on a range after a line break: the editor counts LF but the server stores CR LF, so
+    // the offsets would be wrong there. They are left out and the server finds the quote itself.
+    let posted: { anchor: { start: number | null; end: number | null; quote: string } } | undefined;
     server.use(
       http.post('*/api/v1/projects/:projectId/outline/:nodeId/comments', async ({ request }) => {
         posted = (await request.json()) as typeof posted;
@@ -195,7 +196,8 @@ describe('line endings', () => {
       'hi{Control>}{Enter}{/Control}',
     );
     await waitFor(() => expect(posted).toBeDefined(), LONG);
-    expect(posted!.anchor.start).toBe(from);
+    expect(posted!.anchor.start).toBeNull();
+    expect(posted!.anchor.end).toBeNull();
     expect(posted!.anchor.quote).toBe('Alpha again');
   }, 30000);
 });

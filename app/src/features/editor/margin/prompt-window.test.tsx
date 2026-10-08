@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -63,6 +63,7 @@ function open(
     threads?: MarginThread[];
     draft?: Partial<Extract<ComposerDraft, { kind: 'prompt' }>>;
     text?: string;
+    explicit?: boolean;
     range?: { start: number; end: number } | null;
   } = {},
 ) {
@@ -93,7 +94,7 @@ function open(
         ...options.draft,
       },
       ctx.nodeId,
-      options.text ?? '',
+      { text: options.text ?? '', explicit: options.explicit ?? true },
     ),
   );
   return { ctx, startRevision, view, element };
@@ -158,7 +159,9 @@ describe('prompt window', () => {
     });
     await waitFor(() => expect(screen.getByText('closed')).toBeInTheDocument());
     // The sent text is gone for good.
-    expect(useMarginStore.getState().drafts[draftKey('rl-sec-1-1', 'prompt')]).toBeUndefined();
+    expect(
+      useMarginStore.getState().drafts[draftKey('rl-sec-1-1', 'prompt:section')],
+    ).toBeUndefined();
   });
 
   it('closes on Escape from anywhere in the window and forgets the text', async () => {
@@ -168,7 +171,9 @@ describe('prompt window', () => {
     await user.click(screen.getByRole('button', { name: 'longer' }));
     await user.keyboard('{Escape}');
     expect(screen.getByText('closed')).toBeInTheDocument();
-    expect(useMarginStore.getState().drafts[draftKey('rl-sec-1-1', 'prompt')]).toBeUndefined();
+    expect(
+      useMarginStore.getState().drafts[draftKey('rl-sec-1-1', 'prompt:section')],
+    ).toBeUndefined();
   });
 
   it('cannot send nothing: a blank instruction with no chip is disabled, a chip alone is enough', async () => {
@@ -267,6 +272,11 @@ describe('prompt window', () => {
       'true',
     );
     await user.click(screen.getByRole('button', { name: 'Rewrite' }));
+    // A whole-section Rewrite replaces the section through a run: it asks first, and sends nothing before.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Rewrite this section?');
+    expect(section.startRevision).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Rewrite section' }));
     expect(section.startRevision).toHaveBeenCalledWith(
       { verb: 'rewrite', instruction: 'start over' },
       { moveFocus: true },
@@ -281,7 +291,8 @@ describe('prompt window', () => {
     open(options as Parameters<typeof open>[0]);
     const rewrite = screen.getByRole('radio', { name: 'Rewrite' });
     expect(rewrite).toHaveAttribute('aria-disabled', 'true');
-    expect(rewrite.getAttribute('title')).toMatch(reason);
+    // The reason is visible text, not a tooltip.
+    expect(screen.getByText(reason)).toBeVisible();
     await user.click(rewrite);
     expect(screen.getByRole('radio', { name: 'Revise' })).toBeChecked();
   });
@@ -305,7 +316,9 @@ describe('prompt window', () => {
     );
     await user.click(screen.getByRole('button', { name: 'cite sources' }));
     first.view.unmount();
-    expect(useMarginStore.getState().drafts[draftKey('rl-sec-1-1', 'prompt')]).toBe('half writ');
+    expect(useMarginStore.getState().drafts[draftKey('rl-sec-1-1', 'prompt:section')]).toBe(
+      'half writ',
+    );
 
     // The same composer, a fresh mount: everything is back.
     renderWithProviders(first.element);
@@ -327,7 +340,7 @@ describe('prompt window', () => {
   });
 
   it("a fresh window does not inherit the previous one's text", () => {
-    useMarginStore.getState().setDraftText(draftKey('rl-sec-1-1', 'prompt'), 'stale');
+    useMarginStore.getState().setDraftText(draftKey('rl-sec-1-1', 'prompt:section'), 'stale');
     open({ text: '' });
     expect(screen.getByRole('textbox', { name: 'Instruction for the copilot' })).toHaveValue('');
   });
@@ -396,7 +409,7 @@ describe('prompt window', () => {
     expect(useUiStore.getState().activeModal).toBe('account');
   });
 
-  it("shows a rewrite refusal in the server's own words", async () => {
+  it('maps a Rewrite refusal to words, and never shows a raw server string with an id', async () => {
     const user = userEvent.setup();
     const { startRevision } = open({ text: 'again' });
     await user.click(screen.getByRole('radio', { name: 'Rewrite' }));
@@ -404,9 +417,130 @@ describe('prompt window', () => {
       problem(409, 'no_base_run', 'No successful prior run to resume from'),
     );
     await user.click(screen.getByRole('button', { name: 'Rewrite' }));
+    await user.click(await screen.findByRole('button', { name: 'Rewrite section' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'No successful prior run to resume from',
+      'There is no finished run to rewrite from. Start a full run first.',
     );
+
+    startRevision.mockRejectedValueOnce(
+      problem(
+        409,
+        'x',
+        'outline node 3f2b1c4e-1111-4222-8333-444455556666 is in a state nobody planned for',
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Rewrite' }));
+    await user.click(await screen.findByRole('button', { name: 'Rewrite section' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not be started/),
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/3f2b1c4e/);
+  });
+
+  it('shows up front why a Rewrite cannot start, with the old remedies', async () => {
+    const user = userEvent.setup();
+    useUiStore.setState({ activeModal: null });
+    open({
+      anchor: null,
+      ctx: {
+        rewriteBlock: {
+          reason: 'No successful prior run to resume from — start a full run first.',
+          remedy: 'start-run',
+        },
+      },
+    });
+    const rewrite = screen.getByRole('radio', { name: 'Rewrite' });
+    expect(rewrite).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText(/No successful prior run to resume from/)).toBeVisible();
+    await user.click(rewrite);
+    expect(screen.getByRole('radio', { name: 'Revise' })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Start full run' }));
+    expect(useUiStore.getState().activeModal).toBe('start-run');
+  });
+
+  it('offers to unlock a locked section, and unlocks it', async () => {
+    const user = userEvent.setup();
+    const node = db.outlineNodes.get('rl-sec-1-1')!;
+    db.outlineNodes.set('rl-sec-1-1', { ...node, contentLocked: true });
+    open({
+      anchor: null,
+      ctx: {
+        rewriteBlock: {
+          reason: 'This section’s content is locked — unlock it to rewrite it.',
+          remedy: 'unlock',
+        },
+      },
+    });
+    await user.click(screen.getByRole('button', { name: 'Unlock content' }));
+    await waitFor(() => expect(db.outlineNodes.get('rl-sec-1-1')!.contentLocked).toBe(false));
+  });
+
+  it('a LaTeX-only section only has Rewrite', () => {
+    open({ anchor: null, draft: { verb: 'rewrite' }, ctx: { revisable: false } });
+    expect(screen.getByRole('radio', { name: 'Revise' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('radio', { name: 'Rewrite' })).toBeChecked();
+    expect(screen.getByText(/this one holds LaTeX/)).toBeVisible();
+  });
+
+  it('is blocked, with the reason shown, while the section has a conflicting incoming version', () => {
+    open({
+      text: 'go',
+      ctx: { editBlockedReason: 'This section was changed elsewhere. Choose first.' },
+    });
+    expect(screen.getByRole('button', { name: 'Revise' })).toBeDisabled();
+    expect(screen.getByText(/changed elsewhere/)).toBeVisible();
+  });
+
+  it('keeps the draft when another window is opened for another scope, and when the same one is reopened', async () => {
+    const user = userEvent.setup();
+    const first = open({ anchor: null });
+    await user.type(
+      screen.getByRole('textbox', { name: 'Instruction for the copilot' }),
+      'section text',
+    );
+    await user.click(screen.getByRole('button', { name: 'cite sources' }));
+    // A prompt for a selection opens: the section draft is not thrown away.
+    act(() =>
+      useMarginStore.getState().openPrompt(
+        {
+          kind: 'prompt',
+          anchor: ANCHOR,
+          verb: 'revise',
+          chips: noChips(),
+          origin: 'selection',
+          replaces: null,
+          threadId: null,
+        },
+        'rl-sec-1-1',
+      ),
+    );
+    expect(screen.getByRole('textbox', { name: 'Instruction for the copilot' })).toHaveValue('');
+    expect(useMarginStore.getState().drafts[draftKey('rl-sec-1-1', 'prompt:section')]).toBe(
+      'section text',
+    );
+    // Back to the whole section (the header button): text and chips are there.
+    act(() =>
+      useMarginStore.getState().openPrompt(
+        {
+          kind: 'prompt',
+          anchor: null,
+          verb: 'revise',
+          chips: noChips(),
+          origin: 'header',
+          replaces: null,
+          threadId: null,
+        },
+        'rl-sec-1-1',
+      ),
+    );
+    expect(screen.getByRole('textbox', { name: 'Instruction for the copilot' })).toHaveValue(
+      'section text',
+    );
+    expect(screen.getByRole('button', { name: 'cite sources' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    void first;
   });
 
   it('ignores a second send while one is in flight', async () => {

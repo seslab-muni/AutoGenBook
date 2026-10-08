@@ -68,17 +68,6 @@ function RunPage() {
   // reviews alone would fill a 200-row page and crowd every section off it, both undercounting
   // the "N of M sections generated" counter below and truncating `ArtifactsList`'s own rendering
   // of the sections themselves.
-  // The stages the run has reported, in order, the latest one marked (the studio's old copilot
-  // drawer showed this as its "Stage timeline"; the run page is where run progress lives now).
-  const stagesSeen = useMemo(() => {
-    const seen: string[] = [];
-    for (const event of events) {
-      if (event.stage && !seen.includes(event.stage)) seen.push(event.stage);
-    }
-    return seen;
-  }, [events]);
-  const currentStage = events[events.length - 1]?.stage ?? null;
-
   const { data: artifactsSummary } = useQuery(runQueries.artifactsSummary(runId));
   const countsByKind = useMemo(() => artifactsSummary?.countsByKind ?? {}, [artifactsSummary]);
 
@@ -228,7 +217,15 @@ function RunPage() {
                 void navigate({
                   to: '/p/$projectId',
                   params: { projectId },
-                  search: { node: regenerateAgainNodeId },
+                  // The studio opens that section with the prompt window on Rewrite, filled in
+                  // with what this run was asked.
+                  search: {
+                    node: regenerateAgainNodeId,
+                    copilot: 'rewrite',
+                    ...(run.options.promptModifier
+                      ? { instruction: run.options.promptModifier }
+                      : {}),
+                  },
                 })
               }
             >
@@ -294,23 +291,6 @@ function RunPage() {
           <div className="border-b bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground">
             Event log
           </div>
-          {stagesSeen.length > 0 ? (
-            <ol aria-label="Stage timeline" className="flex flex-wrap gap-1.5 border-b px-3 py-2">
-              {stagesSeen.map((stage) => (
-                <li
-                  key={stage}
-                  aria-current={stage === currentStage && isRunning ? 'step' : undefined}
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${
-                    stage === currentStage && isRunning
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'text-muted-foreground'
-                  }`}
-                >
-                  {stage}
-                </li>
-              ))}
-            </ol>
-          ) : null}
           <RunEventLog events={events} className="flex-1 p-2" />
         </div>
 

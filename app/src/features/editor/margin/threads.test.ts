@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { filterThreads, hasKind, isClosed, isThreadClosed } from './threads';
+import {
+  compareThreads,
+  countOpenIssues,
+  filterThreads,
+  hasKind,
+  isClosed,
+  isThreadClosed,
+} from './threads';
 import { makeComment, makeReview, makeSuggestion, makeThread } from './test-helpers';
 
 describe("thread filters with the copilot's rows", () => {
@@ -64,5 +71,26 @@ describe("thread filters with the copilot's rows", () => {
       ],
     });
     expect(isThreadClosed(settled)).toBe(true);
+  });
+
+  it('orders whole-section review cards: majors first, then oldest, then id', () => {
+    const at = (id: string, severity: string, createdAt: string) =>
+      makeThread(makeReview({ id, anchor: null, createdAt }, { severity }));
+    const cards = [
+      at('b-minor-old', 'minor', '2026-01-01T00:00:00Z'),
+      at('z-major-new', 'major', '2026-03-01T00:00:00Z'),
+      at('a-major-old', 'major', '2026-02-01T00:00:00Z'),
+      at('c-major-old', 'major', '2026-02-01T00:00:00Z'),
+      at('weird', 'catastrophic', '2026-01-01T00:00:00Z'),
+    ];
+    expect([...cards].sort(compareThreads).map((t) => t.id)).toEqual([
+      'a-major-old',
+      'c-major-old',
+      'z-major-new',
+      'b-minor-old',
+      // An unknown severity is Minor, the server's default.
+      'weird',
+    ]);
+    expect(countOpenIssues(cards)).toEqual({ major: 3, minor: 2 });
   });
 });

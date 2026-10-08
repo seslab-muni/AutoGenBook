@@ -59,11 +59,52 @@ function codeOf(error: unknown): string | null {
   return error instanceof ApiError ? (error.problem?.code ?? null) : null;
 }
 
-export function describeStartError(error: unknown): CopilotFailure {
+const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+
+/** What a Rewrite (the regenerate endpoint) can refuse with: it sends free text, so it is matched, not coded. */
+const REWRITE_PATTERNS: [RegExp, string][] = [
+  [
+    /no successful prior run|work directory no longer exists/i,
+    'There is no finished run to rewrite from. Start a full run first.',
+  ],
+  [
+    /already has a regenerate queued|already .*queued or running/i,
+    'This section already has a rewrite queued or running.',
+  ],
+  [/content-locked|locked/i, 'This section’s content is locked. Unlock it to rewrite it.'],
+  [
+    /full run is queued or running/i,
+    'A full run is queued or running for this project. Wait for it to finish or cancel it.',
+  ],
+  [
+    /queue is full/i,
+    'The run queue for this project is full. Try again when one run has finished.',
+  ],
+  [/container|leaf/i, 'Only leaf sections can be rewritten. Select a section below this one.'],
+];
+
+export function describeStartError(
+  error: unknown,
+  verb: 'revise' | 'rewrite' = 'revise',
+): CopilotFailure {
   const code = codeOf(error);
   const known = code ? START_MESSAGES[code] : undefined;
-  // Rewrite shares the regenerate endpoint's reasons, which come as free text: show them as sent.
-  return { message: known ?? problemMessage(error), code };
+  if (known) return { message: known, code };
+  if (
+    verb === 'rewrite' &&
+    error instanceof ApiError &&
+    error.status >= 400 &&
+    error.status < 500
+  ) {
+    const text = `${error.problem?.title ?? ''} ${error.problem?.detail ?? ''}`;
+    const matched = REWRITE_PATTERNS.find(([pattern]) => pattern.test(text));
+    return {
+      message: matched ? matched[1] : 'The rewrite could not be started. Try again later.',
+      code,
+    };
+  }
+  // Never an id the person cannot use.
+  return { message: problemMessage(error).replace(UUID, 'this section'), code };
 }
 
 /** The text for a failed suggestion card; the server's own wording backs up a code we do not know. */

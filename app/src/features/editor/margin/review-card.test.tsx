@@ -88,6 +88,25 @@ describe('review card', () => {
     expect(screen.queryByLabelText(/^Replace “/)).not.toBeInTheDocument();
   });
 
+  it('clamps a long description and required fix to a few lines, with Show more', async () => {
+    const user = userEvent.setup();
+    const long = 'A very long observation about the section. '.repeat(12);
+    renderReview(makeReview({ bodyMarkdown: long }, { requiredFix: long }));
+    const more = screen.getAllByRole('button', { name: 'Show more' });
+    expect(more).toHaveLength(2);
+    const paragraph = screen.getAllByText(long.trim())[0]!;
+    expect(paragraph.className).toContain('line-clamp-4');
+    await user.click(more[0]!);
+    expect(paragraph.className).not.toContain('line-clamp-4');
+    expect(screen.getAllByRole('button', { name: 'Show less' })).toHaveLength(1);
+  });
+
+  it('reads a missing severity as minor, the server default', () => {
+    renderReview(makeReview({}, { severity: undefined }));
+    expect(screen.getByText('Minor')).toHaveAttribute('data-severity', 'minor');
+    expect(screen.queryByText('Major')).not.toBeInTheDocument();
+  });
+
   it('flags an outdated issue that a newer review no longer reports', () => {
     renderReview(makeReview({ status: 'resolved' }, { outdated: true }));
     expect(screen.getByText('Outdated')).toBeInTheDocument();
@@ -109,16 +128,11 @@ describe('review card', () => {
     await waitFor(() => expect(db.comments.get(review.id)?.status).toBe('resolved'));
   });
 
-  it('Fix with Copilot needs the flag AND a handler, and hands the thread over', async () => {
+  it('Fix with Copilot needs a handler, and hands the thread over', async () => {
     const user = userEvent.setup();
-    const first = renderReview(makeReview(), {
-      ctx: { copilotActions: false, onFixWithCopilot: vi.fn() },
-    });
+    const first = renderReview(makeReview(), { ctx: { onFixWithCopilot: undefined } });
     expect(screen.queryByRole('button', { name: 'Fix with Copilot' })).not.toBeInTheDocument();
     first.unmount();
-    const second = renderReview(makeReview(), { ctx: { onFixWithCopilot: undefined } });
-    expect(screen.queryByRole('button', { name: 'Fix with Copilot' })).not.toBeInTheDocument();
-    second.unmount();
 
     const onFix = vi.fn();
     const review = makeReview();
@@ -161,15 +175,7 @@ describe('review summary strip', () => {
     score: number | null = null,
   ) {
     return renderWithProviders(
-      <div className="relative">
-        <ReviewSummaryStrip
-          summary={summary}
-          threads={threads}
-          score={score}
-          register={() => {}}
-          top={0}
-        />
-      </div>,
+      <ReviewSummaryStrip summary={summary} threads={threads} score={score} legacyNotes={null} />,
     );
   }
 
@@ -215,18 +221,45 @@ describe('review summary strip', () => {
     expect(within(strip).queryByText(/Suggested edits/)).not.toBeInTheDocument();
   });
 
-  it('keeps the suggested edits and the evidence searches in collapsed disclosures', async () => {
+  it('keeps the suggested edits and the evidence searches closed until asked, as panels over the cards', async () => {
     const user = userEvent.setup();
     renderStrip(summary);
-    const edits = screen.getByText('Suggested edits (2)');
-    const searches = screen.getByText('Searches that would find missing evidence (1)');
-    expect(edits.closest('details')).not.toHaveAttribute('open');
-    expect(searches.closest('details')).not.toHaveAttribute('open');
+    const edits = screen.getByRole('button', { name: 'Suggested edits (2)' });
+    const searches = screen.getByRole('button', {
+      name: 'Searches that would find missing evidence (1)',
+    });
+    expect(edits).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Add a proof sketch.')).not.toBeInTheDocument();
     await user.click(edits);
-    expect(edits.closest('details')).toHaveAttribute('open');
-    expect(screen.getByText('Add a proof sketch.')).toBeVisible();
+    expect(edits).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('region', { name: 'Suggested edits' })).toHaveTextContent(
+      'Add a proof sketch.',
+    );
+    // One at a time; the same button closes it, and so does Escape inside the panel.
     await user.click(searches);
+    expect(screen.queryByText('Add a proof sketch.')).not.toBeInTheDocument();
     expect(screen.getByText('partial synchrony proof')).toBeVisible();
+    await user.click(searches);
+    expect(screen.queryByText('partial synchrony proof')).not.toBeInTheDocument();
+    await user.click(edits);
+    screen.getByRole('region', { name: 'Suggested edits' }).focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByText('Add a proof sketch.')).not.toBeInTheDocument();
+  });
+
+  it('shows the notes of a review from before review rows existed as a plain list', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ReviewSummaryStrip
+        summary={null}
+        threads={[]}
+        score={null}
+        legacyNotes={'[minor] terminology: use Systems Dynamics'}
+      />,
+    );
+    expect(screen.getByText(/reviewed before issues became cards/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Review notes (previous run)' }));
+    expect(screen.getByText('[minor] terminology: use Systems Dynamics')).toBeInTheDocument();
   });
 
   it('shows the reviewer score when the run produced one', () => {

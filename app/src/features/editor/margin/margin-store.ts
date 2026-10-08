@@ -55,6 +55,10 @@ export type ComposerDraft =
       replaces: { id: string; status: string } | null;
       /** The comment or review thread the suggestion should arrive in (Try again on one that did). */
       threadId: string | null;
+      /** Where this prompt's unsent text and options are kept (`promptKey`): one per scope. */
+      key: string;
+      /** Shown under the scope pill: why the window is not what the person asked for (a selection that is gone). */
+      notice?: string | undefined;
     };
 // Every draft kind carries `anchor` (what it is about, `null` = the whole section): the margin
 // positions and highlights drafts from that alone, and renders them through `COMPOSER_KINDS`.
@@ -69,6 +73,10 @@ interface MarginState {
   /** Asks the margin to scroll a card into view and focus its highlight, without moving keyboard focus. */
   revealRequest: { id: string; nonce: number } | null;
   composer: ComposerDraft | null;
+  /** Options and verb of every prompt draft (by `promptKey`), so a closed or replaced draft keeps them. */
+  promptExtras: Record<string, { verb: 'revise' | 'rewrite'; chips: PromptChips }>;
+  /** A section's unfinished composer, kept while another section is open and restored when it comes back. */
+  savedComposers: Record<string, ComposerDraft>;
   /**
    * Text typed into composers that has not been sent, by `nodeId:scope` (`new`, `reply:<thread>`,
    * `edit:<comment>`). Lives here, not in the composer, so it survives the composer unmounting (a
@@ -86,18 +94,24 @@ interface MarginState {
   /** Scroll the card into view and focus its highlight, leaving keyboard focus where it is. */
   revealCard: (id: string) => void;
   openComposer: (draft: ComposerDraft) => void;
-  /** Opens the prompt window with `text` as its instruction (empty for a fresh one). */
+  /**
+   * Opens the prompt window for this section and scope. With `explicit` (Try again, a pre-set
+   * request) the draft's own verb, options and `text` are used; otherwise whatever was kept for that
+   * scope is reused (text in `drafts`, options in `promptExtras`), so reopening never loses what was typed.
+   */
   openPrompt: (
-    draft: Extract<ComposerDraft, { kind: 'prompt' }>,
+    draft: Omit<Extract<ComposerDraft, { kind: 'prompt' }>, 'key'>,
     nodeId: string,
-    text?: string,
+    options?: { text?: string; explicit?: boolean },
   ) => void;
+  /** Brings back the composer this section was left with. */
+  restoreComposer: (nodeId: string) => void;
   /** Changes the open prompt window (its verb or chips); a no-op for any other composer. */
   updatePrompt: (
     patch: Partial<Pick<Extract<ComposerDraft, { kind: 'prompt' }>, 'verb' | 'chips'>>,
   ) => void;
   closeComposer: () => void;
-  reset: () => void;
+  reset: (nodeId?: string) => void;
 }
 
 /**
@@ -111,6 +125,8 @@ export const useMarginStore = create<MarginState>()((set) => ({
   focusRequest: null,
   revealRequest: null,
   composer: null,
+  promptExtras: {},
+  savedComposers: {},
   drafts: {},
   setDraftText: (key, text) => set((state) => ({ drafts: { ...state.drafts, [key]: text } })),
   clearDraftText: (key) =>
@@ -142,39 +158,73 @@ export const useMarginStore = create<MarginState>()((set) => ({
         Object.entries(state.drafts).filter(([key]) => !key.endsWith(':new')),
       ),
     })),
-  openPrompt: (draft, nodeId, text = '') =>
-    set((state) => ({
-      composer: draft,
-      focusedId: DRAFT_ID,
-      // The previous window's unsent text is not this one's.
-      drafts: {
-        ...Object.fromEntries(
-          Object.entries(state.drafts).filter(
-            ([key]) => !key.endsWith(':new') && !key.endsWith(':prompt'),
-          ),
-        ),
-        ...(text === '' ? {} : { [draftKey(nodeId, 'prompt')]: text }),
-      },
-    })),
+  openPrompt: (draft, nodeId, { text, explicit = false } = {}) =>
+    set((state) => {
+      const key = promptKey(draft.anchor);
+      const kept = state.promptExtras[key];
+      const verb = explicit || !kept ? draft.verb : kept.verb;
+      const chips = explicit || !kept ? draft.chips : kept.chips;
+      return {
+        composer: { ...draft, verb, chips, key },
+        focusedId: DRAFT_ID,
+        promptExtras: { ...state.promptExtras, [key]: { verb, chips } },
+        // Unsent text is never thrown away by opening a window: only an explicit request replaces it.
+        drafts:
+          text !== undefined && (explicit || text !== '')
+            ? { ...state.drafts, [draftKey(nodeId, key)]: text }
+            : state.drafts,
+      };
+    }),
   updatePrompt: (patch) =>
-    set((state) =>
-      state.composer?.kind === 'prompt' ? { composer: { ...state.composer, ...patch } } : state,
-    ),
+    set((state) => {
+      if (state.composer?.kind !== 'prompt') return state;
+      const composer = { ...state.composer, ...patch };
+      return {
+        composer,
+        promptExtras: {
+          ...state.promptExtras,
+          [composer.key]: { verb: composer.verb, chips: composer.chips },
+        },
+      };
+    }),
+  restoreComposer: (nodeId) =>
+    set((state) => {
+      const saved = state.savedComposers[nodeId];
+      if (!saved || state.composer) return state;
+      const { [nodeId]: _used, ...rest } = state.savedComposers;
+      void _used;
+      return { composer: saved, focusedId: DRAFT_ID, savedComposers: rest };
+    }),
   closeComposer: () =>
     set((state) => ({
       composer: null,
       focusedId: state.focusedId === DRAFT_ID ? null : state.focusedId,
     })),
-  reset: () =>
-    set({
-      filter: 'all',
-      showResolved: false,
-      focusedId: null,
-      focusRequest: null,
-      revealRequest: null,
-      composer: null,
+  reset: (nodeId) =>
+    set((state) => {
+      const keep =
+        nodeId &&
+        state.composer &&
+        (state.composer.kind === 'prompt' ||
+          (state.drafts[draftKey(nodeId, 'new')] ?? '').trim() !== '');
+      return {
+        filter: 'all',
+        showResolved: false,
+        focusedId: null,
+        focusRequest: null,
+        revealRequest: null,
+        composer: null,
+        ...(keep && nodeId && state.composer
+          ? { savedComposers: { ...state.savedComposers, [nodeId]: state.composer } }
+          : {}),
+      };
     }),
 }));
+
+/** Where a prompt's unsent text and options live: one per scope (the section, or one selected range). */
+export function promptKey(anchor: { start: number | null; end: number | null } | null): string {
+  return anchor ? `prompt:range:${anchor.start ?? 'x'}-${anchor.end ?? 'x'}` : 'prompt:section';
+}
 
 /** The id the composer's pseudo-card and its highlight use. */
 export const DRAFT_ID = 'draft';

@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event';
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { subscribeRunEvents } from '@/api/sse';
@@ -38,16 +38,6 @@ describe('run detail page', () => {
     // A finished run has no Cancel action.
     expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
     expect(screen.getByText(new RegExp(`Started by ${MOCK_USER.displayName}`))).toBeInTheDocument();
-  });
-
-  it('shows the stages the run reported, in order, as a timeline (what the studio drawer used to)', async () => {
-    renderRouterApp(`/p/${PROJECT_ID}/runs/${RUN_ID}`);
-    const timeline = await screen.findByRole('list', { name: 'Stage timeline' });
-    expect(
-      within(timeline)
-        .getAllByRole('listitem')
-        .map((item) => item.textContent),
-    ).toEqual(['planning', 'drafting', 'assembly', 'done']);
   });
 
   it('shows a "N of M sections generated" counter derived from the outline leaf count (issue #129)', async () => {

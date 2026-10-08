@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
-import { buildDiffBlocks, type DiffBlock } from '@/features/editor/lib/diff-view';
+import { buildDiffBlocks, buildHunkBlocks, type DiffBlock } from '@/features/editor/lib/diff-view';
 import type { SuggestionPayload } from '@/features/editor/lib/card-payloads';
 import { cn } from '@/lib/utils';
 
@@ -20,6 +20,8 @@ interface SuggestionDiffProps {
   onToggle?: ((hunkIndex: number) => void) | undefined;
   /** The suggestion was already accepted/rejected: no checkboxes whatever the state. */
   readOnly?: boolean | undefined;
+  /** Show only these hunks (what a partial accept applied). */
+  only?: readonly number[] | undefined;
 }
 
 function Block({
@@ -117,17 +119,19 @@ export function SuggestionDiff({
   selected,
   onToggle,
   readOnly = false,
+  only,
 }: SuggestionDiffProps) {
   const [expanded, setExpanded] = useState(false);
   const original = payload.originalMarkdown;
   const blocks = useMemo(
     () =>
       original === null
-        ? []
+        ? // A finished suggestion from the list endpoint: no original text, the hunks alone.
+          buildHunkBlocks(payload.hunks, only)
         : buildDiffBlocks(original, payload.hunks, {
             range: payload.scope === 'range' ? range : null,
-          }),
-    [original, payload.hunks, payload.scope, range],
+          }).filter((block) => !only || only.includes(block.hunkIndex)),
+    [original, payload.hunks, payload.scope, range, only],
   );
   if (blocks.length === 0) return null;
   const shown = expanded ? blocks : blocks.slice(0, COLLAPSED_CHANGES);

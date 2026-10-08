@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 
 import { subscribeSuggestionEvents } from '@/api/sse';
-import { putSuggestion, settleSuggestion } from '@/api/queries/revisions';
+import { currentStatus, putSuggestion, settleSuggestion } from '@/api/queries/revisions';
+import { useUnticked } from './hunk-selection';
 import type { Comment, SuggestionProgress } from '@/api/types';
 
 const MAX_EVENTS = 60;
@@ -62,6 +63,28 @@ export function useSuggestionStreams(
     .filter((row) => row.kind === 'suggestion' && row.status === 'running')
     .map((row) => row.id);
   const runningKey = running.join('|');
+  const allKey = threads
+    .flatMap((thread) => [thread.root, ...thread.replies])
+    .filter((row) => row.kind === 'suggestion')
+    .map((row) => row.id)
+    .join('|');
+
+  // Per-suggestion UI state (progress lines, ticked hunks) goes when its card does.
+  useEffect(() => {
+    const alive = new Set(allKey === '' ? [] : allKey.split('|'));
+    useSuggestionProgress.setState((state) => {
+      const kept = Object.entries(state.events).filter(([id]) => alive.has(id));
+      return kept.length === Object.keys(state.events).length
+        ? state
+        : { events: Object.fromEntries(kept) };
+    });
+    useUnticked.setState((state) => {
+      const kept = Object.entries(state.unticked).filter(([id]) => alive.has(id));
+      return kept.length === Object.keys(state.unticked).length
+        ? state
+        : { unticked: Object.fromEntries(kept) };
+    });
+  }, [allKey]);
 
   useEffect(() => {
     const wanted = new Set(runningKey === '' ? [] : runningKey.split('|'));
@@ -79,12 +102,20 @@ export function useSuggestionStreams(
         onTerminal: (_name, suggestion) => {
           active.delete(id);
           if (suggestion) {
-            const before = 'running' as const;
+            // What the cache says now, not "running": a cancel the person made has already settled
+            // this suggestion (and its badge), and the stream's own `cancelled` must not count it twice.
+            const before = currentStatus(queryClient, projectId, nodeId, id) ?? 'running';
             putSuggestion(queryClient, projectId, nodeId, suggestion);
             settleSuggestion(queryClient, projectId, nodeId, before, suggestion.status);
             settledRef.current?.(suggestion);
           } else {
-            settleSuggestion(queryClient, projectId, nodeId, 'running', 'failed');
+            settleSuggestion(
+              queryClient,
+              projectId,
+              nodeId,
+              currentStatus(queryClient, projectId, nodeId, id) ?? 'running',
+              'failed',
+            );
           }
           useSuggestionProgress.getState().clear(id);
         },

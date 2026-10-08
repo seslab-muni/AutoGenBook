@@ -33,7 +33,6 @@ interface SelectionLayerProps {
   onComment: (anchor: Anchor) => void;
   /** Focus the card of the highlight the caret is in. */
   onFocusThread: (id: string) => void;
-  copilotActions: boolean;
   /** `Prompt…`: with the flag on and this supplied, the toolbar shows it. Gets the selected range. */
   onPrompt?: ((anchor: Anchor) => void) | undefined;
   /** A quick chip (`Add proof`, ...): likewise; sends at once for the selected range. */
@@ -59,7 +58,6 @@ export function SelectionLayer({
   highlights,
   onComment,
   onFocusThread,
-  copilotActions,
   onPrompt,
   onChip,
 }: SelectionLayerProps) {
@@ -70,10 +68,6 @@ export function SelectionLayer({
   useEffect(() => {
     textRef.current = text;
   }, [text]);
-  const copilotRef = useRef(copilotActions);
-  useEffect(() => {
-    copilotRef.current = copilotActions;
-  }, [copilotActions]);
 
   // The selection as a trimmed code-point range of the draft, or null when there is nothing worth commenting on.
   const range = useMemo(() => {
@@ -242,8 +236,7 @@ export function SelectionLayer({
         event.code === 'KeyP' &&
         event.altKey &&
         (event.ctrlKey || event.metaKey) &&
-        h.startPrompt &&
-        copilotRef.current
+        h.startPrompt
       ) {
         event.preventDefault();
         if (h.selection && h.selection.from !== h.selection.to) h.startPrompt();
@@ -263,7 +256,6 @@ export function SelectionLayer({
       containerWidth={paneSize.width}
       containerHeight={paneSize.height}
       onComment={startComment}
-      copilotActions={copilotActions}
       onPrompt={onPrompt ? startPrompt : undefined}
       onChip={onChip ? sendChip : undefined}
     />

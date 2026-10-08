@@ -7,6 +7,7 @@ import { subscribeSuggestionEvents, type SubscribeSuggestionEventsOptions } from
 import { projectKeys } from '@/api/queries/keys';
 import type { Comment, Page } from '@/api/types';
 
+import { useUnticked } from './hunk-selection';
 import { useSuggestionProgress, useSuggestionStreams } from './suggestion-progress';
 import { makeComment, makeSuggestion } from './test-helpers';
 
@@ -131,5 +132,47 @@ describe('useSuggestionStreams', () => {
     view.rerender({ threads: [thread({ ...row, updatedAt: 'later' })] });
     view.rerender({ threads: [thread({ ...row, bodyMarkdown: 'x' })] });
     expect(subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a suggestion the person already cancelled a second time when the stream says cancelled', () => {
+    const row = makeSuggestion({ id: 'run-1' });
+    const { queryClient } = setup([thread(row)]);
+    // The outline row says one pending suggestion; the cancel call has settled it (status cancelled, badge 0).
+    queryClient.setQueryData(projectKeys.outlineList(PROJECT, 'flat'), {
+      items: [{ id: NODE, pendingSuggestionCount: 2 }],
+      total: 1,
+      limit: 1,
+      offset: 0,
+    });
+    queryClient.setQueryData<Page<Comment>>(projectKeys.nodeComments(PROJECT, NODE), {
+      items: [{ ...row, status: 'cancelled' }],
+      total: 1,
+      limit: 1,
+      offset: 0,
+    });
+    act(() => handlers.get('run-1')!.onTerminal('cancelled', { ...row, status: 'cancelled' }));
+    const flat = queryClient.getQueryData<Page<{ id: string; pendingSuggestionCount: number }>>(
+      projectKeys.outlineList(PROJECT, 'flat'),
+    );
+    // Not decremented again: another suggestion's count is not eaten.
+    expect(flat?.items[0]?.pendingSuggestionCount).toBe(2);
+  });
+
+  it('forgets the progress and the ticked hunks of a suggestion whose card is gone', () => {
+    const row = makeSuggestion({ id: 'gone' });
+    const view = setup([thread(row)]);
+    useSuggestionProgress.getState().append('gone', {
+      seq: 1,
+      ts: '',
+      stage: 'revise',
+      level: 'info',
+      message: 'x',
+    });
+    useUnticked.getState().toggle('gone', 0);
+    useUnticked.getState().toggle('kept', 1);
+    view.rerender({ threads: [thread(makeSuggestion({ id: 'kept', status: 'pending' }))] });
+    expect(useSuggestionProgress.getState().events['gone']).toBeUndefined();
+    expect(useUnticked.getState().unticked['gone']).toBeUndefined();
+    expect(useUnticked.getState().unticked['kept']).toEqual([1]);
   });
 });

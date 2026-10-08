@@ -1,7 +1,13 @@
 import type { ComponentType } from 'react';
 import { Bot, ClipboardCheck, MessageSquare, type LucideIcon } from 'lucide-react';
 
-import type { Comment, CommentKind, RevisionCreate, StartedRevision } from '@/api/types';
+import type {
+  Comment,
+  CommentAnchorIn,
+  CommentKind,
+  RevisionCreate,
+  StartedRevision,
+} from '@/api/types';
 import { CommentCardBody } from './comment-card-body';
 import { ReadOnlyCardBody } from './read-only-card-body';
 import { ReviewCardBody, ReviewStatus } from './review-card';
@@ -14,16 +20,16 @@ export interface MarginCardContext {
   nodeId: string;
   /** The signed-in user, to tell which messages are theirs to edit or delete. */
   currentUserId: string | null;
-  /** Shows the copilot's actions (`Send to Copilot`); see `flags.ts`. */
-  copilotActions: boolean;
   /** Puts keyboard focus back in the text after a composer closes. */
   restoreEditorFocus: () => void;
   /**
-   * Replaces the open editor's text with `markdown`, which is what the server now holds (for
-   * instance after accepting a suggestion that rewrote the section). Cancels a pending autosave
-   * so the old draft cannot overwrite it, and re-resolves every anchor against the new text.
+   * `markdown` (with its `contentHash`) is what the server now holds (for instance after accepting a
+   * suggestion that rewrote the section). With nothing unsaved the editor adopts it: a pending
+   * autosave is cancelled so the old draft cannot overwrite it, and every anchor is re-resolved. With
+   * unsaved edits the draft is left exactly as typed and the "changed elsewhere" notice (Keep mine /
+   * Load the other version) is shown at once, with saving held until the user chooses.
    */
-  applyServerContent: (markdown: string) => void;
+  applyServerContent: (markdown: string, hash?: string | null) => void;
   /** True while the editor holds edits the server has not seen (an Accept should warn instead of clobbering them). */
   hasUnsavedEdits: () => boolean;
   /**
@@ -58,7 +64,32 @@ export interface MarginCardContext {
   holdSaving: () => Promise<() => void>;
   /** The section's number (`2.1`), for the prompt window's scope pill. */
   sectionNumber?: string | undefined;
+  /**
+   * An anchor in the form the server accepts (non-empty quote, consistent offsets, or none): offsets
+   * are left out for a section the server stores with CR LF, where the editor's would be wrong.
+   */
+  serverAnchor: (anchor: AnchorLike | null | undefined) => CommentAnchorIn | null;
+  /**
+   * Why the copilot's writes (Accept, Undo, a new revision) are blocked right now - the section was
+   * changed elsewhere and the person has not chosen yet - or `null`.
+   */
+  editBlockedReason: string | null;
+  /** The section is Markdown, so it can be revised; a LaTeX-only section only has Rewrite. */
+  revisable: boolean;
+  /** Why a whole-section Rewrite cannot start, with the way out; `null` when it can. */
+  rewriteBlock: RewriteBlock | null;
+  /** Ids of the section's cards right now (to drop references to ones that were deleted). */
+  knownIds: () => ReadonlySet<string>;
 }
+
+export interface RewriteBlock {
+  reason: string;
+  remedy: 'start-run' | 'unlock' | null;
+}
+
+type AnchorLike = Parameters<
+  typeof import('@/features/editor/lib/server-anchor').toServerAnchor
+>[0];
 
 export interface MarginCardPartProps {
   thread: MarginThread;

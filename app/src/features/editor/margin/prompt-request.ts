@@ -1,10 +1,14 @@
-import type { RevisionCreate } from '@/api/types';
-import type { DraftCardProps } from './composer-registry';
+import type { CommentAnchorIn, RevisionCreate } from '@/api/types';
 import type { PromptChips } from './margin-store';
 import type { MarginThread } from './threads';
 
-/** Most ids one request may carry (`fixIssueIds` / `addressCommentIds`). */
-const MAX_IDS = 25;
+/**
+ * Most ids one request may carry per list (`fixIssueIds` / `addressCommentIds`): 25, and 24 when the
+ * request has a `threadId`, because the server adds that thread's root to one of the lists.
+ */
+export function idCap(threadId: string | null | undefined): number {
+  return threadId ? 24 : 25;
+}
 export const MAX_INSTRUCTION_LENGTH = 4000;
 
 /** `Selection · 2 sentences`: how much text the prompt is about, in sentences. */
@@ -52,7 +56,8 @@ export function anyChip(chips: PromptChips): boolean {
 /** The request the window sends. Chips are typed fields, never pasted into the instruction. */
 export function buildRevisionRequest(options: {
   verb: 'revise' | 'rewrite';
-  anchor: DraftCardProps['draft']['anchor'];
+  /** The range in the form the server takes (see `toServerAnchor`), or null for the whole section. */
+  anchor: CommentAnchorIn | null;
   instruction: string;
   chips: PromptChips;
   threadId?: string | null;
@@ -74,8 +79,10 @@ export function buildRevisionRequest(options: {
       shorter: chips.length === 'shorter',
       longer: chips.length === 'longer',
       citeSources: chips.citeSources,
-      fixIssueIds: chips.fixIssues ? options.fixIssueIds.slice(0, MAX_IDS) : [],
-      addressCommentIds: chips.addressComments ? options.addressCommentIds.slice(0, MAX_IDS) : [],
+      fixIssueIds: chips.fixIssues ? options.fixIssueIds.slice(0, idCap(options.threadId)) : [],
+      addressCommentIds: chips.addressComments
+        ? options.addressCommentIds.slice(0, idCap(options.threadId))
+        : [],
     },
   };
 }

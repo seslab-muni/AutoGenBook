@@ -83,6 +83,41 @@ describe('useUiStore', () => {
     expect(state).not.toHaveProperty('copilotOpen');
   });
 
+  it('migrates a stored value of the real v0 shape (what the app wrote before the right-pane tabs went), and survives a garbled one', async () => {
+    // Exactly what zustand's persist wrote: `{ state, version }`, with no `version` key at all in the oldest entries.
+    window.localStorage.setItem(
+      'autogenbook-ui',
+      JSON.stringify({
+        state: { outlineOpen: true, copilotOpen: true, rightPane: 'margin', outlineWidth: 320 },
+      }),
+    );
+    await useUiStore.persist.rehydrate();
+    expect(useUiStore.getState()).toMatchObject({
+      outlineOpen: true,
+      marginOpen: true,
+      outlineWidth: 320,
+    });
+
+    window.localStorage.setItem('autogenbook-ui', JSON.stringify({ state: null, version: 0 }));
+    await useUiStore.persist.rehydrate();
+    expect(typeof useUiStore.getState().marginOpen).toBe('boolean');
+
+    // A v1 entry is left as it is.
+    window.localStorage.setItem(
+      'autogenbook-ui',
+      JSON.stringify({
+        state: { outlineOpen: false, marginOpen: false, outlineWidth: 300 },
+        version: 1,
+      }),
+    );
+    await useUiStore.persist.rehydrate();
+    expect(useUiStore.getState()).toMatchObject({
+      outlineOpen: false,
+      marginOpen: false,
+      outlineWidth: 300,
+    });
+  });
+
   it('clamps setOutlineWidth to [MIN_OUTLINE_WIDTH, MAX_OUTLINE_WIDTH]', () => {
     useUiStore.getState().setOutlineWidth(MIN_OUTLINE_WIDTH - 100);
     expect(useUiStore.getState().outlineWidth).toBe(MIN_OUTLINE_WIDTH);

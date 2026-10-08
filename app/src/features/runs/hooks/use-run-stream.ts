@@ -90,6 +90,20 @@ function invalidateForDone(
   }
 }
 
+/**
+ * Starts following `runId` right away (invalidating the outline and showing the outcome toast when it
+ * ends) without waiting for a run-list poll to notice it: a short run - a Rewrite of one section - can
+ * start and finish between two polls and would otherwise never be followed. Safe to call for a run
+ * something else is already following (the connection is shared).
+ */
+export function trackRun(
+  runId: string,
+  queryClient: QueryClient,
+  projectId: string | undefined,
+): () => void {
+  return acquire(runId, queryClient, projectId);
+}
+
 function acquire(
   runId: string,
   queryClient: QueryClient,
@@ -130,6 +144,8 @@ function acquire(
         .fetchQuery(runs.detail(runId))
         .then(outcomeToast)
         .catch(() => undefined);
+      // The stream has ended itself: a later caller for this run must not find a dead entry.
+      registry.delete(runId);
     },
   });
 
@@ -152,8 +168,6 @@ const TERMINAL_STATUSES = new Set<Run['status']>(['succeeded', 'failed', 'cancel
 export interface UseRunStreamResult {
   /** Every event seen over this run's stream so far, deduped by `seq` and sorted ascending. */
   events: RunEvent[];
-  /** The most recent `stage` value carried by any event (a `section`/`log` event may also carry one). */
-  currentStage: string | null;
   /** Node/cli keys a `section` event has arrived for during this run — empty until the first one lands. */
   sectionNodeIds: Set<string>;
 }
@@ -193,23 +207,18 @@ export function useRunStream(
 
   useEffect(() => {
     if (!runId) return;
-    // Only skips a run whose terminal status is *already cached* - a runId a caller passes
-    // before that run's detail has ever been fetched (e.g. a caller whose
-    // run id briefly falls back to the project's last, long-finished run before a
-    // new one is tracked) still opens a subscription, immediately closed once the caller's
-    // runId moves on. Harmless (the connection is torn down on the very next render), just
-    // not worth the extra fetch it'd take to avoid it.
+    // Only skips a run whose terminal status is *already cached*: a run id whose detail has never been
+    // fetched still opens a subscription, which `done` (or the caller's next run id) closes. Harmless,
+    // and not worth the extra fetch it would take to avoid.
     const cachedRun = queryClient.getQueryData<Run>(runKeys.detail(runId));
     if (cachedRun && TERMINAL_STATUSES.has(cachedRun.status)) return;
     return acquire(runId, queryClient, projectId);
   }, [runId, projectId, queryClient]);
 
   const events = eventsQuery.data ?? EMPTY_EVENTS;
-  const currentStage = [...events].reverse().find((event) => event.stage)?.stage ?? null;
 
   return {
     events,
-    currentStage,
     sectionNodeIds: new Set(sectionNodesQuery.data ?? EMPTY_SECTION_IDS),
   };
 }

@@ -19,6 +19,7 @@ import { CommentMarkdown } from './comment-markdown';
 import { problemMessage } from './errors';
 import { draftKey, useMarginStore } from './margin-store';
 import { SuggestionBlock } from './suggestion-card';
+import { mentionsCopilot } from './mentions';
 
 function isPending(comment: Comment): boolean {
   return comment.id.startsWith('optimistic-');
@@ -72,10 +73,16 @@ function Message({
           submitLabel="Save"
           initialValue={storedEdit ?? comment.bodyMarkdown}
           draftKey={editKey}
+          askCopilot={!!ctx.onCommentSent && !mentionsCopilot(comment.bodyMarkdown)}
           onCancel={closeEdit}
           onSubmit={async (text) => {
             if (text !== comment.bodyMarkdown) {
-              await update.mutateAsync({ commentId: comment.id, bodyMarkdown: text });
+              const updated = await update.mutateAsync({
+                commentId: comment.id,
+                bodyMarkdown: text,
+              });
+              // An edit that adds the mention asks the copilot, like writing it would have.
+              if (!mentionsCopilot(comment.bodyMarkdown)) ctx.onCommentSent?.(updated);
             }
             closeEdit();
           }}
@@ -117,7 +124,7 @@ function Message({
 /**
  * Body of a human comment thread: the messages (oldest first), a reply composer, Resolve /
  * Reopen, and Edit / Delete on the user's own messages. Composers stay open with their text until
- * the server accepts it. `Send to Copilot` waits for phase 4 (`ctx.copilotActions`).
+ * the server accepts it. `Send to Copilot` and `Fix with Copilot` show when the context supplies their handlers.
  */
 export function CommentCardBody({
   thread,
@@ -200,6 +207,7 @@ export function CommentCardBody({
           submitLabel="Reply"
           initialValue={storedReply ?? ''}
           draftKey={replyKey}
+          askCopilot={!!ctx.onCommentSent}
           onCancel={() => {
             setReplying(false);
             focusLater('reply');
@@ -227,7 +235,7 @@ export function CommentCardBody({
           >
             Reply
           </Button>
-          {review && ctx.copilotActions && ctx.onFixWithCopilot && !resolved ? (
+          {review && ctx.onFixWithCopilot && !resolved ? (
             <Button
               type="button"
               variant="outline"
@@ -265,7 +273,7 @@ export function CommentCardBody({
             {resolved ? <RotateCcw /> : review ? <X /> : <CheckCheck />}
             {resolved ? 'Reopen' : review ? 'Dismiss' : 'Resolve'}
           </Button>
-          {!review && ctx.copilotActions && ctx.onSendToCopilot ? (
+          {!review && ctx.onSendToCopilot ? (
             <Button
               type="button"
               variant="outline"

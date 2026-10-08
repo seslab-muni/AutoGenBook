@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
 import { useStartRevisionMutation } from '@/api/queries/revisions';
-import type { Comment, RevisionCreate, StartedRevision } from '@/api/types';
+import type { Comment, CommentAnchorIn, RevisionCreate, StartedRevision } from '@/api/types';
 import { useRightColumn } from '@/components/layout/use-right-pane';
 import { handleLlmKeyRequired } from '@/features/account/lib/llm-key-error';
 import { anchorFromUnitRange, type Anchor } from '@/features/editor/lib/anchors';
 import { suggestionPayload } from '@/features/editor/lib/card-payloads';
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
+import { trackRun } from '@/features/runs/hooks/use-run-stream';
+import { mentionsCopilot } from './mentions';
 import { describeStartError } from './copilot-errors';
-import { problemMessage } from './errors';
 import {
   DRAFT_ID,
   noChips,
@@ -28,40 +31,33 @@ export const CHIP_PARAMS = {
 } as const;
 export type QuickChip = keyof typeof CHIP_PARAMS;
 
-/** A comment that mentions `@copilot` is a prompt. */
-export function mentionsCopilot(text: string): boolean {
-  return /(^|[^\w@])@copilot\b/i.test(text);
-}
-
 interface UseCopilotOptions {
   projectId: string;
   nodeId: string;
   /** The editor's current text (LF line endings; what live ranges index into). */
   getText: () => string;
   flushEdits: () => Promise<void>;
-  /** The server anchors against Markdown: a LaTeX-only section has no revisions. */
+  /** The section can be revised (Markdown). A LaTeX-only section only has Rewrite. */
   enabled: boolean;
+  /** An anchor in the form the server takes, given the text it stores (see `toServerAnchor`). */
+  serverAnchor: (anchor: Parameters<typeof toServerAnchor>[0]) => CommentAnchorIn | null;
 }
 
-/** An anchor a request can carry, from a thread: its live range when it has one, else its stored one. */
-function threadAnchor(thread: MarginThread, text: string): Anchor | null {
-  if (thread.range) return anchorFromUnitRange(text, thread.range.start, thread.range.end);
-  const stored = thread.root.anchor;
-  if (
-    !thread.orphaned &&
-    stored &&
-    typeof stored.start === 'number' &&
-    typeof stored.end === 'number'
-  ) {
-    return {
-      quote: stored.quote ?? '',
-      prefix: stored.prefix ?? '',
-      suffix: stored.suffix ?? '',
-      start: stored.start,
-      end: stored.end,
-    };
+/** The anchor a request can carry for a thread: its live range when it has one, else its stored one. */
+function threadAnchor(
+  thread: MarginThread,
+  row: Comment,
+  text: string,
+  serverAnchor: UseCopilotOptions['serverAnchor'],
+): CommentAnchorIn | null {
+  // Standalone card: its live range follows the text; otherwise the row's own anchor.
+  if (thread.id === row.id && thread.range) {
+    const live = anchorFromUnitRange(text, thread.range.start, thread.range.end);
+    return serverAnchor(live);
   }
-  return null;
+  const stored = row.anchor;
+  if (!stored || typeof stored.start !== 'number' || typeof stored.end !== 'number') return null;
+  return serverAnchor(stored);
 }
 
 /**
@@ -69,202 +65,217 @@ function threadAnchor(thread: MarginThread, text: string): Anchor | null {
  * `startRevision`, which saves the pending edits first (the server revises the saved text), posts,
  * and shows the new suggestion's card. The prompt window shows a refusal inline; every other entry
  * (a chip, Send to Copilot, Fix with Copilot, an `@copilot` comment) has no place for one and toasts it.
+ *
+ * Everything returned is referentially stable (handlers read the latest values through a ref), so the
+ * card context built from it does not change while the user types: a changing context would
+ * re-render every card on every keystroke.
  */
-export function useCopilot({ projectId, nodeId, getText, flushEdits, enabled }: UseCopilotOptions) {
-  const start = useStartRevisionMutation(projectId, nodeId);
+export function useCopilot(options: UseCopilotOptions) {
+  const queryClient = useQueryClient();
+  const start = useStartRevisionMutation(options.projectId, options.nodeId);
   const navigate = useNavigate();
   const { revealMargin } = useRightColumn();
   const revealCard = useMarginStore((state) => state.revealCard);
   const focusCard = useMarginStore((state) => state.focusCard);
   const openPromptDraft = useMarginStore((state) => state.openPrompt);
 
-  const latest = useRef({ flushEdits, getText, enabled });
-  useEffect(() => {
-    latest.current = { flushEdits, getText, enabled };
+  const latest = useRef({
+    ...options,
+    startMutation: start.mutateAsync,
+    navigate,
+    revealMargin,
+    revealCard,
+    focusCard,
+    openPromptDraft,
+    queryClient,
   });
+  useEffect(() => {
+    latest.current = {
+      ...options,
+      startMutation: start.mutateAsync,
+      navigate,
+      revealMargin,
+      revealCard,
+      focusCard,
+      openPromptDraft,
+      queryClient,
+    };
+  });
+  const quickBusy = useRef(false);
 
-  const startRevision = useCallback(
-    async (
+  return useMemo(() => {
+    const startRevision = async (
       request: RevisionCreate,
-      options: { moveFocus?: boolean } = {},
+      opts: { moveFocus?: boolean } = {},
     ): Promise<StartedRevision> => {
-      await latest.current.flushEdits();
-      const started = await start.mutateAsync(request);
+      const l = latest.current;
+      await l.flushEdits();
+      const started = await l.startMutation(request);
       if (started.kind === 'suggestion') {
-        revealMargin();
+        l.revealMargin();
         const id = started.suggestion.threadId;
-        if (options.moveFocus) focusCard(id);
-        else revealCard(id);
+        if (opts.moveFocus) l.focusCard(id);
+        else l.revealCard(id);
       } else {
+        // A short run can start and finish between two polls of the run list, which would never
+        // follow it: follow this one by its id, so the outline and the outcome toast are not missed.
+        trackRun(started.runId, l.queryClient, l.projectId);
         toast.success('Rewrite started', {
           description: 'It runs as a regenerate run; follow it on the runs page.',
           duration: 10_000,
           action: {
             label: 'View run',
             onClick: () =>
-              void navigate({
+              void l.navigate({
                 to: '/p/$projectId/runs/$runId',
-                params: { projectId, runId: started.runId },
+                params: { projectId: l.projectId, runId: started.runId },
               }),
           },
         });
       }
       return started;
-    },
-    [start, revealMargin, revealCard, focusCard, navigate, projectId],
-  );
+    };
 
-  /** Starts without a window: failures become a toast. */
-  const quick = useCallback(
-    async (request: RevisionCreate): Promise<void> => {
+    /** Starts without a window: failures become a toast. One at a time. */
+    const quick = async (request: RevisionCreate): Promise<void> => {
+      if (quickBusy.current) return;
+      quickBusy.current = true;
       try {
         await startRevision(request);
       } catch (error) {
         if (handleLlmKeyRequired(error)) return;
-        const failure = describeStartError(error);
-        toast.error(
-          failure.code ? failure.message : `Could not start the copilot: ${problemMessage(error)}`,
-        );
+        toast.error(describeStartError(error, request.verb ?? 'revise').message);
+      } finally {
+        quickBusy.current = false;
       }
-    },
-    [startRevision],
-  );
+    };
 
-  const openPrompt = useCallback(
-    (
+    const openPrompt = (
       anchor: Anchor | null,
       origin: PromptOrigin,
-      options: {
+      o: {
         text?: string;
         chips?: PromptChips;
         verb?: 'revise' | 'rewrite';
         replaces?: { id: string; status: string } | null;
         threadId?: string | null;
+        notice?: string;
+        explicit?: boolean;
       } = {},
     ) => {
-      if (!latest.current.enabled) return;
-      openPromptDraft(
+      const l = latest.current;
+      // A section that cannot be revised (LaTeX) only has Rewrite, for the whole section.
+      const revisable = l.enabled;
+      l.openPromptDraft(
         {
           kind: 'prompt',
-          anchor,
-          verb: options.verb ?? 'revise',
-          chips: options.chips ?? noChips(),
+          anchor: revisable ? anchor : null,
+          verb: revisable ? (o.verb ?? 'revise') : 'rewrite',
+          chips: o.chips ?? noChips(),
           origin,
-          replaces: options.replaces ?? null,
-          threadId: options.threadId ?? null,
+          replaces: o.replaces ?? null,
+          threadId: o.threadId ?? null,
+          notice: o.notice,
         },
-        nodeId,
-        options.text ?? '',
+        l.nodeId,
+        { ...(o.text !== undefined ? { text: o.text } : {}), explicit: o.explicit ?? false },
       );
-      revealMargin();
+      l.revealMargin();
       // The window is tall: bring it fully into view when it opens near the bottom of the text.
-      revealCard(DRAFT_ID);
-    },
-    [openPromptDraft, nodeId, revealMargin, revealCard],
-  );
+      l.revealCard(DRAFT_ID);
+    };
 
-  /** Selection toolbar chip: sends at once, range scope, that one parameter. */
-  const runChip = useCallback(
-    (chip: string, anchor: Anchor) => {
-      const params = CHIP_PARAMS[chip as QuickChip];
-      if (!params) return;
-      void quick({ verb: 'revise', scope: 'range', anchor, instruction: '', params });
-    },
-    [quick],
-  );
-
-  const sendToCopilot = useCallback(
-    (thread: MarginThread) => {
-      const anchor = threadAnchor(thread, latest.current.getText());
-      void quick({
-        verb: 'revise',
-        scope: anchor ? 'range' : 'section',
-        ...(anchor ? { anchor } : {}),
-        instruction: '',
-        params: {},
-        threadId: thread.id,
-      });
-    },
-    [quick],
-  );
-
-  const fixWithCopilot = useCallback(
-    (thread: MarginThread) => {
-      const anchor = threadAnchor(thread, latest.current.getText());
-      void quick({
-        verb: 'revise',
-        scope: anchor ? 'range' : 'section',
-        ...(anchor ? { anchor } : {}),
-        instruction: '',
-        params: { fixIssueIds: [thread.id] },
-      });
-    },
-    [quick],
-  );
-
-  /** A comment or reply that mentions `@copilot` has just been saved: the suggestion arrives in its thread. */
-  const commentSent = useCallback(
-    (comment: Comment) => {
-      if (!latest.current.enabled || !mentionsCopilot(comment.bodyMarkdown)) return;
-      const stored = comment.anchor;
-      const ranged =
-        !!stored &&
-        comment.status !== 'orphaned' &&
-        typeof stored.start === 'number' &&
-        typeof stored.end === 'number';
-      void quick({
-        verb: 'revise',
-        scope: ranged ? 'range' : 'section',
-        ...(ranged && stored
-          ? {
-              anchor: {
-                quote: stored.quote ?? '',
-                prefix: stored.prefix ?? '',
-                suffix: stored.suffix ?? '',
-                start: stored.start ?? null,
-                end: stored.end ?? null,
-              },
-            }
-          : {}),
-        instruction: '',
-        params: {},
-        threadId: comment.threadId,
-      });
-    },
-    [quick],
-  );
-
-  /** Try again: the prompt window, filled in with what the suggestion was asked. */
-  const tryAgain = useCallback(
-    (suggestion: Comment, thread: MarginThread) => {
-      const payload = suggestionPayload(suggestion);
-      const anchor =
-        payload.scope === 'range' ? threadAnchor(thread, latest.current.getText()) : null;
-      openPrompt(anchor, 'retry', {
-        text: payload.instruction,
-        chips: {
-          moreProofs: payload.params.moreProofs,
-          moreExamples: payload.params.moreExamples,
-          moreRigorous: payload.params.moreRigorous,
-          length: payload.params.shorter ? 'shorter' : payload.params.longer ? 'longer' : null,
-          citeSources: payload.params.citeSources,
-          fixIssues: payload.params.fixIssueIds.length > 0,
-          addressComments: payload.params.addressCommentIds.length > 0,
-        },
-        replaces: { id: suggestion.id, status: suggestion.status },
-        threadId: payload.threadId,
-      });
-    },
-    [openPrompt],
-  );
-
-  return {
-    startRevision,
-    openPrompt,
-    runChip,
-    sendToCopilot,
-    fixWithCopilot,
-    commentSent,
-    tryAgain,
-  };
+    return {
+      startRevision,
+      openPrompt,
+      /** Selection toolbar chip: sends at once, range scope, that one parameter. */
+      runChip: (chip: string, anchor: Parameters<typeof toServerAnchor>[0]) => {
+        const params = CHIP_PARAMS[chip as QuickChip];
+        const server = latest.current.serverAnchor(anchor);
+        if (!params || !server) return;
+        void quick({ verb: 'revise', scope: 'range', anchor: server, instruction: '', params });
+      },
+      sendToCopilot: (thread: MarginThread) => {
+        const l = latest.current;
+        const anchor = threadAnchor(thread, thread.root, l.getText(), l.serverAnchor);
+        void quick({
+          verb: 'revise',
+          scope: anchor ? 'range' : 'section',
+          ...(anchor ? { anchor } : {}),
+          instruction: '',
+          params: {},
+          threadId: thread.id,
+        });
+      },
+      fixWithCopilot: (thread: MarginThread) => {
+        const l = latest.current;
+        const anchor = threadAnchor(thread, thread.root, l.getText(), l.serverAnchor);
+        void quick({
+          verb: 'revise',
+          scope: anchor ? 'range' : 'section',
+          ...(anchor ? { anchor } : {}),
+          instruction: '',
+          params: { fixIssueIds: [thread.id] },
+        });
+      },
+      /** A comment or reply that mentions `@copilot` has just been saved: the suggestion arrives in its thread. */
+      commentSent: (comment: Comment) => {
+        const l = latest.current;
+        if (!l.enabled || !mentionsCopilot(comment.bodyMarkdown)) return;
+        const anchor =
+          comment.status === 'orphaned' ? null : l.serverAnchor(comment.anchor ?? null);
+        void quick({
+          verb: 'revise',
+          scope: anchor && comment.anchor?.start != null ? 'range' : 'section',
+          ...(anchor && comment.anchor?.start != null ? { anchor } : {}),
+          instruction: '',
+          params: {},
+          threadId: comment.threadId,
+        });
+      },
+      /** Try again: the prompt window, filled in with what the suggestion was asked. */
+      tryAgain: (suggestion: Comment, thread: MarginThread) => {
+        const l = latest.current;
+        const payload = suggestionPayload(suggestion);
+        const server =
+          payload.scope === 'range'
+            ? threadAnchor(thread, suggestion, l.getText(), l.serverAnchor)
+            : null;
+        const lostRange = payload.scope === 'range' && !server;
+        openPrompt(
+          server
+            ? {
+                quote: server.quote,
+                prefix: server.prefix ?? '',
+                suffix: server.suffix ?? '',
+                start: server.start ?? null,
+                end: server.end ?? null,
+              }
+            : null,
+          'retry',
+          {
+            explicit: true,
+            text: payload.instruction,
+            chips: {
+              moreProofs: payload.params.moreProofs,
+              moreExamples: payload.params.moreExamples,
+              moreRigorous: payload.params.moreRigorous,
+              length: payload.params.shorter ? 'shorter' : payload.params.longer ? 'longer' : null,
+              citeSources: payload.params.citeSources,
+              fixIssues: payload.params.fixIssueIds.length > 0,
+              addressComments: payload.params.addressCommentIds.length > 0,
+            },
+            replaces: { id: suggestion.id, status: suggestion.status },
+            threadId: payload.threadId,
+            ...(lostRange
+              ? {
+                  notice:
+                    'The text this was about is gone, so this will revise the whole section. Select the text again to aim at a passage.',
+                }
+              : {}),
+          },
+        );
+      },
+    };
+  }, []);
 }

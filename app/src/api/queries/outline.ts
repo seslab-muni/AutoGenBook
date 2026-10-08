@@ -432,21 +432,3 @@ export function useDeleteOutlineNodeMutation(projectId: string) {
     },
   });
 }
-
-/** On success: invalidates the outline (node status flips to `drafting`) and the project's run list. */
-export function useRegenerateOutlineNodeMutation(projectId: string, nodeId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (promptModifier?: string) =>
-      unwrap(
-        apiClient.POST('/api/v1/projects/{project_id}/outline/{node_id}/regenerate', {
-          params: { path: { project_id: projectId, node_id: nodeId } },
-          body: promptModifier !== undefined ? { promptModifier } : {},
-        }),
-      ),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
-      void queryClient.invalidateQueries({ queryKey: projectKeys.runs(projectId) });
-    },
-  });
-}

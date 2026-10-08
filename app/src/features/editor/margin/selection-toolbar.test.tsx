@@ -29,7 +29,6 @@ describe('SelectionToolbar', () => {
         rect={RECT}
         containerWidth={800}
         onComment={vi.fn()}
-        copilotActions
         onChip={onChip}
         onPrompt={onPrompt}
       />,

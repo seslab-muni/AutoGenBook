@@ -46,7 +46,8 @@ export function reviewPayload(comment: Pick<Comment, 'payload'>): ReviewPayload 
   const source = str(payload['source']);
   return {
     type: str(payload['type'], 'issue'),
-    severity: payload['severity'] === 'minor' ? 'minor' : 'major',
+    // The server folds every severity into these two, with minor as its default.
+    severity: payload['severity'] === 'major' ? 'major' : 'minor',
     requiredFix: str(payload['requiredFix']),
     replaceFrom: str(payload['replaceFrom']),
     replaceTo: str(payload['replaceTo']),
@@ -127,6 +128,9 @@ export interface SuggestionPayload {
   startedAt: string | null;
   finishedAt: string | null;
   appliedHunks: number[] | null;
+  /** The range in `originalMarkdown` (code points), `null` for the whole section. */
+  anchor: { start: number; end: number } | null;
+  cancelledBy: string | null;
 }
 
 export function emptyParams(): SuggestionParams {
@@ -155,6 +159,13 @@ function parseParams(value: unknown): SuggestionParams {
     fixIssueIds: strings(raw['fixIssueIds']),
     addressCommentIds: strings(raw['addressCommentIds']),
   };
+}
+
+function parseRange(value: unknown): { start: number; end: number } | null {
+  const raw = record(value);
+  return typeof raw['start'] === 'number' && typeof raw['end'] === 'number'
+    ? { start: raw['start'], end: raw['end'] }
+    : null;
 }
 
 function parseHunks(value: unknown): Hunk[] {
@@ -197,6 +208,8 @@ export function suggestionPayload(comment: Pick<Comment, 'payload'>): Suggestion
         : null,
     startedAt: typeof payload['startedAt'] === 'string' ? payload['startedAt'] : null,
     finishedAt: typeof payload['finishedAt'] === 'string' ? payload['finishedAt'] : null,
+    anchor: parseRange(payload['anchor']),
+    cancelledBy: typeof payload['cancelledBy'] === 'string' ? payload['cancelledBy'] : null,
     appliedHunks: Array.isArray(applied)
       ? applied.filter((index): index is number => typeof index === 'number')
       : null,

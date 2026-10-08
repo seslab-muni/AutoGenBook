@@ -114,3 +114,30 @@ export function buildDiffBlocks(
   }
   return blocks;
 }
+
+/**
+ * Blocks for changes whose original text is not at hand (the list endpoints leave `originalMarkdown`
+ * out of a finished suggestion but keep its hunks): just the removed and the added text, with no
+ * context. `only` limits it to some hunks (a partial accept's applied ones); `hunkIndex` still points
+ * into the full array.
+ */
+export function buildHunkBlocks(hunks: readonly Hunk[], only?: readonly number[]): DiffBlock[] {
+  const blocks: DiffBlock[] = [];
+  hunks.forEach((hunk, hunkIndex) => {
+    if (only && !only.includes(hunkIndex)) return;
+    const segments: DiffSegment[] = [];
+    const removed = clean(hunk.removed);
+    const added = clean(hunk.added);
+    if (removed) segments.push({ type: 'removed', text: removed });
+    if (added) segments.push({ type: 'added', text: added });
+    blocks.push({
+      hunkIndex,
+      segments,
+      cutBefore: false,
+      cutAfter: false,
+      removedLength: hunk.removed.length,
+      addedLength: hunk.added.length,
+    });
+  });
+  return blocks;
+}

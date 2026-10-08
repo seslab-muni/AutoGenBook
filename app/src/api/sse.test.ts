@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from './client';
 import {
   subscribeRunEvents,
   subscribeSuggestionEvents,
@@ -297,6 +298,19 @@ describe('subscribeSuggestionEvents', () => {
     source.raiseError();
     await vi.advanceTimersByTimeAsync(0);
     expect(onTerminal).toHaveBeenCalledWith(name, expect.objectContaining({ status }));
+  });
+
+  it('stops polling a suggestion that is gone (404) instead of asking forever', async () => {
+    const fetchSuggestion = vi.fn<(id: string) => Promise<Comment>>(() =>
+      Promise.reject(new ApiError({ status: 404, problem: undefined, url: '/x' })),
+    );
+    const { onTerminal, source } = subscribe({ fetchSuggestion, pollIntervalMs: 100 });
+    source.readyState = 2;
+    source.raiseError();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onTerminal).toHaveBeenCalledWith('cancelled', null);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchSuggestion).toHaveBeenCalledTimes(1);
   });
 
   it('keeps polling through a failed poll', async () => {

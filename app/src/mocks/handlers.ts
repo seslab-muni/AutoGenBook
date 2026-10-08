@@ -1,4 +1,4 @@
-import { http, HttpResponse, sse } from 'msw';
+import { delay, http, HttpResponse, sse } from 'msw';
 
 import { resolveAnchor } from '@/features/editor/lib/anchors';
 import { sha256Hex } from '@/lib/content-hash';
@@ -691,7 +691,9 @@ function reanchorComments(nodeId: string, content: string): void {
     const next = { ...comment, anchor: resolved, status, updatedAt: db.now() };
     db.comments.set(comment.id, next);
     for (const reply of db.comments.values()) {
-      if (reply.threadId === comment.id && reply.id !== comment.id) {
+      // A suggestion in the thread keeps its own status (and, like the server, is re-anchored only
+      // by its own rules); the root's status is not written onto it.
+      if (reply.threadId === comment.id && reply.id !== comment.id && reply.kind !== 'suggestion') {
         db.comments.set(reply.id, { ...reply, anchor: resolved, status });
       }
     }
@@ -889,6 +891,10 @@ const outlineHandlers = [
   }),
 
   http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async ({ params, request }) => {
+    if (mockRevisionConfig.patchDelayMs > 0) await delay(mockRevisionConfig.patchDelayMs);
+    if (mockRevisionConfig.failPatch) {
+      return problemResponse(500, 'Internal Server Error', new URL(request.url).pathname);
+    }
     const node = db.outlineNodes.get(params.nodeId as string);
     if (!node || node.projectId !== params.projectId)
       return notFound('Outline node', new URL(request.url).pathname);
@@ -1331,6 +1337,30 @@ function projectNode(projectId: string, nodeId: string) {
   return node && node.projectId === projectId ? node : undefined;
 }
 
+/** `CommentAnchorIn`'s rules, as the server enforces them (a 422 detail, or `null` when the anchor is fine). */
+function anchorProblem(anchor: unknown): string | null {
+  if (anchor === null || anchor === undefined) return null;
+  if (typeof anchor !== 'object') return 'anchor must be an object';
+  const raw = anchor as Record<string, unknown>;
+  const extra = Object.keys(raw).filter(
+    (key) => !['quote', 'prefix', 'suffix', 'start', 'end'].includes(key),
+  );
+  if (extra.length > 0) return `anchor has unknown fields: ${extra.join(', ')}`;
+  if (typeof raw['quote'] !== 'string' || raw['quote'].length < 1) {
+    return 'anchor.quote must not be empty';
+  }
+  const start = raw['start'] ?? null;
+  const end = raw['end'] ?? null;
+  if ((start === null) !== (end === null))
+    return 'anchor start and end must both be set or both null';
+  if (typeof start === 'number' && typeof end === 'number') {
+    if (end - start !== Array.from(raw['quote']).length) {
+      return 'anchor end - start must equal the quote length in code points';
+    }
+  }
+  return null;
+}
+
 const commentHandlers = [
   http.get('*/api/v1/comments/:commentId', ({ params, request }) => {
     const comment = db.comments.get(params.commentId as string);
@@ -1359,6 +1389,8 @@ const commentHandlers = [
       const node = projectNode(params.projectId as string, params.nodeId as string);
       if (!node) return notFound('Outline node', instance);
       const body = (await request.json()) as CommentCreate;
+      const badAnchor = anchorProblem(body.anchor);
+      if (badAnchor) return problemResponse(422, 'Validation Failed', instance, badAnchor);
       if (!body.bodyMarkdown || !body.bodyMarkdown.trim()) {
         return problemResponse(
           422,
@@ -1495,7 +1527,9 @@ const commentHandlers = [
         ? 'orphaned'
         : 'open';
     for (const row of [...db.comments.values()]) {
-      if (row.threadId === comment.id) db.comments.set(row.id, { ...row, status, updatedAt: now });
+      if (row.threadId === comment.id && row.kind !== 'suggestion') {
+        db.comments.set(row.id, { ...row, status, updatedAt: now });
+      }
     }
     return HttpResponse.json(db.comments.get(comment.id));
   }),
@@ -1624,6 +1658,8 @@ const revisionHandlers = [
         problemResponse(422, 'Validation Failed', instance, detail);
 
       if (instruction.length > MAX_INSTRUCTION_CHARS) return invalid('instruction is too long');
+      const badAnchor = anchorProblem(body.anchor);
+      if (badAnchor) return invalid(badAnchor);
       if (verb === 'rewrite') {
         const extras =
           scope === 'range' ||
@@ -1646,6 +1682,11 @@ const revisionHandlers = [
 
       const full = allParams(body.params);
       if (full.shorter && full.longer) return invalid('shorter and longer cannot both be set');
+      // The server adds the thread's root to one of the lists: 25 in total per list.
+      const threadRow = body.threadId ? db.comments.get(body.threadId) : undefined;
+      const fixCount = full.fixIssueIds.length + (threadRow?.kind === 'review' ? 1 : 0);
+      const addressCount = full.addressCommentIds.length + (threadRow?.kind === 'comment' ? 1 : 0);
+      if (fixCount > 25 || addressCount > 25) return invalid('at most 25 ids per list');
       if (
         instruction.trim() === '' &&
         !body.threadId &&
@@ -1802,6 +1843,7 @@ const revisionHandlers = [
   }),
 
   http.post('*/api/v1/suggestions/:suggestionId/accept', async ({ params, request }) => {
+    if (mockRevisionConfig.acceptDelayMs > 0) await delay(mockRevisionConfig.acceptDelayMs);
     const instance = new URL(request.url).pathname;
     const row = db.comments.get(params.suggestionId as string);
     if (!row || row.kind !== 'suggestion') return notFound('Suggestion', instance);
@@ -1843,6 +1885,16 @@ const revisionHandlers = [
         'A run is generating this section.',
         'node_generating',
       );
+    // A full run that is queued or running would overwrite an unlocked section.
+    if (!node.contentLocked && laneRunsFor(node.projectId).some((run) => run.kind === 'full')) {
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'A full run is queued or running for this project.',
+        'run_active',
+      );
+    }
     const stored = await sha256Hex(node.contentMarkdown);
     if (body.expectedContentHash && body.expectedContentHash !== stored) {
       return problemResponse(

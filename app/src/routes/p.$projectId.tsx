@@ -18,6 +18,10 @@ import { SourcesDialog } from '@/features/sources/components/sources-dialog';
 
 export interface ProjectSearch {
   node?: string;
+  /** `rewrite`: open the section with the prompt window on Rewrite ("Regenerate again" on a run page). */
+  copilot?: 'rewrite';
+  /** The instruction to put in that window. */
+  instruction?: string;
 }
 
 // Old links may still carry `?tab=copilot|review|citations|settings` from when the right pane had
@@ -26,6 +30,10 @@ function validateSearch(search: Record<string, unknown>): ProjectSearch {
   const result: ProjectSearch = {};
   if (typeof search.node === 'string') {
     result.node = search.node;
+  }
+  if (search.copilot === 'rewrite') {
+    result.copilot = 'rewrite';
+    if (typeof search.instruction === 'string') result.instruction = search.instruction;
   }
   return result;
 }

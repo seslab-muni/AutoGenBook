@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 
 import type { Comment } from '@/api/types';
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
 import type { MarginCardContext } from './card-registry';
 import type { MarginThread } from './threads';
 
@@ -61,13 +62,17 @@ export function makeContext(overrides: Partial<MarginCardContext> = {}): MarginC
     projectId: 'book-reinforcement-learning',
     nodeId: 'rl-sec-1-1',
     currentUserId: 'user-mock-1',
-    copilotActions: true,
     restoreEditorFocus: vi.fn(),
     applyServerContent: vi.fn(),
     hasUnsavedEdits: () => false,
     flushEdits: () => Promise.resolve(),
     holdSaving: () => Promise.resolve(() => {}),
     sectionNumber: '1.1',
+    serverAnchor: toServerAnchor,
+    editBlockedReason: null,
+    revisable: true,
+    rewriteBlock: null,
+    knownIds: () => new Set<string>(),
     ...overrides,
   };
 }

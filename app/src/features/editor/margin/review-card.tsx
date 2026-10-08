@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { ArrowRight, CircleAlert, TriangleAlert, Wrench } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import {
   reviewPayload,
@@ -61,6 +63,31 @@ export function ReviewStatus({ thread, approximate }: MarginCardPartProps) {
   );
 }
 
+const CLAMP_AT = 220;
+
+/** Long text shows a few lines and "Show more", so one issue cannot take the whole margin. */
+function ClampedText({ text, className }: { text: string; className: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > CLAMP_AT;
+  return (
+    <>
+      <p className={cn(className, long && !open && 'line-clamp-4')}>{text}</p>
+      {long ? (
+        <Button
+          type="button"
+          variant="link"
+          size="xs"
+          className="h-auto self-start p-0 text-[11px]"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? 'Show less' : 'Show more'}
+        </Button>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * Body of a review card: the issue's description, the required fix in an inset, the literal
  * replacement (only when the reviewer gave both halves), where it came from, then the shared
@@ -72,18 +99,20 @@ export function ReviewCardBody(props: MarginCardPartProps) {
   const hasReplacement = payload.replaceFrom !== '' && payload.replaceTo !== '';
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-sm leading-snug break-words whitespace-pre-wrap">
-        {thread.root.bodyMarkdown}
-      </p>
+      <ClampedText
+        text={thread.root.bodyMarkdown}
+        className="text-sm leading-snug break-words whitespace-pre-wrap"
+      />
       {payload.requiredFix ? (
         <div className="rounded-md bg-muted p-2">
           <p className="mb-1 flex items-center gap-1 text-[10px] font-bold tracking-wide text-foreground uppercase">
             <Wrench className="size-3" aria-hidden="true" />
             Required fix
           </p>
-          <p className="text-xs leading-snug break-words whitespace-pre-wrap">
-            {payload.requiredFix}
-          </p>
+          <ClampedText
+            text={payload.requiredFix}
+            className="text-xs leading-snug break-words whitespace-pre-wrap"
+          />
         </div>
       ) : null}
       {hasReplacement ? (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Check,
@@ -11,7 +11,6 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react';
-import { create } from 'zustand';
 
 import { outline } from '@/api/queries/outline';
 import type { Comment } from '@/api/types';
@@ -35,38 +34,10 @@ import { DefaultQuote } from './default-parts';
 import { useMarginStore } from './margin-store';
 import { CommentMarkdown } from './comment-markdown';
 import { SuggestionDiff } from './suggestion-diff';
+import { useSelectedHunks } from './hunk-selection';
 import { useSuggestionProgress } from './suggestion-progress';
-import { useSuggestionActions } from './use-suggestion-actions';
+import { useSuggestionActions, useUndoneSuggestions } from './use-suggestion-actions';
 import type { MarginThread } from './threads';
-
-// ---------------------------------------------------------------------------------------------
-// Which hunks of a section suggestion are ticked (all, until the reader unticks some).
-// ---------------------------------------------------------------------------------------------
-
-const NONE: readonly number[] = [];
-
-const useUnticked = create<{
-  unticked: Record<string, readonly number[]>;
-  toggle: (id: string, hunk: number) => void;
-}>()((set) => ({
-  unticked: {},
-  toggle: (id, hunk) =>
-    set((state) => {
-      const current = state.unticked[id] ?? NONE;
-      const next = current.includes(hunk) ? current.filter((h) => h !== hunk) : [...current, hunk];
-      return { unticked: { ...state.unticked, [id]: next } };
-    }),
-}));
-
-function useSelectedHunks(id: string, total: number) {
-  const unticked = useUnticked((state) => state.unticked[id]) ?? NONE;
-  const toggle = useUnticked((state) => state.toggle);
-  const selected = useMemo(
-    () => new Set(Array.from({ length: total }, (_, i) => i).filter((i) => !unticked.includes(i))),
-    [total, unticked],
-  );
-  return { selected, toggle: (hunk: number) => toggle(id, hunk) };
-}
 
 // ---------------------------------------------------------------------------------------------
 // Status
@@ -158,13 +129,6 @@ export function SuggestionStatus({ thread, approximate }: MarginCardPartProps) {
 // Diff
 // ---------------------------------------------------------------------------------------------
 
-function rangeOf(suggestion: Comment): { start: number; end: number } | null {
-  const anchor = suggestion.anchor;
-  return anchor && typeof anchor.start === 'number' && typeof anchor.end === 'number'
-    ? { start: anchor.start, end: anchor.end }
-    : null;
-}
-
 function SuggestionDiffPart({
   suggestion,
   payload,
@@ -176,21 +140,26 @@ function SuggestionDiffPart({
   return (
     <SuggestionDiff
       payload={payload}
-      range={rangeOf(suggestion)}
+      // The range as it was in the original text, not the card's re-anchored one in today's text.
+      range={payload.anchor}
       selected={selected}
       onToggle={toggle}
       readOnly={suggestion.status !== 'pending'}
+      only={suggestion.status === 'accepted' ? (payload.appliedHunks ?? undefined) : undefined}
     />
   );
+}
+
+/** Whether there is a diff to show: hunks, with the original text or without it (a finished one from a list). */
+function hasDiff(suggestion: Comment, payload: SuggestionPayload): boolean {
+  return suggestion.status !== 'running' && payload.hunks.length > 0;
 }
 
 /** Quote slot of a standalone suggestion card: the diff once there is one, the targeted text while it works. */
 export function SuggestionDiffQuote(props: MarginCardPartProps) {
   const suggestion = props.thread.root;
   const payload = suggestionPayload(suggestion);
-  if (suggestion.status === 'running' || payload.originalMarkdown === null) {
-    return <DefaultQuote {...props} />;
-  }
+  if (!hasDiff(suggestion, payload)) return <DefaultQuote {...props} />;
   return <SuggestionDiffPart suggestion={suggestion} payload={payload} />;
 }
 
@@ -307,8 +276,11 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
   const { selected } = useSelectedHunks(suggestion.id, payload.hunks.length);
   const currentHash = useCurrentHash(ctx);
   const [sending, setSending] = useState(false);
+  // True for the whole of an action, including the save before an accept: no second click can start another.
+  const [working, setWorking] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const own = ctx.currentUserId !== null && suggestion.authorId === ctx.currentUserId;
+  const undone = useUndoneSuggestions((state) => suggestion.id in state.ids);
   const status = suggestion.status;
   // The diff makes the card taller when the work finishes: keep the card the person is watching in view.
   const previousStatus = useRef(status);
@@ -329,37 +301,59 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
     payload.params.addressCommentIds.length > 0 ||
     payload.threadId !== null;
   const summary = suggestion.bodyMarkdown || payload.summary;
+  const blocked = ctx.editBlockedReason;
+  const idle = !working && !actions.busy && !sending;
+  // Deleting a suggestion is the author's (or anyone's, for one nobody authored).
+  const canDismiss = suggestion.authorId === null || own;
 
   async function run(
     task: () => Promise<{ ok: true } | { ok: false; failure: CopilotFailure }>,
     leave: boolean,
   ) {
     setFailure(null);
-    const result = await task();
+    setWorking(true);
+    const result = await task().finally(() => setWorking(false));
     if (!result.ok) setFailure(result.failure);
     // The card leaves the margin (finished suggestions are hidden by default): keep the keyboard in the text.
     else if (leave) ctx.restoreEditorFocus();
   }
 
   async function sendAgain() {
-    if (!ctx.startRevision) return;
+    if (!ctx.startRevision || working || blocked) return;
+    // A range suggestion whose own range is gone must not quietly widen to the whole section: the
+    // window shows the scope instead.
+    const rangeLost =
+      payload.scope === 'range' &&
+      (suggestion.anchor?.start == null || suggestion.anchor?.end == null);
+    if (rangeLost) {
+      ctx.onTryAgain?.(suggestion, thread);
+      return;
+    }
     setSending(true);
     setFailure(null);
     try {
+      const known = ctx.knownIds();
+      const anchor = payload.scope === 'range' ? ctx.serverAnchor(suggestion.anchor) : null;
+      if (payload.scope === 'range' && !anchor) {
+        ctx.onTryAgain?.(suggestion, thread);
+        return;
+      }
       await ctx.startRevision({
         verb: 'revise',
-        scope:
-          payload.scope === 'range' && suggestion.anchor && !thread.orphaned ? 'range' : 'section',
-        ...(payload.scope === 'range' && suggestion.anchor && !thread.orphaned
-          ? { anchor: toAnchorIn(suggestion) }
-          : {}),
+        scope: anchor ? 'range' : 'section',
+        ...(anchor ? { anchor } : {}),
         instruction: payload.instruction,
-        params: payload.params,
-        ...(payload.threadId ? { threadId: payload.threadId } : {}),
+        // References to cards that were deleted since would be refused: drop them.
+        params: {
+          ...payload.params,
+          fixIssueIds: payload.params.fixIssueIds.filter((id) => known.has(id)),
+          addressCommentIds: payload.params.addressCommentIds.filter((id) => known.has(id)),
+        },
+        ...(payload.threadId && known.has(payload.threadId) ? { threadId: payload.threadId } : {}),
       });
       // The new request replaces this one.
       if (status === 'pending') await actions.rejectSuggestion(suggestion);
-      else await actions.dismissSuggestion(suggestion);
+      else if (canDismiss) await actions.dismissSuggestion(suggestion);
     } catch (error) {
       setFailure(describeStartError(error));
     } finally {
@@ -376,7 +370,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
   const notice: ReactNode =
     status !== 'pending'
       ? null
-      : thread.orphaned && payload.scope === 'range'
+      : payload.scope === 'range' && suggestion.anchor?.start == null
         ? 'The text changed since this was suggested. You can still accept it, or try again on the current text.'
         : payload.scope === 'section' &&
             currentHash &&
@@ -388,7 +382,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
   const tryAgain = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button type="button" variant="outline" size="xs" disabled={sending}>
+        <Button type="button" variant="outline" size="xs" disabled={!idle || !!blocked}>
           Try again
           <ChevronDown aria-hidden="true" />
         </Button>
@@ -423,7 +417,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
                 type="button"
                 variant="outline"
                 size="xs"
-                disabled={actions.busy}
+                disabled={!idle}
                 onClick={() => void run(() => actions.cancelSuggestion(suggestion), false)}
               >
                 Cancel
@@ -475,13 +469,17 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
           {notice ? (
             <p className="rounded-md bg-muted p-2 text-xs text-foreground">{notice}</p>
           ) : null}
+          {blocked ? (
+            <p className="rounded-md bg-muted p-2 text-xs text-foreground">{blocked}</p>
+          ) : null}
           {failureNote}
           <div className="flex flex-wrap items-center gap-1.5">
             {nothingChanged ? null : (
               <Button
                 type="button"
                 size="xs"
-                disabled={actions.busy || nothingTicked || sending}
+                disabled={!idle || nothingTicked || !!blocked}
+                title={blocked ?? undefined}
                 onClick={() =>
                   void run(
                     () =>
@@ -500,7 +498,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
               type="button"
               variant="outline"
               size="xs"
-              disabled={actions.busy || sending}
+              disabled={!idle}
               onClick={() => void run(() => actions.rejectSuggestion(suggestion), true)}
             >
               Reject
@@ -519,7 +517,9 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
         <>
           <p className="text-xs text-foreground">
             {status === 'cancelled'
-              ? 'You stopped this revision before it finished.'
+              ? payload.cancelledBy !== null && payload.cancelledBy === ctx.currentUserId
+                ? 'You stopped this revision before it finished.'
+                : 'This revision was cancelled before it finished.'
               : describeSuggestionFailure(
                   payload.error?.code ?? null,
                   payload.error?.message ?? '',
@@ -528,15 +528,17 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
           {failureNote}
           <div className="flex items-center gap-1.5">
             {tryAgain}
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              disabled={actions.busy || sending}
-              onClick={() => void run(() => actions.dismissSuggestion(suggestion), true)}
-            >
-              Dismiss
-            </Button>
+            {canDismiss ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={!idle}
+                onClick={() => void run(() => actions.dismissSuggestion(suggestion), true)}
+              >
+                Dismiss
+              </Button>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -544,26 +546,18 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
       {status === 'accepted' || status === 'rejected' ? (
         <p className="text-xs text-muted-foreground">
           {status === 'accepted'
-            ? payload.appliedHunks
-              ? `${payload.appliedHunks.length} of ${total} changes applied.`
-              : 'The changes were applied.'
+            ? undone
+              ? 'Accepted, then undone: the text was restored.'
+              : payload.appliedHunks
+                ? `${payload.appliedHunks.length} of ${total} changes applied.`
+                : 'The changes were applied.'
             : 'These changes were not applied.'}
-          {summary ? ` ${summary}` : ''}
+          {/* The model's summary describes all of its changes, which a partial accept did not apply. */}
+          {summary && !payload.appliedHunks ? ` ${summary}` : ''}
         </p>
       ) : null}
     </div>
   );
-}
-
-function toAnchorIn(suggestion: Comment) {
-  const anchor = suggestion.anchor;
-  return {
-    quote: anchor?.quote ?? '',
-    prefix: anchor?.prefix ?? '',
-    suffix: anchor?.suffix ?? '',
-    start: anchor?.start ?? null,
-    end: anchor?.end ?? null,
-  };
 }
 
 /** Body slot of a standalone suggestion card. */
@@ -589,7 +583,7 @@ export function SuggestionBlock({ suggestion, thread, ctx }: BodyProps) {
           <SuggestionStatusPill suggestion={suggestion} />
         </span>
       </div>
-      {suggestion.status !== 'running' && payload.originalMarkdown !== null ? (
+      {hasDiff(suggestion, payload) ? (
         <SuggestionDiffPart suggestion={suggestion} payload={payload} />
       ) : null}
       <SuggestionActions suggestion={suggestion} thread={thread} ctx={ctx} inline />

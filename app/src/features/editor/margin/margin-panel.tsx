@@ -19,7 +19,7 @@ import type { MarginCardContext } from './card-registry';
 import { COMPOSER_KINDS } from './composer-registry';
 import type { AnchorMeasure, MarginGeometry } from './geometry';
 import { MarginCard } from './margin-card';
-import { ReviewSummaryStrip, STRIP_ID } from './review-summary-strip';
+import { ReviewSummaryStrip } from './review-summary-strip';
 import type { ReviewSummary } from '@/features/editor/lib/card-payloads';
 import { extraBottom, layoutMargin, type LayoutItem } from './margin-layout';
 import { DRAFT_ID, useMarginStore, type ComposerDraft } from './margin-store';
@@ -52,6 +52,8 @@ interface MarginPanelProps {
   /** The section's latest review verdict (`OutlineNode.reviewSummary`); shown with the All and Review filters. */
   reviewSummary?: ReviewSummary | null | undefined;
   reviewerScore?: number | null | undefined;
+  /** Notes of a review from before review rows existed (`reviewerNotes`), shown only when there is no summary. */
+  legacyNotes?: string | null | undefined;
   /** Shown under the header when anchored comments are unavailable for this section (LaTeX). */
   anchorNote?: string | undefined;
 }
@@ -117,6 +119,7 @@ export function MarginPanel({
   geometry,
   reviewSummary = null,
   reviewerScore = null,
+  legacyNotes = null,
   anchorNote,
 }: MarginPanelProps) {
   const filter = useMarginStore((state) => state.filter);
@@ -129,12 +132,15 @@ export function MarginPanel({
   const focus = useMarginStore((state) => state.focus);
   const openComposer = useMarginStore((state) => state.openComposer);
 
-  const showStrip = reviewSummary !== null && (filter === 'all' || filter === 'review');
+  const showStrip =
+    (reviewSummary !== null || !!legacyNotes) && (filter === 'all' || filter === 'review');
   const closedCount = useMemo(() => threads.filter(isThreadClosed).length, [threads]);
 
   // ---- measurements -------------------------------------------------------------------
   const [measures, setMeasures] = useState<ReadonlyMap<string, AnchorMeasure>>(new Map());
   const [heights, setHeights] = useState<ReadonlyMap<string, number>>(new Map());
+  /** How far the text pane's top is above the lane's (the verdict header sits above the lane): cards stay clear of it. */
+  const [inset, setInset] = useState(0);
   const pendingHeights = useRef(new Map<string, number>());
   const elements = useRef(new Map<string, HTMLElement>());
   const viewport = useRef<HTMLDivElement>(null);
@@ -182,6 +188,7 @@ export function MarginPanel({
         geometry.scrollEl.getBoundingClientRect().top -
         viewport.current.getBoundingClientRect().top;
       applyTransform();
+      setInset(Math.max(0, Math.round(-laneOffset.current)));
     }
   });
   const commitHeights = useFrameScheduler(() => {
@@ -196,6 +203,15 @@ export function MarginPanel({
     if (!geometry) return undefined;
     return geometry.subscribe(measure);
   }, [geometry, measure]);
+
+  // The header above the lane changes height with the verdict; the lane then starts lower.
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return undefined;
+    const resize = new ResizeObserver(() => measure());
+    resize.observe(element);
+    return () => resize.disconnect();
+  }, [measure]);
 
   // One observer for every card's height.
   const observer = useRef<ResizeObserver | null>(null);
@@ -234,15 +250,7 @@ export function MarginPanel({
 
   // ---- layout -------------------------------------------------------------------------
   const ordered = useMemo(() => {
-    const items: {
-      id: string;
-      draft: boolean;
-      strip?: boolean;
-      thread?: MarginThread;
-      placed: boolean;
-    }[] = [];
-    // The review verdict leads the pinned cards, at the top of the text column.
-    if (showStrip) items.push({ id: STRIP_ID, draft: false, strip: true, placed: false });
+    const items: { id: string; draft: boolean; thread?: MarginThread; placed: boolean }[] = [];
     if (composer && composer.anchor === null) {
       items.push({ id: DRAFT_ID, draft: true, placed: false });
     }
@@ -259,7 +267,7 @@ export function MarginPanel({
       items.push({ id: DRAFT_ID, draft: true, placed: measures.has(DRAFT_ID) });
     }
     return items;
-  }, [visible, composer, measures, showStrip]);
+  }, [visible, composer, measures]);
 
   const tops = useMemo(() => {
     const layoutItems: LayoutItem[] = ordered.map((item) => ({
@@ -268,10 +276,10 @@ export function MarginPanel({
       height: heights.get(item.id) ?? DEFAULT_CARD_HEIGHT,
     }));
     return {
-      map: layoutMargin(layoutItems, { gap: CARD_GAP, focusedId }),
+      map: layoutMargin(layoutItems, { gap: CARD_GAP, focusedId, minTop: inset }),
       items: layoutItems,
     };
-  }, [ordered, measures, focusedId, heights]);
+  }, [ordered, measures, focusedId, heights, inset]);
 
   const extent = useMemo(() => {
     let bottom = 0;
@@ -406,7 +414,7 @@ export function MarginPanel({
     handleFocusCard(revealRequest.id);
   }, [revealRequest, tops, handleFocusCard]);
 
-  const empty = !loading && !error && visible.length === 0 && !composer && !showStrip;
+  const empty = !loading && !error && visible.length === 0 && !composer;
 
   return (
     <aside aria-label="Margin" className="flex h-full min-h-0 flex-col bg-muted">
@@ -458,7 +466,16 @@ export function MarginPanel({
         </div>
       </div>
       {anchorNote ? (
-        <p className="border-b px-3 py-2 text-xs text-muted-foreground">{anchorNote}</p>
+        <p className="border-b px-3 py-2 text-xs text-foreground">{anchorNote}</p>
+      ) : null}
+
+      {showStrip ? (
+        <ReviewSummaryStrip
+          summary={reviewSummary}
+          threads={threads}
+          score={reviewerScore}
+          legacyNotes={legacyNotes}
+        />
       ) : null}
 
       <div
@@ -479,9 +496,9 @@ export function MarginPanel({
             </Button>
           </p>
         ) : null}
-        {loading ? <p className="p-4 text-sm text-muted-foreground">Loading comments…</p> : null}
+        {loading ? <p className="p-4 text-sm text-foreground">Loading comments…</p> : null}
         {empty ? (
-          <p className="p-4 text-sm text-muted-foreground">
+          <p className="p-4 text-sm text-foreground">
             {closedCount > 0 && filter === 'all' && !showResolved
               ? `All ${closedCount} ${closedCount === 1 ? 'card is' : 'cards are'} resolved.`
               : 'No comments yet. Select some text and choose Comment, or comment on the whole section.'}
@@ -506,18 +523,6 @@ export function MarginPanel({
                   quote={composer.anchor ? composerQuote : null}
                   threads={threads}
                   range={composerRange}
-                />
-              );
-            }
-            if (item.strip && reviewSummary) {
-              return (
-                <ReviewSummaryStrip
-                  key={STRIP_ID}
-                  summary={reviewSummary}
-                  threads={threads}
-                  score={reviewerScore}
-                  register={registerCard}
-                  top={tops.map.get(STRIP_ID)}
                 />
               );
             }

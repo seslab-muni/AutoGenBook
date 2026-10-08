@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { createFileRoute, useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
 
 import { outline } from '@/api/queries/outline';
 import { projects } from '@/api/queries/projects';
 import { StudioLayout } from '@/components/layout/studio-layout';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { MarginHostContext } from '@/features/editor/margin/margin-host';
 import { RightColumn } from '@/features/editor/margin/right-pane';
@@ -21,7 +21,7 @@ export const Route = createFileRoute('/p/$projectId/')({
 
 function StudioPage() {
   const { projectId } = Route.useParams();
-  const { node } = ProjectRoute.useSearch();
+  const { node, copilot, instruction } = ProjectRoute.useSearch();
   const { project: loaderProject } = ProjectRoute.useLoaderData();
   // Re-subscribe (rather than relying on the loader snapshot alone) so a run finishing — which
   // sets/updates `lastRunId` — is reflected here without a full route reload; see `p.$projectId.tsx`.
@@ -35,6 +35,33 @@ function StudioPage() {
   const [marginHost, setMarginHost] = useState<HTMLElement | null>(null);
   const { data } = useQuery(outline.flat(projectId));
   const flatNodes = data?.items ?? [];
+
+  // An old `?tab=` link is dropped by the search validation but would stay in the address bar: rewrite
+  // the URL once without it.
+  const router = useRouter();
+  const searchStr = useRouterState({ select: (state) => state.location.searchStr });
+  useEffect(() => {
+    const params = new URLSearchParams(searchStr);
+    if (!params.has('tab')) return;
+    // The router already ignores it (its search state is validated), so a navigation would be a
+    // no-op: replace the history entry itself.
+    params.delete('tab');
+    const rest = params.toString();
+    router.history.replace(`${router.state.location.pathname}${rest ? `?${rest}` : ''}`);
+  }, [searchStr, router]);
+
+  const initialRewrite = copilot === 'rewrite' ? { instruction: instruction ?? '' } : null;
+  const consumeRewrite = useCallback(() => {
+    void navigate({
+      search: (prev) => {
+        const rest = { ...prev };
+        delete rest.copilot;
+        delete rest.instruction;
+        return rest;
+      },
+      replace: true,
+    });
+  }, [navigate]);
 
   function handleSelectNode(nodeId: string | null) {
     void navigate({
@@ -68,6 +95,8 @@ function StudioPage() {
             flatNodes={flatNodes}
             outlineOpen={outlineOpen}
             onSelectNode={handleSelectNode}
+            initialRewrite={initialRewrite}
+            onInitialRewriteConsumed={consumeRewrite}
           />
         }
         marginPane={<RightColumn node={selectedNode} onMarginHost={setMarginHost} />}

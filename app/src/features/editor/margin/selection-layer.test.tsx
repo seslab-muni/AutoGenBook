@@ -12,7 +12,6 @@ function Harness({
   onComment = vi.fn(),
   onFocusThread = vi.fn(),
   highlights = [],
-  copilotActions = false,
   onPrompt,
   onChip,
 }: {
@@ -21,7 +20,6 @@ function Harness({
   onComment?: (a: unknown) => void;
   onFocusThread?: (id: string) => void;
   highlights?: { id: string; kind: string; start: number; end: number; hidden: boolean }[];
-  copilotActions?: boolean;
   onPrompt?: (a: unknown) => void;
   onChip?: (chip: string, a: unknown) => void;
 }) {
@@ -39,7 +37,6 @@ function Harness({
         highlights={highlights}
         onComment={onComment}
         onFocusThread={onFocusThread}
-        copilotActions={copilotActions}
         onPrompt={onPrompt}
         onChip={onChip}
       />
@@ -103,9 +100,7 @@ describe('SelectionLayer', () => {
       const user = userEvent.setup();
       const onPrompt = vi.fn();
       const onChip = vi.fn();
-      render(
-        <Harness text="  hello 𝒫 world  " copilotActions onPrompt={onPrompt} onChip={onChip} />,
-      );
+      render(<Harness text="  hello 𝒫 world  " onPrompt={onPrompt} onChip={onChip} />);
       select(0, 17);
       await user.click(await screen.findByRole('button', { name: 'Prompt…' }));
       // Code points: the quote and its offsets count 𝒫 once.
@@ -125,7 +120,7 @@ describe('SelectionLayer', () => {
     it('Ctrl+Alt+P prompts about the selection, and says what to do without one', async () => {
       const user = userEvent.setup();
       const onPrompt = vi.fn();
-      render(<Harness text="hello world" copilotActions onPrompt={onPrompt} />);
+      render(<Harness text="hello world" onPrompt={onPrompt} />);
       select(3, 3);
       screen.getByTestId('pane').focus();
       await user.keyboard('{Control>}{Alt>}p{/Alt}{/Control}');
@@ -136,21 +131,21 @@ describe('SelectionLayer', () => {
       expect(onPrompt).toHaveBeenCalledWith(expect.objectContaining({ quote: 'hello' }));
     });
 
-    it('does nothing for Ctrl+Alt+P when the copilot is off', async () => {
+    it('does nothing for Ctrl+Alt+P, and shows no Prompt…, when there is no copilot handler', async () => {
       const user = userEvent.setup();
-      const onPrompt = vi.fn();
-      render(<Harness text="hello world" copilotActions={false} onPrompt={onPrompt} />);
+      render(<Harness text="hello world" />);
       select(0, 5);
       await screen.findByRole('toolbar');
+      expect(screen.queryByRole('button', { name: 'Prompt…' })).not.toBeInTheDocument();
       screen.getByTestId('pane').focus();
       await user.keyboard('{Control>}{Alt>}p{/Alt}{/Control}');
-      expect(onPrompt).not.toHaveBeenCalled();
+      expect(screen.queryByRole('region')).not.toBeInTheDocument();
     });
 
     it('refuses to prompt about a passage that is too long', async () => {
       const user = userEvent.setup();
       const onPrompt = vi.fn();
-      render(<Harness text={'x'.repeat(20_001)} copilotActions onPrompt={onPrompt} />);
+      render(<Harness text={'x'.repeat(20_001)} onPrompt={onPrompt} />);
       select(0, 20_001);
       await user.click(await screen.findByRole('button', { name: 'Prompt…' }));
       expect(onPrompt).not.toHaveBeenCalled();

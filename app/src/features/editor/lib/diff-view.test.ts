@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDiffBlocks } from './diff-view';
+import { buildDiffBlocks, buildHunkBlocks } from './diff-view';
 
 const text = (block: { segments: { type: string; text: string }[] }, type: string) =>
   block.segments
@@ -127,5 +127,34 @@ describe('buildDiffBlocks', () => {
   it('tolerates hunks that run past the text', () => {
     const blocks = buildDiffBlocks('short', [{ start: 3, end: 99, removed: 'rt', added: 'x' }]);
     expect(blocks).toHaveLength(1);
+  });
+
+  describe('buildHunkBlocks (a finished suggestion whose original text the list left out)', () => {
+    const hunks = [
+      { start: 0, end: 3, removed: 'old', added: 'new' },
+      { start: 9, end: 9, removed: '', added: ' added' },
+      { start: 20, end: 24, removed: 'gone', added: '' },
+    ];
+
+    it('shows just what was removed and added, one block per hunk', () => {
+      const blocks = buildHunkBlocks(hunks);
+      expect(blocks).toHaveLength(3);
+      expect(blocks[0]!.segments).toEqual([
+        { type: 'removed', text: 'old' },
+        { type: 'added', text: 'new' },
+      ]);
+      expect(blocks[1]!.segments).toEqual([{ type: 'added', text: ' added' }]);
+      expect(blocks[2]!.segments).toEqual([{ type: 'removed', text: 'gone' }]);
+      expect(blocks.every((b) => !b.cutBefore && !b.cutAfter)).toBe(true);
+    });
+
+    it('limits to the applied hunks of a partial accept, keeping their indexes', () => {
+      expect(buildHunkBlocks(hunks, [0, 2]).map((b) => b.hunkIndex)).toEqual([0, 2]);
+    });
+
+    it('drops carriage returns', () => {
+      const [block] = buildHunkBlocks([{ start: 0, end: 4, removed: 'a\r\nb', added: 'c' }]);
+      expect(block!.segments[0]!.text).toBe('a\nb');
+    });
   });
 });

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/component-test-utils';
 
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
 import type { MarginCardContext } from './card-registry';
 import type { MarginGeometry } from './geometry';
 import { MarginPanel } from './margin-panel';
@@ -15,12 +16,16 @@ const CTX: MarginCardContext = {
   projectId: 'book-reinforcement-learning',
   nodeId: 'rl-sec-1-1',
   currentUserId: 'user-mock-1',
-  copilotActions: false,
   restoreEditorFocus: vi.fn(),
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
   flushEdits: () => Promise.resolve(),
   holdSaving: () => Promise.resolve(() => {}),
+  serverAnchor: toServerAnchor,
+  editBlockedReason: null,
+  revisable: true,
+  rewriteBlock: null,
+  knownIds: () => new Set<string>(),
 };
 
 function geometry(y: Record<string, number>): MarginGeometry {
@@ -195,17 +200,14 @@ describe('MarginPanel', () => {
       reviewedAt: null,
     };
 
-    it('leads the pinned cards with the review verdict and pushes them down', async () => {
+    it('is a fixed header above the card lane, not a card that scrolls away with the text', async () => {
       useMarginStore.getState().setFilter('all');
       renderPanel([anchored('a', 'First', 10)], { a: 20 }, { reviewSummary: summary });
       const strip = await screen.findByRole('region', { name: 'Review summary' });
-      expect(strip).toHaveAttribute('data-thread-id', 'review-summary');
-      // It is laid out like a card: at the top of the text column, with the anchored card pushed below it.
-      await waitFor(() => {
-        const byId = Object.fromEntries(tops().map((t) => [t.id, t.top]));
-        expect(byId['review-summary']).toBe(0);
-        expect(byId['a']).toBeGreaterThan(0);
-      });
+      const lane = screen.getByRole('region', { name: 'Margin cards' });
+      expect(lane.contains(strip)).toBe(false);
+      expect(strip.compareDocumentPosition(lane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      await waitFor(() => expect(tops().map((t) => t.id)).toEqual(['a']));
     });
 
     it('shows with All and Review, not with Comments or Suggestions', async () => {

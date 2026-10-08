@@ -8,7 +8,7 @@ import {
 } from './card-payloads';
 
 describe('reviewPayload', () => {
-  it('reads the issue fields and folds an unknown severity into major', () => {
+  it('reads the issue fields, and an unknown severity as minor (the server default)', () => {
     const payload = reviewPayload({
       payload: {
         type: 'consistency:term',
@@ -22,7 +22,7 @@ describe('reviewPayload', () => {
     });
     expect(payload).toEqual({
       type: 'consistency:term',
-      severity: 'major',
+      severity: 'minor',
       requiredFix: 'Pick one name.',
       replaceFrom: 'decide',
       replaceTo: 'output',
@@ -34,7 +34,7 @@ describe('reviewPayload', () => {
   it('survives an empty payload', () => {
     expect(reviewPayload({ payload: {} })).toMatchObject({
       type: 'issue',
-      severity: 'major',
+      severity: 'minor',
       requiredFix: '',
       replaceFrom: '',
       replaceTo: '',
