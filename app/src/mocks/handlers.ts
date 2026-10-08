@@ -887,7 +887,9 @@ const outlineHandlers = [
     const node = db.outlineNodes.get(params.nodeId as string);
     if (!node || node.projectId !== params.projectId)
       return notFound('Outline node', new URL(request.url).pathname);
-    return HttpResponse.json(await withContentHash(db.withCommentCounts(stripProjectId(node))));
+    const body = await withContentHash(db.withCommentCounts(stripProjectId(node)));
+    if (mockRevisionConfig.nodeGetDelayMs > 0) await delay(mockRevisionConfig.nodeGetDelayMs);
+    return HttpResponse.json(body);
   }),
 
   http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async ({ params, request }) => {

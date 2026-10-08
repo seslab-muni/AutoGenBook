@@ -31,7 +31,7 @@ import {
   type CopilotFailure,
 } from './copilot-errors';
 import { DefaultQuote } from './default-parts';
-import { useMarginStore } from './margin-store';
+import { DRAFT_ID, useMarginStore } from './margin-store';
 import { CommentMarkdown } from './comment-markdown';
 import { SuggestionDiff } from './suggestion-diff';
 import { useSelectedHunks } from './hunk-selection';
@@ -410,6 +410,15 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
           if (editing.current) {
             event.preventDefault();
             editing.current = false;
+            // The menu has let go of focus now: the window it opened takes it, and is brought into view.
+            requestAnimationFrame(() => {
+              document
+                .querySelector<HTMLTextAreaElement>(
+                  'section[aria-label="Prompt the copilot"] textarea',
+                )
+                ?.focus();
+              useMarginStore.getState().revealCard(DRAFT_ID);
+            });
           }
         }}
       >

@@ -47,10 +47,10 @@
   /* Text colours for the status hues (the fills above are too light/dark to read as text: 2-3:1).
      Each reaches at least 4.5:1 on the page, card, muted and accent surfaces and on its own 5-15%
      tint over them, in its theme. Use these for coloured text; keep the fills for backgrounds. */
-  --success-text: oklch(47% 0.12 160.1);
-  --warning-text: oklch(50% 0.12 70.08);
-  --info-text: oklch(48% 0.13 237.3);
-  --destructive-text: oklch(51% 0.19 15.3);
+  --success-text: oklch(44% 0.12 160.1);
+  --warning-text: oklch(47% 0.12 70.08);
+  --info-text: oklch(45% 0.13 237.3);
+  --destructive-text: oklch(48% 0.19 15.3);
 
   --border: oklch(92.9% 0.013 255.5);
   --input: oklch(92.9% 0.013 255.5);

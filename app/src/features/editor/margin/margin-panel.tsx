@@ -388,13 +388,10 @@ export function MarginPanel({
       const box = element.getBoundingClientRect();
       const view = lane.getBoundingClientRect();
       if (box.bottom > view.bottom - 8) {
-        // Never scroll the card's own top out of view, and - while that top is comfortably in view -
-        // never so far that less than a few lines of the text remain on screen.
-        let delta = Math.min(box.bottom - view.bottom + 24, box.top - view.top - 8);
-        if (box.top < view.bottom - 120) {
-          const room = geometry.contentHeight() - 160 - geometry.scrollTop();
-          delta = Math.min(delta, Math.max(0, room));
-        }
+        // Never scroll the card's own top out of view (a tall card is shown from its top). The focused
+        // card keeps its own spot in the layout and the others make room around it, so this is
+        // rarely more than a nudge and does not scroll the text away.
+        const delta = Math.min(box.bottom - view.bottom + 24, box.top - view.top - 8);
         if (delta > 0) geometry.scrollBy(delta);
         else {
           revealRef.current = null;

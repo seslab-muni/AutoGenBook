@@ -115,7 +115,7 @@ tests (`margin-flow`, `margin-write`, `margin-editing`, `copilot-flow`, `copilot
 (`src/mocks/fakeRevise.ts`) answers with a diff after a few simulated progress events (an instruction
 containing "slow" never finishes, so it can be cancelled; one containing "fail" fails with a
 timeout), and the finished project has a few review cards (`seedReviewDemo`). In the browser
-`window.__mockConfig` (`acceptDelayMs`, `patchDelayMs`, `failPatch`) slows the mock accept and save
+`window.__mockConfig` (`acceptDelayMs`, `patchDelayMs`, `nodeGetDelayMs`, `failPatch`) slows the mock accept and save
 down or makes saves fail, to watch the races the copilot's writes have to survive. See
 `docs/WEB_UI.md` for the behaviour.
 

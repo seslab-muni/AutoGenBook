@@ -34,6 +34,11 @@ export const mockRevisionConfig = {
   patchDelayMs: 0,
   /** Content PATCHes answer 500 (a save that fails). */
   failPatch: false,
+  /**
+   * A node GET answers with the node as it was when the request arrived, this many ms later: a read
+   * that overlaps a save and lands after it (what an invalidation during a save produces).
+   */
+  nodeGetDelayMs: 0,
 };
 
 export type SuggestionTerminalEvent = 'done' | 'failed' | 'cancelled';

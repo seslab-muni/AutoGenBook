@@ -15,7 +15,7 @@ async function enableMocksIfRequested(): Promise<void> {
   ]);
   seedDatabase();
   seedReviewDemo();
-  // Lets a browser check slow the mock accept and save down (`window.__mockConfig.acceptDelayMs = 2000`).
+  // Lets a browser check slow the mock accept and save down (`window.__mockConfig.acceptDelayMs = 2000`), or make node reads answer late (`nodeGetDelayMs`).
   (window as unknown as { __mockConfig?: unknown }).__mockConfig = mockRevisionConfig;
   await worker.start({ onUnhandledRequest: 'bypass' });
 }
