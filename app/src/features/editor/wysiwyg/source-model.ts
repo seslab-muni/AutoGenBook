@@ -221,11 +221,6 @@ function labelsOf(segments: readonly Segment[]): Set<string> {
   return out;
 }
 
-const dbg = (...args: unknown[]) => {
-  const sink = (globalThis as { __smDebug?: (...a: unknown[]) => void }).__smDebug;
-  if (sink) sink(...args);
-};
-
 export class SourceModel {
   segments: Segment[];
   tail: string;
@@ -415,7 +410,6 @@ export class SourceModel {
         gap = gap.replace(/[ \t]+$/, '');
         const written = serializeVerified(node, this.style, attempt.from);
         if (!written) {
-          dbg('serialize failed', JSON.stringify(node.toJSON()), attempt);
           return null;
         }
         maxLevel = Math.max(maxLevel, written.level);
@@ -532,14 +526,6 @@ export class SourceModel {
             parsed.every(
               (segment, k) => fingerprintOf(segment.node) === fingerprintOf(parts[k]!.node),
             );
-          if (!verified) {
-            dbg(
-              'context mismatch',
-              JSON.stringify(text),
-              parsed.map((segment) => fingerprintOf(segment.node)),
-              parts.map((part) => fingerprintOf(part.node)),
-            );
-          }
         }
       }
       return {
@@ -563,20 +549,12 @@ export class SourceModel {
     for (let tries = 0; tries < 12; tries += 1) {
       built = build(attempt);
       if (!built) return { ok: false };
-      if (!built.verified)
-        dbg(
-          'context failed',
-          attempt,
-          built.freshReals.map((f) => [f.gap, f.src]),
-          built.nextGap,
-        );
       if (built.verified) break;
       if (!attempt.widen && built.nonBlank) attempt = { ...attempt, widen: true };
       else if (built.usedExact) attempt = { ...attempt, exact: false };
       else if (built.maxLevel >= 0 && built.maxLevel < LEVELS.length - 1) {
         attempt = { ...attempt, from: built.maxLevel + 1 };
       } else {
-        dbg('refused after escalation', attempt, built.maxLevel);
         return { ok: false };
       }
       built = null;

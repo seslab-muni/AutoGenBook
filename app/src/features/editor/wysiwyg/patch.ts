@@ -136,8 +136,8 @@ function shiftToken(token: InlineToken, pmDelta: number, srcDelta: number): Inli
   return next;
 }
 
-const INERT_TEXT = /^[\p{L}\p{N} ]+$/u;
-const SAFE_NEIGHBOUR = /[\p{L}\p{N} .,;!?'"]/u;
+const INERT_TEXT = /^[\p{L}\p{N} .,;!?'"()%-]+$/u;
+const SAFE_NEIGHBOUR = /[\p{L}\p{N} .,;!?'"()%-]/u;
 const WORD_SPECIALS = /[&@:\\<>`*_[\]~|]|www\./i;
 /** What a line may hold before the text if the text could still be the start of a list, a heading, a rule... */
 const STRUCTURAL_PREFIX = /^[ \t>\-+*#\d.)=_~`]*$/;
@@ -189,7 +189,14 @@ function inertEdit(
   while (left > Math.max(lo, from - 256) && !/\s/.test(src[left - 1]!)) left -= 1;
   let right = to;
   while (right < Math.min(hi, to + 256) && !/\s/.test(src[right]!)) right += 1;
-  return !WORD_SPECIALS.test(src.slice(left, from) + src.slice(to, right));
+  const word = src.slice(left, from) + src.slice(to, right);
+  if (WORD_SPECIALS.test(word)) return false;
+  // A word that runs into a delimiter is not ended there: with the typed text it may now be the
+  // start of an address (`www.` or `http://`) that would swallow what follows.
+  if (((right >= hi && !rightOk) || (left <= lo && !leftOk)) && /[.:@/]/.test(word + text)) {
+    return false;
+  }
+  return true;
 }
 
 export interface Patched {
@@ -264,10 +271,14 @@ export function patchSegment(
     return null;
   }
   const hasLink = edit.marks.some((mark) => mark.type.name === 'link');
+  // A line break the source does not hold (one that ends the block, or a heading's) cannot have text
+  // typed after it as if it were there.
+  const previous = tb.map[host.index - 1];
+  if (previous?.kind === 'break' && previous.s === previous.e && edit.text !== '') return null;
   // What lies beyond the run's edge must be nothing at all (the start or end of the textblock), a
   // line break or an atom, not a delimiter that the text next to it can change the meaning of.
   const beside = (other: InlineToken | undefined, touching: boolean, atEdge: boolean) =>
-    other ? other.kind === 'break' || (other.kind === 'atom' && touching) : atEdge;
+    other ? touching && (other.kind === 'break' || other.kind === 'atom') : atEdge;
   const leftOk = beside(
     tb.map[host.index - 1],
     tb.map[host.index - 1]?.e === token.s,

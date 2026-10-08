@@ -77,6 +77,29 @@ describe('typing and deleting from beforeinput (no reading the DOM back)', () =>
     expect(h.view.state.selection.from).toBe(posOf(h.view, 'Hello', 6));
   });
 
+  it('puts the text where the browser says and the caret behind it, whatever the selection was', () => {
+    const h = open('Hello world\n');
+    // ProseMirror's selection is still where a click left it; the browser has moved on (Home).
+    select(h.view, posOf(h.view, 'world', 2));
+    const start = posOf(h.view, 'Hello', 0);
+    const event = input('insertText', 'Oh ');
+    const range = { startContainer: h.view.dom.querySelector('p')!.firstChild!, startOffset: 0 };
+    event.getTargetRanges = () =>
+      [
+        {
+          ...range,
+          endContainer: range.startContainer,
+          endOffset: 0,
+        },
+      ] as unknown as StaticRange[];
+    expect(handleBeforeInput(h.view, event)).toBe(true);
+    expect(h.controller.core.text).toBe('Oh Hello world\n');
+    expect(h.view.state.selection.from).toBe(start + 3);
+    // The next character continues behind it.
+    handleBeforeInput(h.view, input('insertText', 'x'));
+    expect(h.controller.core.text).toBe('Oh xHello world\n');
+  });
+
   it('runs the input rules (a typed "# " becomes a heading)', () => {
     const h = open('x\n');
     select(h.view, 1);

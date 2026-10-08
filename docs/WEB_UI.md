@@ -526,39 +526,70 @@ identity (ProseMirror shares every node an edit did not touch) and
    hard-break form detected from the text, list marker, numbering and tightness kept per list, setext
    headings and indented code kept), and leaves every other block's source slice and the whitespace
    around it untouched; the gap before a new block is the neighbouring gap (at least one blank line);
-3. **verifies what it wrote**: the block's source is parsed again with the same pipeline and must mean what
-   the edited block means (`equivalence.ts`: marker characters, tightness, escapes and edge whitespace do
-   not count; marks and text do). Escaping is minimal first (a `\` before punctuation, an entity, a line
-   that would become a heading/list/quote/fence), then the inline syntax characters, then all
-   punctuation; a block that does not read back as itself at any level makes the edit *refused* (the
-   transaction is dropped, the DOM redrawn from the state, a toast says to use Source) - never saved as
-   something else.
-Undo and redo give the source back exactly (a block, or a group of blocks with the whitespace around
-them, that returns to a recent shape gets its recorded source, not the serializer's; a long run of typing
-keeps the version it began from; the exceptions are a list that had to take the other marker to stay apart
-from a neighbour, which may keep it, and shapes older than the last few hundred changes). `parse(serialize(...))` is covered by property tests over random
-documents (astral characters, math, citations, callouts, tables, HTML, footnotes, nested lists and
-quotes, code fences, hard breaks, CR LF-normalised text, EOF whitespace, an empty document, a
-document that is one atom): the bytes outside the edited block are identical, the maps equal a fresh
-read of the new source, and undo restores the bytes.
+3. **verifies what it wrote, in context**: a block's source is parsed again with the same pipeline and must
+   mean what the edited block means (`equivalence.ts`: marker characters, tightness, escapes and edge
+   whitespace do not count; marks and text do; a formula, a citation, a reference or an automatic
+   link equals its literal text, nothing else does - typed `<b>` or `![a](u)` is not HTML or an image).
+   Then the written blocks are parsed again *together with the blocks next to them* (the block before,
+   the gap, the written blocks, the gap, the block after) and must give the same blocks: a list item
+   deleted down to `-` must not turn the paragraph above into a heading, a line typed under a list must
+   not become part of it, `$$` or a code fence typed as a paragraph must not swallow the rest. When
+   that fails the blocks are first kept apart by a blank line, then written by the serializer instead
+   of from memory or by patching, then with stronger escapes (a `\` before punctuation, an entity, a
+   line that would become a heading/list/quote/fence; then the inline syntax characters; then all
+   punctuation; also emphasis written outside the punctuation at its edge and indented code written
+   fenced); a block that cannot be written at any level makes the edit *refused* (the transaction is
+   dropped, the DOM redrawn from the state, a toast says to use Source) - never saved as something
+   else. Plain prose edits (letters, digits, spaces and mild punctuation inside a word or between words,
+   away from the start of a line, next to nothing that is Markdown syntax) cannot change what anything
+   means and are written without any parse; that is what keeps a keystroke in a 60 kB block at about a
+   millisecond. Any other key in such a block costs a parse of the block and of its neighbours (about
+   70 ms for 60 kB; neighbours over 48 kB are not re-read, a blank line between blocks is trusted).
+Undo and redo give the source back exactly in the common case (a block, or a group of blocks with the
+whitespace around them, that returns to a recent shape gets its recorded source, not the serializer's; a
+long run of typing keeps the version it began from). The memory for that is bounded by size (a few
+megabytes) and count, so on very large blocks or after very many changes the oldest shapes are gone and an
+undo gives a source that means the same but may be written differently (an escape, a marker). The same
+text written escaped and unescaped at different times is told apart by what replaced it (undo prefers
+what an edit or a redo took away, redo what an undo took away); two writings of the same text that were
+both recorded can still be confused. `parse(serialize(...))` is covered by property tests over random
+documents, including a fuzz that compares the editor with an independent parse of the whole resulting
+source after every step (blank-line gaps and single-newline gaps, `$`, `[@`, `\` and edge whitespace in play):
+the bytes outside the edited block are identical, the maps equal a fresh read of the new source, and undo
+restores the bytes.
 
 *Exact limits of the guarantee.* (1) Edited blocks may change *that block's* source where Markdown
 leaves a choice and the edit was not a plain text edit: entities (`&amp;` -> `&`), redundant escapes,
-the extra characters of an emphasis style other than the document's, trailing whitespace before a
-line break, and the other items of a *list or quote that is one top-level block* (the unit of
-rewriting is the top-level block, so an item's neighbours are rewritten in the document's style when
-an item is restructured; typing in an item never does that). (2) The whitespace around a block that
-was split, joined, added or removed is the neighbour's (or a blank line); two lists left adjacent
-with the same marker get different markers (the later one, even outside the edited window) so they
-do not merge. (3) An empty top-level paragraph has no source (Enter at the end of a block changes
-nothing until something is typed); an empty paragraph inside a quote or item has none either, apart
-from an empty item. (4) A CR LF section is saved as LF the first time it is edited (as in Source).
-(5) Text typed as `$x$`, `$$x$$` or `[@key]` stays literal text - written unescaped - until the editor
-is left (blur): then the block is read again from its source and becomes the formula or citation; the
-source does not change by that. (6) Leading spaces at the start of a line are kept as typed
-(Markdown ignores up to three; four would make code and are refused). (7) `**`/`*` delimiters
-cannot close against punctuation directly followed by a letter in Markdown (`**"x"**y`): such an edit
-is refused rather than written differently.
+the extra characters of an emphasis style other than the document's (an `_` that would touch a letter
+is written `*`), spaces at the start or end of a line (a space at the start of a line means nothing and
+four would be code: they are not written, the editor still shows them), and the other items of a *list
+or quote that is one top-level block* (the unit of rewriting is the top-level block, so an item's
+neighbours are rewritten in the document's style when an item is restructured; typing in an item never
+does that). (2) The whitespace around a block that was split, joined, added or removed is the
+neighbour's (or a blank line); a block that is written next to one with a single newline may widen that
+gap to a blank line to stay a block of its own. Two lists left adjacent with the same marker get different
+markers: the later one, even outside the edited window - then only the marker characters of its items are
+rewritten, nothing else of it (a list shown as an atom, such as a task list, is never rewritten: the new
+list takes another marker instead); indented code that would be read as part of a list or quote above
+it is written fenced. (3) An empty top-level paragraph has no source (Enter at the end of a block changes
+nothing until something is typed), nor has one of only spaces or line breaks; an empty paragraph inside a
+quote or item has none either, apart from an empty item. (4) A CR LF section is saved as LF the first time
+it is edited (as in Source). (5) Text typed as `$x$` or `[@key]` stays literal text - it is the formula or
+the citation only when the section is read again (reload, another view, external replacement); leaving
+the editor changes nothing, in the document, the draft or the undo history. The rule for dollar signs: a
+`$...$` (or `$$...$$`) on one line with something other than space inside its edges is a formula, any other
+`$` gets a backslash (`costs \$5 and \$6`). (6) Emphasis cannot close against punctuation directly followed
+by a letter in Markdown (`**「重要」**です`): the punctuation at the edge of emphasised text is written
+outside the emphasis (`「**重要**」です`), so the mark is not on it when the section is read again; where even
+that is impossible (emphasised code touching a letter) the edit is refused. (7) Text that would read back
+as a construct the editor shows as an atom is escaped to stay text: `<` before a letter, `!`, `/` or `?`,
+`![a](u)`, and `[foo]`, `[text][foo]` or `[^1]` when the section defines that label. An address typed
+right before emphasis or an atom is written between angle brackets (`<https://x.y>`) or with its dot
+escaped (`www\.x.y`), so that it ends where it ends. (8) A table, HTML or other block atom pasted inside
+a list item or a quote becomes the text of its source there (an atom's source cannot carry the prefix of
+a container); at the top level it stays an atom. The few other edits that cannot be written (`Backspace`,
+a mark, a paste in an unusual neighbourhood: about one in a thousand in the fuzz) are refused with one
+toast, not a series.
 
 *Atoms (what stays raw).* Whatever the editor cannot represent faithfully is an atom carrying its exact
 source, drawn by the read-only view's own renderers (KaTeX, citation chips, callouts, tables) and
@@ -577,16 +608,20 @@ editable region is a tab stop and a formula/chip/table has an accessible name
 ("Formula: x^2. Press Enter to edit in Source.").
 
 *Editing.* Typing, `Enter`/`Backspace`/`Delete` (split, join, leave a list), `Shift+Enter` (hard break),
-`Tab`/`Shift+Tab` in lists only (everywhere else `Tab` belongs to the browser; `Escape` makes the next `Tab`
-pass even in a list), `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+E` inline code, `Ctrl+K` link (a prompt for the
-address; empty removes it), `Ctrl+Z`/`Ctrl+Y`/`Ctrl+Shift+Z`, `Ctrl+S` (save now), `Ctrl+Alt+M` /
+`Tab`/`Shift+Tab` in lists only (everywhere else `Tab` belongs to the browser; `Escape` makes the next `Tab`, only that one,
+pass even in a list), `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+E` inline code, `Ctrl+K` link (a small form by the selection: Enter applies, Escape cancels, an empty address removes the link, an
+address with another scheme than `http(s):`, `mailto:`, relative or `#` is refused with a message), `Ctrl+Z`/`Ctrl+Y`/`Ctrl+Shift+Z`, `Ctrl+S` (save now), `Ctrl+Alt+M` /
 `Ctrl+Alt+P` (the selection layer's, unchanged). Markdown input rules: `#`..`######` + space, `- `/`* `/`+ `,
 `1. `, `> `, ```` ``` ```` + space, `**x**`, `*x*`, `_x_`, `~~x~~`, `` `x` ``; Backspace right after a rule
 undoes it. Paste: plain text is read as Markdown with the app's parser (blocks that begin on a new line stay
 blocks, between the text around the caret; a fragment keeps its edge spaces; in a code block it is
 inserted as it is); HTML goes through the schema (text, paragraphs, headings, lists, quotes, code, bold,
-italic, links; `javascript:` links, scripts, styles, images, forms and tables degrade to their text) and
-no raw HTML ever enters the document. Copy puts Markdown on the clipboard. The editable region is a
+italic, links with an `http:`, `https:`, `mailto:`, relative or `#` address; other links, scripts, styles,
+images, forms and tables degrade to their text). Raw HTML that is *in the Markdown* stays as an HTML atom
+with its exact source, and the editor's own copy of an atom pastes back as that atom - but only
+with this page's token and a source that reads back as the same kind of atom: HTML from anywhere else
+has every `data-md-*` attribute stripped first, so a forged attribute cannot put markup into the draft.
+Typed `<b>` is text (escaped). Copy puts Markdown on the clipboard. The editable region is a
 labelled multiline textbox (`role="textbox"`, "Section text"), with a visible focus ring, in both themes.
 
 *Highlights, selection, margin, anchors.* All card kinds are drawn over text through the same CSS Custom
@@ -601,7 +636,10 @@ ranges. Margin geometry is `writeGeometry(region, locate)`; `data-markdown-root`
 root. While typing, `EditorController` tracks every located range through each *source* change with
 `mapRangeThroughChange` - the Source view's own rules (text typed right before a range stays outside,
 inside grows it, deleting its words flags it) - and reports them with `onHighlightsMapped`, so
-`use-anchor-positions` behaves as in Source: local positions are the truth while dirty, a refetch
+`use-anchor-positions` behaves as in Source: an edit that writes a block again reports its separate hunks (a
+character-level diff of the old and new source, line-level first for very large blocks), and each range is mapped through
+them from the last to the first, so text the edit did not touch keeps its anchor (bold on a word puts the opening
+markers inside an anchor over it and the closing ones at its edge, outside it, as Source would); local positions are the truth while dirty, a refetch
 moves nothing, deleting the quote orphans the card after the short search, `Ctrl+Z` brings it back.
 
 *External replacement.* A `value` that is not one the editor produced (an accepted suggestion, "Load the
@@ -624,13 +662,20 @@ opens. "Edit in Source" on an atom is the same switch with the atom's source sel
 fetched when a Write view is first made editable. The read-only view paints first (it is the same
 typography, in the same scroll container, so nothing moves) and is replaced when the chunk has loaded; the
 read-only view, the Source view and the studio never load it (`check-bundle-budget.mjs` fails if anything
-imports the chunk statically). If the chunk cannot be fetched the section stays read-only with a notice and
-*Try again*; Source remains the way to edit. Sections that cannot be edited (generating, a container node,
-LaTeX-only) stay the read-only view.
+imports the chunk statically). Until then it is a busy, read-only textbox that already takes focus: characters,
+Enter and Backspace typed meanwhile are kept and replayed into the editor when it exists, and a click that
+put the caret in the text gives the editor the focus and the caret. If the chunk cannot be fetched the
+section stays read-only with a notice and *Reload page* (it saves first); the browser remembers a failed
+dynamic import for the page's lifetime, so a retry in place can never succeed - Source remains the way to
+edit, and the stale-build recovery (`lib/stale-build.ts`) already reloads once by itself after a deploy.
+Sections that cannot be edited (generating, a container node, LaTeX-only) stay the read-only view.
+`VITE_WRITE_EDITING=0` (`false`, `off`; a build-time variable read in `features/editor/lib/write-editing.ts`
+only, default on) turns the editable Write view off altogether: the Write view is then exactly the
+read-only renderer and the chunk is never requested.
 
 *Performance.* Only the edited block is written or verified per keystroke: the model's share is about
-0.2 ms (a source splice and one parse of that block; the first read of a 100 kB section takes about 100
-ms), the rest is the browser's. Measured in a production build with Chromium and real keyboard typing in a
+0.2-1 ms for plain prose in a block of any size (a source splice, no parse; the first read of a 100 kB section
+takes about 100 ms), and a parse of the block and its neighbours for a key that is Markdown syntax; the rest is the browser's. Measured in a production build with Chromium and real keyboard typing in a
 100 kB section (about 370 blocks, 600 formulas, 130 comment cards): about 21 ms
 per key wall clock (including Chromium's input handling and the test driver), against 11 ms in the
 Source view, no task over 50 ms; key press to painted frame p50 22 ms / p95 34 ms (Source 19 / 28 ms).
@@ -647,6 +692,16 @@ while the attribute stays `"true"`; it cost about 6 ms per key). (3) Formulas ar
 MathML copy; the atom carries its accessible name) and the status bar's counts are deferred
 (`useDeferredValue`, which also helps Source).
 
+*Very large blocks.* A section that is one 60 kB paragraph, or one list of 600 items, used to cost the model
+about 71 ms (110 ms for the list) per key and kept a copy of the block per key (+118 MB after 700 keys). Plain
+prose now costs about 0.3 ms in the model for either, whatever the size (`perf.test.ts` guards it with
+generous limits), and the memory for an exact undo is bounded by size (a few megabytes) whatever the number
+of keys, so the heap stays flat (35 MB at 0, 300 and 700 keys in Chromium). A key that is Markdown syntax in
+such a block still parses it (about 70 ms for 60 kB). In Chromium, production build, key press to painted
+frame for those two documents is p50 99 ms / 62 ms (p95 218 / 122 ms), against 369 / 567 ms (p95 868 /
+1075 ms) in the Source view for the same text; the editor's own JavaScript is a few milliseconds of that,
+the rest is the browser's layout of a single huge block (which the read-only view has too).
+
 *Library choice and the budget.* Compared (gzipped, summed per module like `check-bundle-budget.mjs`, in this
 build on top of the 1012.9 kB baseline, each as a lazy chunk with its own demo glue only): bare ProseMirror
 (state, view, model, transform, commands, history, keymap, inputrules, schema-list) +88.6 kB; Milkdown
@@ -654,9 +709,9 @@ build on top of the 1012.9 kB baseline, each as a lazy chunk with its own demo g
 bundles: 65 / 136 / 138 kB). Milkdown and Tiptap re-serialise the whole document with their own Markdown
 serializers, which is exactly what the guarantee above forbids, so a block-preserving model would have been
 written on top of them anyway; bare ProseMirror driven by the app's existing remark pipeline is the
-smallest and gives the control. With the model, serializer, atoms and glue the chunk adds +122.2 kB
-(1135.1 kB total; the chunk is 84.3 kB gzipped as the browser receives it); `BUNDLE_TOTAL_BUDGET_KB` therefore goes from 1024 to
-1136 (the next 16 kB, 0.9 kB of headroom), the entry chunk's 300 kB is unchanged. Dependencies added: `prosemirror-model`,
+smallest and gives the control. With the model, serializer, atoms and glue the chunk added +122.2 kB
+(1135.1 kB total at first); after the review fixes (context verification, the link form, the clipboard guard) the
+total is 1145.7 kB, and `BUNDLE_TOTAL_BUDGET_KB` is 1152 (the next 16 kB); the entry chunk is 188.9 kB (budget 300). Dependencies added: `prosemirror-model`,
 `-state`, `-view`, `-transform`, `-commands`, `-history`, `-keymap`, `-inputrules`, `-schema-list`.
 
 *Development hooks.* Outside production builds the editor's element carries `__md = { view, core }`
@@ -666,9 +721,16 @@ the app read it.
 
 *Known limits.* Tables, callouts and other atoms are edited in Source; lists or quotes that contain such a
 thing are one raw atom. The unit of rewriting is the top-level block (see the limits above). A formula
-typed as text is a formula only after blur. `Ctrl+K` uses the browser's prompt. Pressing a key within the
-few milliseconds before the browser has reported a caret move to ProseMirror (`selectionchange` is
-asynchronous) is applied at the previous caret - a ProseMirror property that only synthetic input shows.
+typed as text is a formula only when the section is read again. Typing and deleting inside a textblock are made
+from the browser's `beforeinput` event with the range it reports (`handleBeforeInput` in `controller.ts`), not by
+reading the DOM back: ProseMirror's reader can run in the middle of Chromium's own editing command, before it has
+moved the caret, which put the next character in front of the previous one (`e found thatW`) on the first edit
+after loading. Composition (IME), spell-check replacements, drops and the rest still go through ProseMirror's
+own reading. Files dropped on the editor are ignored. The editor tells Grammarly-style helpers to stay out
+(`data-gramm="false"` and friends) and says `translate="yes"`. `keepReactOutOfTheEditor` is checked on a probe
+element first and skipped (the editor is slower on long sections, nothing else) where the property cannot be
+shadowed; `react-selection.test.tsx` fails if React stops walking a focused contenteditable on commit (the workaround
+is then unnecessary) or if the shield stops keeping it out.
 
 *Editor setup and the bundle.* The build aliases `@uiw/codemirror-extensions-basic-setup` to
 `lib/editor-setup.ts` (`vite.config.ts`), a copy of its extension list without the autocompletion

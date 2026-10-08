@@ -609,10 +609,6 @@ function convertTop(
       return { node: converted, tbs: collectTextblocks(converted, env) };
     } catch (error) {
       if (!(error instanceof Unsupported)) throw error;
-      (globalThis as { __smDebug?: (...a: unknown[]) => void }).__smDebug?.(
-        'unsupported',
-        error.message,
-      );
     }
   }
   return { node: atomBlock(node, source), tbs: [] };
@@ -639,9 +635,18 @@ export function parseDocument(text: string, options: ParseOptions = {}): ParsedD
   const tree = parseTree(normalized.text);
   const segments: Segment[] = [];
   let previousEnd = 0;
+  let previousNormalizedEnd = 0;
   for (const child of tree.children) {
-    const ns = startOf(child);
+    let ns = startOf(child);
     const ne = endOf(child);
+    // A setext heading right after a link definition is positioned from the definition's start
+    // (the parser's quirk): its own text starts at the next line, where the previous block ended.
+    if (ns < previousNormalizedEnd && ne > previousNormalizedEnd) {
+      let at = previousNormalizedEnd;
+      while (at < ne && /\s/.test(normalized.text[at]!)) at += 1;
+      ns = at;
+      child.position!.start.offset = at;
+    }
     const os = normalized.toOriginal(ns, 'start');
     const oe = normalized.toOriginal(ne, 'end');
     if (os < previousEnd || oe < os) continue;
@@ -665,6 +670,7 @@ export function parseDocument(text: string, options: ParseOptions = {}): ParsedD
     const converted = convertTop(child, env, source, rewritten && child.type !== 'math');
     segments.push({ node: converted.node, gap, src: source, tbs: converted.tbs });
     previousEnd = oe;
+    previousNormalizedEnd = ne;
   }
   const tail = text.slice(previousEnd);
   const last = segments[segments.length - 1];

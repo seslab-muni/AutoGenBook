@@ -68,7 +68,8 @@ Copy `.env.example` to `.env` to override the defaults:
 - `VITE_WRITE_EDITING` — the one switch for the editable Write view (`#182`). On unless
   set to `0`, `false` or `off` (a build-time variable, read only in
   `src/features/editor/lib/write-editing.ts`). When off, the Write view is exactly the
-  read-only renderer and the `markdown-editor` chunk is never requested.
+  read-only renderer and the `markdown-editor` chunk is never requested. The Docker build takes it as
+  `--build-arg VITE_WRITE_EDITING=0`.
 
 ## Folder layout
 

@@ -128,7 +128,12 @@ const DELETE_TYPES = new Set([
  */
 /** Text typed (or dictated, or replayed) at `[from, to)`: input rules first, as ProseMirror's own typing does. */
 export function typeInto(view: EditorView, from: number, to: number, data: string) {
-  const deflt = () => view.state.tr.insertText(data, from, to).scrollIntoView();
+  const deflt = () => {
+    const tr = view.state.tr.insertText(data, from, to);
+    // (The caret goes behind the typed text wherever it was before: the range is the browser's.)
+    tr.setSelection(TextSelection.near(tr.doc.resolve(tr.mapping.map(to, 1))));
+    return tr.scrollIntoView();
+  };
   if (!view.someProp('handleTextInput', (f) => f(view, from, to, data, deflt))) {
     view.dispatch(deflt());
   }
@@ -163,7 +168,9 @@ export function handleBeforeInput(view: EditorView, event: InputEvent): boolean 
   if (insert) {
     typeInto(view, from, to, data);
   } else {
-    view.dispatch(view.state.tr.delete(from, to).scrollIntoView());
+    const tr = view.state.tr.delete(from, to);
+    tr.setSelection(TextSelection.near(tr.doc.resolve(tr.mapping.map(from))));
+    view.dispatch(tr.scrollIntoView());
   }
   return true;
 }

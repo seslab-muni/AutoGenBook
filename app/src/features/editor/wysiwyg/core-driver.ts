@@ -3,7 +3,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { TextSelection, type Plugin, type Transaction } from 'prosemirror-state';
 
 import { EditorCore } from './core';
-import { fingerprintString, isBlankParagraph } from './equivalence';
+import { fingerprintString, isBlankParagraph, sameMeaning } from './equivalence';
 import { parseDocument } from './parse';
 import { buildPlugins } from './plugins';
 
@@ -129,9 +129,20 @@ export function meaningsOfSource(text: string): string[] {
     .map((segment) => fingerprintString(segment.node));
 }
 
-/** Whether the editor's blocks and the whole source agree (what every test of an edit asserts). */
+/**
+ * Whether the editor's blocks and the whole source agree (what every test of an edit asserts):
+ * the same blocks with the same meaning, where a formula typed as text is the formula it will be
+ * (a closed one-line `$$x$$` is a paragraph of text here and a display formula when read again).
+ */
 export function agrees(core: EditorCore): boolean {
-  return JSON.stringify(meanings(core.doc)) === JSON.stringify(meaningsOfSource(core.text));
+  const mine: PMNode[] = [];
+  core.doc.forEach((node) => {
+    if (!isBlankParagraph(node)) mine.push(node);
+  });
+  const theirs = parseDocument(core.text, { trailingParagraph: false })
+    .segments.filter((segment) => segment.src !== '')
+    .map((segment) => segment.node);
+  return sameMeaning(mine, theirs);
 }
 
 /** A compact dump of a document for failure messages. */

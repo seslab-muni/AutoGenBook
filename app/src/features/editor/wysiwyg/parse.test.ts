@@ -219,3 +219,16 @@ describe('parseDocument: the document around the blocks', () => {
     expect(bullets.attrs).toMatchObject({ marker: '*', tight: false });
   });
 });
+
+describe('a heading right after a link definition', () => {
+  it('is a block of its own (the parser positions it from the definition)', () => {
+    const text = '[ref]: https://example.com "T"\nSetext two\n---  \n';
+    const parsed = parseDocument(text, { trailingParagraph: false });
+    expect(parsed.segments.map((s) => s.node.type.name)).toEqual(['atom_block', 'heading']);
+    expect(parsed.segments.map((s) => s.src)).toEqual([
+      '[ref]: https://example.com "T"',
+      'Setext two\n---  ',
+    ]);
+    expect(parsed.segments.map((s) => s.gap + s.src).join('') + parsed.tail).toBe(text);
+  });
+});

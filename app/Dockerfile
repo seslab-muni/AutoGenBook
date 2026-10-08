@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --config.minimum-release-age=0
 COPY . .
+# The editable Write view (issue #182): `0` / `false` / `off` builds the app without it.
+ARG VITE_WRITE_EDITING=1
+ENV VITE_WRITE_EDITING=$VITE_WRITE_EDITING
 RUN pnpm build
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine

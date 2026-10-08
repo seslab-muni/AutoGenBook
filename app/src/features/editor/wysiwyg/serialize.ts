@@ -765,7 +765,14 @@ function writeBlock(node: PMNode, pmPos: number, w: Writer, ctx: BlockContext): 
       const origin = w.pos;
       const { map } = writeInline(node, pmPos + 1, w, ctx.style, ctx.level);
       if (isBlankParagraph(node)) w.trimEndSpaces();
-      ctx.tbs.push({ pm: pmPos + 1, size: node.content.size, s: origin, e: w.pos, map });
+      // (Trimming can take the marker's own trailing space with it: the textblock starts where the source ends then.)
+      ctx.tbs.push({
+        pm: pmPos + 1,
+        size: node.content.size,
+        s: Math.min(origin, w.pos),
+        e: w.pos,
+        map,
+      });
       return;
     }
     case 'heading': {
@@ -780,7 +787,13 @@ function writeBlock(node: PMNode, pmPos: number, w: Writer, ctx: BlockContext): 
         w.newline();
         w.write((level === 1 ? '=' : '-').repeat(Math.max(3, Math.min(end - origin, 20))));
       }
-      ctx.tbs.push({ pm: pmPos + 1, size: node.content.size, s: origin, e: end, map });
+      ctx.tbs.push({
+        pm: pmPos + 1,
+        size: node.content.size,
+        s: Math.min(origin, w.pos),
+        e: Math.min(end, w.pos),
+        map,
+      });
       return;
     }
     case 'code_block': {

@@ -252,3 +252,34 @@ describe('marks and keys that used to be refused', () => {
     expect(driver.core.text).toBe('hello ***world*** again\n');
   });
 });
+
+describe('regressions found by the fuzz', () => {
+  it('typing into an empty quote after a space that was not written puts the text where the source is', () => {
+    const driver = makeDriver('#### a\n\n#### b\n\n>\n\n');
+    let quote = 0;
+    driver.core.doc.descendants((node, pos) => {
+      if (node.type.name === 'blockquote') quote = pos + 2;
+      return true;
+    });
+    setSelection(driver.core, quote);
+    typeText(driver, ' q');
+    expect(driver.core.model.join()).toBe(driver.core.text);
+    expect(driver.core.text).toBe('#### a\n\n#### b\n\n>q\n\n');
+    check(driver);
+  });
+
+  it('www. typed in front of text that runs into emphasis does not turn the emphasis into part of an address', () => {
+    const driver = open('## Second *level* heading\n', 'Second', 0);
+    typeText(driver, 'www.');
+    check(driver);
+    expect(driver.core.doc.textContent).toBe('www.Second level heading');
+  });
+
+  it('text typed after a line break that is not in the source goes on the line the editor shows', () => {
+    const driver = open('one\\\ntwo\n', 'two', 3);
+    setSelection(driver.core, driver.core.doc.content.size - 1);
+    pressKey(driver, 'Enter', { shift: true });
+    typeText(driver, '(');
+    check(driver);
+  });
+});
