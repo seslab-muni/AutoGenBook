@@ -583,6 +583,10 @@ export function parseDocument(text: string, options: ParseOptions = {}): ParsedD
   if (!last || (trailingParagraph && last.node.type.name !== 'paragraph')) {
     segments.push(virtualSegment());
   }
+  // A place to type before a first block that cannot hold the caret (a table, a formula...).
+  if (trailingParagraph && segments[0]!.node.type.name === 'atom_block') {
+    segments.unshift(virtualSegment());
+  }
   const doc = schema.nodes['doc']!.create(
     null,
     segments.map((segment) => segment.node),

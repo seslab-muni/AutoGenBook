@@ -3,7 +3,8 @@ import type { Node as PMNode } from 'prosemirror-model';
 
 import type { TextChange } from '@/features/editor/lib/anchors';
 
-import { parseDocument } from './parse';
+import { textEditOf } from './patch';
+import { parseDocument, type Segment } from './parse';
 import { SourceModel } from './source-model';
 
 /**
@@ -52,15 +53,32 @@ export class EditorCore {
     return this.state;
   }
 
-  apply(tr: Transaction): Applied | Refused {
+  apply(tr: Transaction, preset: Segment | null = null): Applied | Refused {
     const next = this.state.apply(tr);
     if (next.doc === this.state.doc) {
       this.state = next;
       return { ok: true, state: next, text: this.model.text, change: null, docChanged: false };
     }
-    const result = this.model.update(next.doc);
+    const result = this.model.update(next.doc, textEditOf(tr.steps), preset);
     if (!result.ok) return { ok: false };
     this.state = next;
     return { ok: true, state: next, text: result.text, change: result.change, docChanged: true };
   }
+}
+
+/** Swaps blocks that read back with atoms for the editor's literal text (see `SourceModel.reconcilable`). */
+export function reconcile(core: EditorCore): EditorState | null {
+  const blocks = core.model.reconcilable();
+  let changed = false;
+  // From the end, so positions of the earlier blocks stay valid.
+  for (const { pos, segment } of blocks.reverse()) {
+    const old = core.state.doc.nodeAt(pos);
+    if (!old) continue;
+    const tr = core.state.tr
+      .replaceWith(pos, pos + old.nodeSize, segment.node)
+      .setMeta('addToHistory', false);
+    const applied = core.apply(tr, segment);
+    if (applied.ok) changed = true;
+  }
+  return changed ? core.state : null;
 }

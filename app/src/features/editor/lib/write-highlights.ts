@@ -127,46 +127,43 @@ function rebuildRegistry(): void {
   } else registry.delete(FOCUSED);
 }
 
+/** One highlight, already located in the DOM: text ranges, and opaque elements (math, chips, atoms) it touches. */
+export interface LocatedHighlight {
+  id: string;
+  kind: string;
+  ranges: Range[];
+  elements: HTMLElement[];
+}
+
 /**
- * Paints `highlights` over `root` (the rendered Markdown, tagged with `data-src-*` by
- * `rehypeAnchorSource`): one Custom Highlight per kind, plus a prioritised one for the focused
- * id. Opaque pieces (math, citation chips) cannot take a text range and get a `data-anchor-hit`
- * attribute instead. An instance with no highlights does not touch the registry at all. Returns a
- * cleanup that removes this root's contribution again.
+ * Puts located highlights on screen: one Custom Highlight per kind, plus a prioritised one for the
+ * focused id, and `data-anchor-hit` on opaque elements. Shared by the read-only view (which locates
+ * ranges through the `data-src-*` tags) and the editable view (which locates them through its
+ * position map). Returns a cleanup that removes this root's contribution again.
  */
-export function applyWriteHighlights(
+export function paintHighlights(
   root: HTMLElement,
-  markdown: string,
-  highlights: readonly HighlightRange[],
+  located: readonly LocatedHighlight[],
   focusedId: string | null,
 ): () => void {
-  if (highlights.length === 0) return () => {};
-  const all = pieces(root);
+  if (located.length === 0) return () => {};
   const entry: Applied = { ranges: new Map(), elements: new Map() };
   const contribution: Contribution = { byKind: new Map(), focused: [] };
   const hits = new Map<HTMLElement, { ids: string[]; kind: string }>();
 
-  for (const highlight of highlights) {
-    for (const piece of all) {
-      if (piece.e <= highlight.start || piece.s >= highlight.end) continue;
-      if (piece.el.hasAttribute('data-src-opaque')) {
-        const hit = hits.get(piece.el) ?? { ids: [], kind: highlight.kind };
-        hit.ids.push(highlight.id);
-        hits.set(piece.el, hit);
-        const list = entry.elements.get(highlight.id) ?? [];
-        list.push(piece.el);
-        entry.elements.set(highlight.id, list);
-        continue;
-      }
-      const range = rangeInPiece(piece, markdown, highlight.start, highlight.end);
-      if (!range) continue;
-      const list = entry.ranges.get(highlight.id) ?? [];
-      list.push(range);
-      entry.ranges.set(highlight.id, list);
+  for (const highlight of located) {
+    if (highlight.ranges.length > 0) entry.ranges.set(highlight.id, highlight.ranges);
+    if (highlight.elements.length > 0) entry.elements.set(highlight.id, highlight.elements);
+    for (const range of highlight.ranges) {
       const kindList = contribution.byKind.get(highlight.kind) ?? [];
       kindList.push(range);
       contribution.byKind.set(highlight.kind, kindList);
       if (highlight.id === focusedId) contribution.focused.push(range);
+    }
+    for (const el of highlight.elements) {
+      const hit = hits.get(el) ?? { ids: [], kind: highlight.kind };
+      hit.ids.push(highlight.id);
+      hits.set(el, hit);
     }
   }
 
@@ -191,6 +188,43 @@ export function applyWriteHighlights(
     }
     applied.delete(root);
   };
+}
+
+/**
+ * Paints `highlights` over `root` (the rendered Markdown, tagged with `data-src-*` by
+ * `rehypeAnchorSource`). Opaque pieces (math, citation chips) cannot take a text range and get a
+ * `data-anchor-hit` attribute instead. An instance with no highlights does not touch the registry
+ * at all. Returns a cleanup that removes this root's contribution again.
+ */
+export function applyWriteHighlights(
+  root: HTMLElement,
+  markdown: string,
+  highlights: readonly HighlightRange[],
+  focusedId: string | null,
+): () => void {
+  if (highlights.length === 0) return () => {};
+  const all = pieces(root);
+  const located: LocatedHighlight[] = [];
+
+  for (const highlight of highlights) {
+    const item: LocatedHighlight = {
+      id: highlight.id,
+      kind: highlight.kind,
+      ranges: [],
+      elements: [],
+    };
+    for (const piece of all) {
+      if (piece.e <= highlight.start || piece.s >= highlight.end) continue;
+      if (piece.el.hasAttribute('data-src-opaque')) {
+        item.elements.push(piece.el);
+        continue;
+      }
+      const range = rangeInPiece(piece, markdown, highlight.start, highlight.end);
+      if (range) item.ranges.push(range);
+    }
+    located.push(item);
+  }
+  return paintHighlights(root, located, focusedId);
 }
 
 function inRect(rect: DOMRect, x: number, y: number): boolean {

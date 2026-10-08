@@ -92,6 +92,12 @@ if (typeof document.createRange === 'function') {
   });
 }
 
+/** jsdom has no hit testing or window scrolling; ProseMirror (the editable Write view) asks for both on pointer input. */
+if (typeof document.elementFromPoint !== 'function') {
+  document.elementFromPoint = () => null;
+}
+window.scrollTo = () => {};
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 beforeEach(() => seedDatabase());
 afterEach(() => {

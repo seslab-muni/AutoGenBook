@@ -32,6 +32,10 @@ interface SectionEditorProps {
   onSelectionChange?: (selection: EditorSelection) => void;
   /** Hands the CodeMirror view to the caller (highlights, selection toolbar) once it exists. */
   onCreateEditor?: (view: EditorView) => void;
+  /** Selects this range (UTF-16 offsets) and scrolls it into view when the editor is created. */
+  initialSelection?: { from: number; to: number } | null;
+  /** Fired once the initial selection has been applied (so the owner can forget it). */
+  onInitialSelectionApplied?: () => void;
   /** Fired with the anchor ids under a click on a highlighted range (innermost first). Identity may change freely. */
   onHighlightClick?: (ids: string[]) => void;
   /**
@@ -61,6 +65,8 @@ export function SectionEditor({
   onCreateEditor,
   onHighlightClick,
   onHighlightsMapped,
+  initialSelection = null,
+  onInitialSelectionApplied,
   className,
 }: SectionEditorProps) {
   // Read through a ref so a new callback never reconfigures the editor.
@@ -120,6 +126,16 @@ export function SectionEditor({
   );
 
   function handleCreate(view: EditorView) {
+    if (initialSelection) {
+      const length = view.state.doc.length;
+      const anchor = Math.min(initialSelection.from, length);
+      const head = Math.min(initialSelection.to, length);
+      view.dispatch({
+        selection: { anchor, head },
+        effects: EditorView.scrollIntoView(anchor, { y: 'center' }),
+      });
+      onInitialSelectionApplied?.();
+    }
     onSelectionChange?.(selectionOf(view.state));
     view.dom.addEventListener('click', (event) => {
       const ids = anchorIdsAt(event.target);

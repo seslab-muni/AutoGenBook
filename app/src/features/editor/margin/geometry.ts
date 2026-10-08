@@ -44,8 +44,15 @@ function observe(targets: readonly Element[], listener: () => void): () => void 
   };
 }
 
-/** Write view: anchors are the ranges painted by `applyWriteHighlights` (or the `<mark>` fallback). */
-export function writeGeometry(region: HTMLElement): MarginGeometry {
+/**
+ * Write view: anchors are the ranges painted by `applyWriteHighlights` (or the `<mark>` fallback).
+ * `locate` (the editable view) gives the client `y` of a source offset from its block, for text the
+ * browser has not laid out (a range has no rectangle there).
+ */
+export function writeGeometry(
+  region: HTMLElement,
+  locate?: (start: number) => number | null,
+): MarginGeometry {
   let extra = 0;
   let spacer: HTMLDivElement | null = null;
   const root = () => region.querySelector<HTMLElement>('[data-markdown-root]');
@@ -83,6 +90,7 @@ export function writeGeometry(region: HTMLElement): MarginGeometry {
             }
           }
         }
+        if (top === null && locate) top = locate(start);
         if (top !== null) {
           out.set(id, { y: top - base, approximate: false });
           continue;
@@ -101,15 +109,22 @@ export function writeGeometry(region: HTMLElement): MarginGeometry {
       }
       return out;
     },
-    reveal: (id) => {
+    reveal: (id, start) => {
       const markdown = root();
       if (!markdown) return;
       const { ranges, elements } = appliedFor(markdown, id);
       const rect = ranges[0]?.getClientRects()[0] ?? elements[0]?.getBoundingClientRect();
       const mark = markdown.querySelector(`[data-anchor-ids~="${CSS.escape(id)}"]`);
       const box = rect ?? mark?.getBoundingClientRect();
-      if (!box) return;
       const view = region.getBoundingClientRect();
+      if (!box) {
+        // Text in a block the browser has not laid out: scroll to where its block is.
+        const y = locate?.(start);
+        if (y != null && (y < view.top + 8 || y > view.bottom - 8)) {
+          region.scrollTop += y - view.top - view.height / 3;
+        }
+        return;
+      }
       if (box.top < view.top + 8) region.scrollTop -= view.top + 48 - box.top;
       else if (box.bottom > view.bottom - 8) region.scrollTop += box.bottom - view.bottom + 48;
     },

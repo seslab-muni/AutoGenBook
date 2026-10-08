@@ -26,6 +26,8 @@ interface SelectionLayerProps {
   geometry: MarginGeometry | null;
   /** The positioned pane the toolbar floats in; also where the shortcut is listened for. */
   paneRef: RefObject<HTMLDivElement | null>;
+  /** The Write view is an editor that publishes its own selection (no need to read it from the DOM). */
+  ownsSelection?: boolean;
   /** Commenting on a range is possible (false for LaTeX-only sections). */
   enabled: boolean;
   /** Located ranges of the cards currently shown, for "caret inside a highlight" (UTF-16 offsets). */
@@ -54,6 +56,7 @@ export function SelectionLayer({
   cmView,
   geometry,
   paneRef,
+  ownsSelection = false,
   enabled,
   highlights,
   onComment,
@@ -62,7 +65,7 @@ export function SelectionLayer({
   onChip,
 }: SelectionLayerProps) {
   const selection = useEditorSelectionStore((state) => state.selection);
-  useWriteSelection(region, text, view === 'write');
+  useWriteSelection(region, text, view === 'write' && !ownsSelection);
 
   const textRef = useRef(text);
   useEffect(() => {

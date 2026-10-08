@@ -396,3 +396,105 @@
   background-color: var(--anchor-focused-bg);
   text-decoration-thickness: 3px;
 }
+
+/*
+ * The editable Write view (issue #182, phase 5): a ProseMirror document over the section's
+ * Markdown. Typography comes from the classes on the nodes (`wysiwyg/schema.ts`), the same as the
+ * read-only renderer's; what is here is what only an editor needs.
+ */
+.md-editor {
+  /* ProseMirror needs whitespace preserved to keep the caret and the typed spaces right. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  outline: none;
+  caret-color: var(--foreground);
+}
+/*
+ * Blocks far from the viewport are not laid out, painted or hit-tested (they stay in the
+ * accessibility tree and in find-in-page): a 100 kB section is a document of tens of thousands of
+ * nodes with KaTeX, and without this every keystroke paid for all of it (measured: 38 ms against
+ * 19 ms per key). The remembered size keeps the scroll height stable; margin cards for text in a
+ * skipped block sit at the block's position until it is drawn (`MarginGeometry.measure`).
+ */
+.md-editor > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4rem;
+}
+.md-editor:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--ring);
+  outline-offset: 6px;
+}
+.md-editor[contenteditable='false'] {
+  caret-color: transparent;
+}
+/* A tight list shows its items without paragraph margins, like the rendered view. */
+.md-editor ul[data-tight='true'] > li > p,
+.md-editor ol[data-tight='true'] > li > p {
+  margin: 0;
+}
+.md-editor li > ul,
+.md-editor li > ol {
+  margin-top: 0.25rem;
+}
+.md-editor pre {
+  white-space: pre;
+}
+.md-editor .md-soft-break {
+  white-space: normal;
+}
+.md-editor .md-placeholder::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+/* Atoms: shown by the read-only renderers, selected as a whole, edited in Source. */
+.md-editor .md-atom-inline {
+  cursor: default;
+  user-select: none;
+}
+.md-editor .md-atom-citation {
+  white-space: nowrap;
+}
+.md-editor .md-atom-block {
+  position: relative;
+  border-radius: 6px;
+  cursor: default;
+  user-select: none;
+}
+.md-editor .md-atom-hint {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.5rem;
+  z-index: 1;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background-color: var(--card);
+  padding: 0 0.375rem;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  opacity: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.md-editor .md-atom-block:hover .md-atom-hint,
+.md-editor .md-atom-block.ProseMirror-selectednode .md-atom-hint {
+  opacity: 1;
+}
+.md-editor .md-atom-block .md-atom-hint:hover {
+  color: var(--foreground);
+}
+.md-editor .ProseMirror-selectednode {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.md-editor .md-atom-block > .md-atom-body > [data-markdown-root] > :first-child {
+  margin-top: 0;
+}
+.md-editor .md-atom-block > .md-atom-body > [data-markdown-root] > :last-child {
+  margin-bottom: 0;
+}

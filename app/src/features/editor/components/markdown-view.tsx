@@ -7,9 +7,9 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
-import { apiBaseUrl } from '@/api/client';
 import { Callout } from '@/features/editor/components/callout';
 import { CitationChip } from '@/features/editor/components/citation-chip';
+import { resolveImageSrc } from '@/features/editor/lib/resolve-image-src';
 import { normalizeDisplayMathMapped } from '@/features/editor/lib/normalize-display-math';
 import type { RagCitation } from '@/features/editor/lib/rag-citation';
 import {
@@ -33,14 +33,15 @@ const KATEX_PLUGIN: RehypePlugins[number] = [
   { output: 'htmlAndMathml', throwOnError: false, strict: false },
 ];
 const BASE_REHYPE_PLUGINS: RehypePlugins = [KATEX_PLUGIN, [rehypeSanitize, mathAwareSchema]];
-
-/** Absolute/data/protocol-relative URLs pass through; anything else is a run artifact file id. */
-function resolveImageSrc(src: string): string {
-  if (/^(https?:)?\/\//.test(src) || src.startsWith('data:') || src.startsWith('blob:')) {
-    return src;
-  }
-  return `${apiBaseUrl}/api/v1/files/${src}/content`;
-}
+/**
+ * For the editable view's formulas: the HTML rendering only (the MathML copy roughly doubles the
+ * DOM of a formula, and the atom carries its own accessible name), so a section with hundreds of
+ * formulas stays a document the browser can edit and hit-test quickly.
+ */
+const INLINE_REHYPE_PLUGINS: RehypePlugins = [
+  [rehypeKatex, { output: 'html', throwOnError: false, strict: false }],
+  [rehypeSanitize, mathAwareSchema],
+];
 
 /**
  * `react-markdown` passes the originating hast/mdast `node` to every
@@ -249,6 +250,28 @@ const MARKDOWN_COMPONENTS: Components = {
   code: Code,
   img: Img,
 };
+
+/** Inline output only: the paragraph wrapper is dropped, so a formula can sit in a line of text. */
+const INLINE_COMPONENTS: Components = {
+  p: ({ children }) => <>{children}</>,
+};
+
+/**
+ * Renders one inline Markdown construct (`$x^2$`) with the same remark/rehype/KaTeX pipeline as
+ * `MarkdownView`, as inline content. The editable Write view shows its inline math atoms with it,
+ * so KaTeX is loaded once, through the one pipeline.
+ */
+export const InlineMarkdown = memo(function InlineMarkdown({ markdown }: { markdown: string }) {
+  return (
+    <Markdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={INLINE_REHYPE_PLUGINS}
+      components={INLINE_COMPONENTS}
+    >
+      {markdown}
+    </Markdown>
+  );
+});
 
 interface MarkdownViewProps {
   /** Pandoc-style Markdown, as written by the CLI's Markdown-first path (`book_builder.py`). */

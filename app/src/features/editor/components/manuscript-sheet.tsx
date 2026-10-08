@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
@@ -26,7 +26,7 @@ import { EditorStatusBar } from '@/features/editor/components/editor-status-bar'
 import { HeaderIconButton } from '@/features/editor/components/header-icon-button';
 import { LockContentButton } from '@/features/editor/components/lock-content-button';
 import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
-import { LazyMarkdownView } from '@/features/editor/components/markdown-view-lazy';
+import { WriteBody } from '@/features/editor/components/write-body';
 import { SourcesDrawer, type SourcesDrawerView } from '@/features/editor/components/sources-drawer';
 import { SectionEditor } from '@/features/editor/components/section-editor';
 import { SectionJumpSelect } from '@/features/editor/components/section-jump-select';
@@ -43,7 +43,8 @@ import { normalizeEol } from '@/features/editor/lib/eol';
 import { sha256Hex } from '@/lib/content-hash';
 import { problemMessage } from '@/features/editor/margin/errors';
 import { ConfirmDialog } from '@/components/confirm-dialog';
-import { anchorFromUnitRange, type Anchor } from '@/features/editor/lib/anchors';
+import { anchorFromUnitRange, CodePointIndex, type Anchor } from '@/features/editor/lib/anchors';
+import type { MarkdownEditorHandle } from '@/features/editor/wysiwyg/markdown-editor';
 import type { MarginCardContext } from '@/features/editor/margin/card-registry';
 import { writeGeometry, sourceGeometry } from '@/features/editor/margin/geometry';
 import { useMarginHost } from '@/features/editor/margin/margin-host';
@@ -112,6 +113,8 @@ export function ManuscriptSheet({
   // Counted over LF text everywhere (CodeMirror normalises line endings, so anchors must too).
   const serverText = normalizeEol(node[field]);
   const [draft, setDraft] = useState(serverText);
+  // The status bar's counts read the whole text; they may trail the typing by a frame.
+  const countedDraft = useDeferredValue(draft);
   /** Bumped when the draft is replaced from outside (server content): anchors are re-resolved from their quotes. */
   const [resetKey, setResetKey] = useState(0);
   /** Another change to this section arrived while there were unsaved edits (shown, never applied silently). */
@@ -129,6 +132,12 @@ export function ManuscriptSheet({
   // measures anchors against.
   const [region, setRegion] = useState<HTMLElement | null>(null);
   const [cmView, setCmView] = useState<EditorView | null>(null);
+  /** The editable Write view, once it exists (the read-only first paint has none). */
+  const [editor, setEditor] = useState<MarkdownEditorHandle | null>(null);
+  /** Where the Source view puts its selection when it opens (from the Write view's selection or an atom). */
+  const [sourceSelection, setSourceSelection] = useState<{ from: number; to: number } | null>(null);
+  /** Where the Write view puts its selection when it opens (the Source view's), consumed once. */
+  const writeSelectionRef = useRef<{ from: number; to: number } | null>(null);
   const paneRef = useRef<HTMLDivElement>(null);
 
   // The outline's flat cache is what mutations patch optimistically, so the lock button and
@@ -245,6 +254,7 @@ export function ManuscriptSheet({
     return () => {
       setSelection(null);
       setCmView(null);
+      setEditor(null);
     };
   }, [view, setSelection]);
 
@@ -269,6 +279,8 @@ export function ManuscriptSheet({
   // copy and the copilot must not offer generation for them (issue #77's 409 guard covers the API
   // side; this covers the UI so the offer isn't made in the first place).
   const nodeIsLeaf = isLeaf(node.id, flatNodes);
+  /** The Write view can be typed into: Markdown (not LaTeX), not being generated, a leaf section. */
+  const writeEditable = !readOnly && !useLatex && nodeIsLeaf;
 
   // ---- server content changed under an open editor (an accepted suggestion, another user) ----------
   const draftRef = useRef(draft);
@@ -406,8 +418,8 @@ export function ManuscriptSheet({
 
   const geometry = useMemo(() => {
     if (view === 'source') return cmView ? sourceGeometry(cmView) : null;
-    return region ? writeGeometry(region) : null;
-  }, [view, cmView, region]);
+    return region ? writeGeometry(region, editor?.locateTop) : null;
+  }, [view, cmView, region, editor]);
 
   // Source: the decoration field tracks every range through the editor's own change sets. Pushed to
   // only when the resolved set really differs from what it already holds (never per keystroke), and
@@ -455,10 +467,52 @@ export function ManuscriptSheet({
     [focusThread, revealMargin],
   );
 
+  // ---- Write <-> Source: the draft is one string, so only the selection needs to travel -------------
+  const selectionUnits = useCallback((): { from: number; to: number } | null => {
+    const selection = useEditorSelectionStore.getState().selection;
+    if (!selection) return null;
+    const index = new CodePointIndex(draftRef.current);
+    return { from: index.toUnit(selection.from), to: index.toUnit(selection.to) };
+  }, []);
+
+  const changeView = useCallback(
+    (next: 'write' | 'source') => {
+      if (next === view) return;
+      const carried = view === 'write' && editor ? editor.sourceSelection() : selectionUnits();
+      if (next === 'source') setSourceSelection(carried);
+      else writeSelectionRef.current = carried;
+      setView(next);
+    },
+    [view, editor, selectionUnits, setView],
+  );
+
+  /** The Write view asks for its selection when it is created: the Source view's, or what was selected before the upgrade. */
+  const initialWriteSelection = useCallback(() => {
+    const carried = writeSelectionRef.current;
+    writeSelectionRef.current = null;
+    return carried ?? selectionUnits();
+  }, [selectionUnits]);
+
+  /** An atom (math, a table, a callout...) is edited in Source: switch there with its source selected. */
+  const handleEditInSource = useCallback(
+    (range: { from: number; to: number }) => {
+      setSourceSelection(range);
+      setView('source');
+    },
+    [setView],
+  );
+
+  const handleRefused = useCallback(() => {
+    toast.error('That change cannot be written as Markdown here. Make it in the Source view.');
+  }, []);
+
+  const clearSourceSelection = useCallback(() => setSourceSelection(null), []);
+
   const restoreEditorFocus = useCallback(() => {
     if (view === 'source') cmView?.focus();
+    else if (editor) editor.focus();
     else region?.focus();
-  }, [view, cmView, region]);
+  }, [view, cmView, editor, region]);
 
   const statusRef = useRef(status);
   useEffect(() => {
@@ -676,7 +730,9 @@ export function ManuscriptSheet({
           <ToggleGroup
             aria-label="Editor view"
             value={view}
-            onValueChange={(value) => setView(value as 'write' | 'source')}
+            onValueChange={(value) => {
+              if (value === 'write' || value === 'source') changeView(value);
+            }}
           >
             <ToggleGroupItem value="write">Write</ToggleGroupItem>
             <ToggleGroupItem value="source">Source</ToggleGroupItem>
@@ -812,6 +868,8 @@ export function ManuscriptSheet({
               onCreateEditor={setCmView}
               onHighlightClick={handleHighlightClick}
               onHighlightsMapped={handleHighlightsMapped}
+              initialSelection={sourceSelection}
+              onInitialSelectionApplied={clearSourceSelection}
               className="h-full"
             />
           ) : (
@@ -829,26 +887,38 @@ export function ManuscriptSheet({
                   </div>
                 </div>
 
-                {draft.trim().length === 0 ? (
+                {draft.trim().length === 0 && !writeEditable ? (
                   <p className="text-center text-sm text-muted-foreground italic">
                     {nodeIsLeaf
                       ? 'This section is empty. Switch to Source to write it, or start a run to draft it.'
                       : 'This is a container node — it only has the outline summary shown in the assembled document. Content is generated per leaf section; select a leaf section below it to write or generate text.'}
                   </p>
                 ) : (
-                  <LazyMarkdownView
+                  <WriteBody
+                    editable={writeEditable}
                     markdown={draft}
                     citations={citations}
                     anchorMarks={writeMarks}
                     focusedAnchorId={focusedId}
-                    sourceMap
+                    highlights={section.highlights}
                     onCitationClick={handleCitationClick}
                     onAnchorClick={handleHighlightClick}
+                    emptyNote={null}
+                    editorProps={{
+                      onChange: handleChange,
+                      onFlush: flush,
+                      onHighlightsMapped: handleHighlightsMapped,
+                      onSelectionChange: setSelection,
+                      onEditInSource: handleEditInSource,
+                      onRefused: handleRefused,
+                      onReady: setEditor,
+                      initialSelection: initialWriteSelection,
+                    }}
                   />
                 )}
 
                 <div className="mt-16 flex items-center justify-between border-t pt-6 font-sans text-xs text-muted-foreground">
-                  <span>Page ~{Math.max(1, Math.round(wordCount(draft) / 320))}</span>
+                  <span>Page ~{Math.max(1, Math.round(wordCount(countedDraft) / 320))}</span>
                   <span>{node.title}</span>
                   <span>§{node.sectionNumber}</span>
                 </div>
@@ -863,6 +933,7 @@ export function ManuscriptSheet({
           cmView={cmView}
           geometry={geometry}
           paneRef={paneRef}
+          ownsSelection={editor !== null}
           enabled={anchorsEnabled}
           highlights={section.highlights}
           onComment={startComment}
@@ -947,8 +1018,8 @@ export function ManuscriptSheet({
       />
 
       <EditorStatusBar
-        characters={characterCount(draft)}
-        words={wordCount(draft)}
+        characters={characterCount(countedDraft)}
+        words={wordCount(countedDraft)}
         sourceCount={effectiveSources.loading ? null : effectiveSources.sources.length}
         sourcesError={effectiveSources.error}
         sourcesButtonRef={sourcesButtonRef}

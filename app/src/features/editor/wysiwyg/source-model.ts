@@ -3,6 +3,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { diffChange, type TextChange } from '@/features/editor/lib/anchors';
 
 import { pmToSrc, srcToPm, type Edge } from './inline-map';
+import { patchSegment, type TextEdit } from './patch';
 import { parseDocument, virtualSegment, type Segment, type TextblockInfo } from './parse';
 import { detectStyle, serializeVerified, type SerializeStyle } from './serialize';
 
@@ -41,6 +42,15 @@ function separator(candidate: string | undefined): string {
   return candidate && /\n[ \t]*\n/.test(candidate) ? candidate : '\n\n';
 }
 
+function countAtoms(node: PMNode): number {
+  let count = node.type.name === 'atom_block' ? 1 : 0;
+  node.descendants((child) => {
+    if (child.type.name === 'atom_inline' || child.type.name === 'atom_block') count += 1;
+    return true;
+  });
+  return count;
+}
+
 export class SourceModel {
   segments: Segment[];
   tail: string;
@@ -52,6 +62,8 @@ export class SourceModel {
   /** Editor position before each segment's node. */
   private pmStart: number[] = [];
   private pmSize = 0;
+  /** Segments the editor wrote since they were last read from their source. */
+  private touched = new WeakSet<Segment>();
 
   constructor(text: string, parsed = parseDocument(text)) {
     this.text = text;
@@ -88,7 +100,7 @@ export class SourceModel {
    * `{ ok: false }` when an edited block cannot be written as Markdown that reads back as itself
    * (the model is then unchanged and the caller drops the transaction).
    */
-  update(doc: PMNode): UpdateResult {
+  update(doc: PMNode, edit: TextEdit | null = null, preset: Segment | null = null): UpdateResult {
     const old = this.segments;
     const n = doc.childCount;
     let i = 0;
@@ -120,7 +132,31 @@ export class SourceModel {
     const fallbackGap = separator(oldFirstReal?.gap || nextReal?.gap || prevReal?.gap);
     const fresh: Segment[] = [];
     let firstReal = true;
-    for (const node of newNodes) {
+    // Typing inside one run of text of one block: the source gets exactly the typed text.
+    let patched: Segment | null = null;
+    if (
+      edit &&
+      oldWindow.length === 1 &&
+      newNodes.length === 1 &&
+      oldFirstReal === oldWindow[0] &&
+      oldFirstReal.tbs.length > 0 &&
+      newNodes[0]!.content.size > 0 &&
+      oldFirstReal.node.sameMarkup(newNodes[0]!) &&
+      edit.from >= this.pmStart[i]! &&
+      edit.to <= this.pmStart[i]! + oldFirstReal.node.nodeSize
+    ) {
+      patched = patchSegment(oldFirstReal, this.pmStart[i]!, newNodes[0]!, edit);
+    }
+    // A block re-read from its own source (`reconcilable`): same source, the editor's node replaced.
+    if (
+      preset &&
+      oldWindow.length === 1 &&
+      newNodes.length === 1 &&
+      oldFirstReal === oldWindow[0]
+    ) {
+      patched = { ...preset, gap: oldFirstReal.gap };
+    }
+    for (const node of patched ? [] : newNodes) {
       if (node.type.name === 'paragraph' && node.content.size === 0) {
         fresh.push({ ...virtualSegment(), node });
         continue;
@@ -136,6 +172,9 @@ export class SourceModel {
       firstReal = false;
       fresh.push({ node, gap, src: written.src, tbs: written.tbs });
     }
+
+    if (patched) fresh.push(patched);
+    for (const segment of fresh) this.touched.add(segment);
 
     // The gap before the next real block: kept, except where the window took over its leading
     // whitespace, or gave it up (blocks removed in front of it).
@@ -181,6 +220,27 @@ export class SourceModel {
           }
         : null,
     };
+  }
+
+  /**
+   * Blocks the editor has written whose source now reads as more than the editor shows: text typed
+   * as `$x$` or `[@key]` stays literal while it is typed and becomes the formula or the citation
+   * when the block is read again. Returns the blocks as read from their source, to be swapped in
+   * (`update` with `preset`); the source itself does not change.
+   */
+  reconcilable(): { pos: number; segment: Segment }[] {
+    const out: { pos: number; segment: Segment }[] = [];
+    this.segments.forEach((segment, index) => {
+      if (!this.touched.has(segment) || segment.src === '' || segment.node.isAtom) return;
+      const parsed = parseDocument(segment.src, { trailingParagraph: false }).segments;
+      if (parsed.length !== 1) return;
+      const read = parsed[0]!;
+      if (countAtoms(read.node) !== countAtoms(segment.node)) {
+        out.push({ pos: this.pmStart[index]!, segment: { ...read, gap: segment.gap } });
+      }
+    });
+    this.touched = new WeakSet();
+    return out;
   }
 
   // ---- positions ----------------------------------------------------------------------------
@@ -327,11 +387,13 @@ export class SourceModel {
     return { text, atoms };
   }
 
-  /** Editor position of the start of the top-level block that holds source offset `offset` (nearest block). */
-  blockPosAt(offset: number): number {
+  /** The top-level block holding source offset `offset` (the nearest one for whitespace): its editor position and source range. */
+  blockAt(offset: number): { pos: number; start: number; end: number } | null {
     for (let k = 0; k < this.segments.length; k += 1) {
-      if (!isVirtual(this.segments[k]!) && offset <= this.srcEnd[k]!) return this.pmStart[k]!;
+      if (!isVirtual(this.segments[k]!) && offset <= this.srcEnd[k]!) {
+        return { pos: this.pmStart[k]!, start: this.srcStart[k]!, end: this.srcEnd[k]! };
+      }
     }
-    return this.pmStart[this.segments.length - 1] ?? 0;
+    return null;
   }
 }

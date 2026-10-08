@@ -2,6 +2,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { selectInEditor } from '@/features/editor/wysiwyg/dom-test-utils';
 import { makeAnchor } from '@/features/editor/lib/anchors';
 import { makeComment } from '@/features/editor/margin/test-helpers';
 import { useMarginStore } from '@/features/editor/margin/margin-store';
@@ -39,6 +40,10 @@ describe('Margin workspace (routed, MSW-backed) — Write view', () => {
     );
 
     renderRouterApp(NODE_URL);
+    // The read-only text paints first and is swapped for the editor when its chunk has loaded.
+    await waitFor(() => {
+      if (!document.querySelector('.md-editor')) throw new Error('the editor is not mounted yet');
+    }, LONG);
     const mark = await waitFor(() => {
       const el = document.querySelector('mark[data-anchor-ids="seed"]');
       if (!el) throw new Error('no highlight yet');
@@ -63,21 +68,8 @@ describe('Margin workspace (routed, MSW-backed) — Write view', () => {
     ).toBe(true);
     expect(within(card).getByText('Seeded note')).toBeInTheDocument();
 
-    // A selection in the rendered text publishes its source position and shows the bar.
-    const target = [...document.querySelectorAll('[data-src-start]')].find((el) =>
-      el.textContent?.includes('policy'),
-    )!;
-    const textNode = target.firstChild as Text;
-    const at = textNode.data.indexOf('policy');
-    act(() => {
-      const range = document.createRange();
-      range.setStart(textNode, at);
-      range.setEnd(textNode, at + 6);
-      const selection = document.getSelection()!;
-      selection.removeAllRanges();
-      selection.addRange(range);
-      document.dispatchEvent(new Event('selectionchange'));
-    });
+    // A selection in the text publishes its source position and shows the bar.
+    selectInEditor('policy');
     expect(await screen.findByText(/^Ln \d+, Col \d+$/, {}, LONG)).toBeInTheDocument();
     expect(await screen.findByRole('toolbar', { name: 'Selection actions' })).toBeInTheDocument();
     // Escape (with the text focused, as after a click) dismisses the bar.

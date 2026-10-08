@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { EditorView } from '@codemirror/view';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { selectInEditor } from '@/features/editor/wysiwyg/dom-test-utils';
 import { makeAnchor } from '@/features/editor/lib/anchors';
 import { sha256Hex } from '@/lib/content-hash';
 import { seedReviewDemo } from '@/mocks/fixtures';
@@ -571,24 +572,10 @@ describe('copilot in the Write view (routed, MSW-backed)', () => {
     useEditorStore.setState({ view: 'write' });
     renderRouterApp(NODE_URL);
     await screen.findByRole('complementary', { name: 'Margin' }, LONG);
-    const target = await waitFor(() => {
-      const el = [...document.querySelectorAll('[data-src-start]')].find((node) =>
-        node.textContent?.includes('Because a finite MDP'),
-      );
-      if (!el) throw new Error('not rendered yet');
-      return el;
+    await waitFor(() => {
+      if (!document.querySelector('.md-editor')) throw new Error('the editor is not mounted yet');
     }, LONG);
-    const textNode = target.firstChild as Text;
-    const at = textNode.data.indexOf('Because a finite MDP');
-    act(() => {
-      const range = document.createRange();
-      range.setStart(textNode, at);
-      range.setEnd(textNode, at + 'Because a finite MDP'.length);
-      const selection = document.getSelection()!;
-      selection.removeAllRanges();
-      selection.addRange(range);
-      document.dispatchEvent(new Event('selectionchange'));
-    });
+    selectInEditor('Because a finite MDP');
     const bar = await screen.findByRole('toolbar', { name: 'Selection actions' }, LONG);
     await user.click(within(bar).getByRole('button', { name: 'Prompt…' }));
     await user.type(
