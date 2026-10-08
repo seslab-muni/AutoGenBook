@@ -138,7 +138,7 @@ class AtomInlineView implements NodeView {
     this.host = host;
     this.dom = document.createElement('span');
     this.dom.setAttribute('data-md-atom-inline', '');
-    this.dom.contentEditable = 'false';
+    this.dom.setAttribute('contenteditable', 'false');
     this.dom.addEventListener('dblclick', (event) => {
       event.preventDefault();
       this.edit();
@@ -248,7 +248,7 @@ class AtomBlockView implements NodeView {
     this.host = host;
     this.dom = document.createElement('div');
     this.dom.setAttribute('data-md-atom-block', '');
-    this.dom.contentEditable = 'false';
+    this.dom.setAttribute('contenteditable', 'false');
     this.dom.className = 'md-atom-block';
     this.body = document.createElement('div');
     this.body.className = 'md-atom-body';

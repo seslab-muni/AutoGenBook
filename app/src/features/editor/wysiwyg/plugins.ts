@@ -215,7 +215,7 @@ function inputRulesPlugin(): Plugin {
 // ---- a place to type after the last block ---------------------------------------------------
 
 const trailingParagraph = new Plugin({
-  appendTransaction(_trs, _old, state) {
+  appendTransaction(trs, _old, state) {
     const last = state.doc.lastChild;
     const first = state.doc.firstChild;
     const needEnd = !last || last.type !== nodes['paragraph'];
@@ -225,6 +225,12 @@ const trailingParagraph = new Plugin({
     const tr = state.tr;
     if (needEnd) tr.insert(tr.doc.content.size, nodes['paragraph']!.create());
     if (needStart) tr.insert(0, nodes['paragraph']!.create());
+    // An input rule that has just fired (a heading typed as `## `) can still be undone with
+    // Backspace; this extra transaction must not make the rule's plugin forget it. Positions
+    // before the document's end do not move.
+    const rules = state.plugins.find((plugin) => plugin.spec['isInputRules']);
+    const fired = rules ? trs.map((t) => t.getMeta(rules) as unknown).find(Boolean) : null;
+    if (rules && fired && !needStart) tr.setMeta(rules, fired);
     return tr.setMeta('addToHistory', false);
   },
 });
