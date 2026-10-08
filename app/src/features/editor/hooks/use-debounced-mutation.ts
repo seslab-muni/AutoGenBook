@@ -18,15 +18,20 @@ interface UseDebouncedMutationResult<T> {
   /**
    * While held, nothing is saved (timers and `flush` do nothing) and the pending value stays pending
    * (status stays `dirty`): used while the user has to decide between their edits and an incoming
-   * change from elsewhere, so an autosave cannot make the decision for them.
+   * change from elsewhere, so an autosave cannot make the decision for them. Holds are kept per
+   * `reason` (default `'default'`): saving resumes only when every reason has released its hold, so
+   * an accept in flight and a pending conflict notice cannot lift each other's.
    */
-  hold: (held: boolean) => void;
+  hold: (held: boolean, reason?: string) => void;
   /**
    * Saves what is pending and resolves once nothing is pending or in flight (also when nothing was).
    * Rejects if a save fails, or if saving is held.
    */
   flushEdits: () => Promise<void>;
-  /** Drops a value that is waiting to be saved (its timer included); one already in flight finishes. */
+  /**
+   * Drops a value that is waiting to be saved (its timer included); one already in flight finishes.
+   * A failed save's error state goes with it (the caller has decided what happens to that text).
+   */
   cancel: () => void;
 }
 
@@ -46,7 +51,7 @@ export function useDebouncedMutation<T>({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<{ value: T } | null>(null);
   const savingRef = useRef(false);
-  const heldRef = useRef(false);
+  const heldRef = useRef(new Set<string>());
   const waitersRef = useRef<{ resolve: () => void; reject: (error: unknown) => void }[]>([]);
 
   // Latest `onSave`/`save` behind refs, updated in an effect rather than during
@@ -68,7 +73,7 @@ export function useDebouncedMutation<T>({
   }, []);
 
   const save = useCallback(() => {
-    if (heldRef.current || savingRef.current || pendingRef.current === null) return;
+    if (heldRef.current.size > 0 || savingRef.current || pendingRef.current === null) return;
     const { value } = pendingRef.current;
     pendingRef.current = null;
     savingRef.current = true;
@@ -113,12 +118,13 @@ export function useDebouncedMutation<T>({
     save();
   }, [clearTimer, save]);
 
-  const hold = useCallback((held: boolean) => {
-    heldRef.current = held;
+  const hold = useCallback((held: boolean, reason = 'default') => {
+    if (held) heldRef.current.add(reason);
+    else heldRef.current.delete(reason);
   }, []);
 
   const flushEdits = useCallback(() => {
-    if (heldRef.current && pendingRef.current !== null) {
+    if (heldRef.current.size > 0 && pendingRef.current !== null) {
       return Promise.reject(
         new Error('Saving is on hold until the conflicting change is resolved.'),
       );
@@ -134,7 +140,7 @@ export function useDebouncedMutation<T>({
   const cancel = useCallback(() => {
     clearTimer();
     pendingRef.current = null;
-    setStatus((current) => (current === 'dirty' ? 'saved' : current));
+    setStatus((current) => (current === 'dirty' || current === 'error' ? 'saved' : current));
     if (!savingRef.current) for (const waiter of waitersRef.current.splice(0)) waiter.resolve();
   }, [clearTimer]);
 

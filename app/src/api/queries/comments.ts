@@ -38,18 +38,17 @@ function countsAsOpen(comment: Pick<Comment, 'kind' | 'status' | 'parentId'>): b
   );
 }
 
-/** Adds `delta` to a node's `openCommentCount` in every cached outline view, so the row badge moves at once. */
-function bumpOpenCount(
+/** Adds `delta` to one of a node's badge counts in every cached outline view, so the row badge moves at once. */
+export function bumpNodeCount(
   queryClient: QueryClient,
   projectId: string,
   nodeId: string,
+  field: 'openCommentCount' | 'pendingSuggestionCount',
   delta: number,
 ): void {
   if (delta === 0) return;
   const bump = (node: OutlineNode): OutlineNode =>
-    node.id === nodeId
-      ? { ...node, openCommentCount: Math.max(0, (node.openCommentCount ?? 0) + delta) }
-      : node;
+    node.id === nodeId ? { ...node, [field]: Math.max(0, (node[field] ?? 0) + delta) } : node;
   queryClient.setQueriesData<Page<OutlineNode>>(
     { queryKey: projectKeys.outlineList(projectId, 'flat') },
     (page) => (page ? { ...page, items: page.items.map(bump) } : page),
@@ -59,14 +58,23 @@ function bumpOpenCount(
   );
 }
 
-function invalidateAfterWrite(queryClient: QueryClient, projectId: string, nodeId: string) {
+function bumpOpenCount(
+  queryClient: QueryClient,
+  projectId: string,
+  nodeId: string,
+  delta: number,
+): void {
+  bumpNodeCount(queryClient, projectId, nodeId, 'openCommentCount', delta);
+}
+
+export function invalidateAfterWrite(queryClient: QueryClient, projectId: string, nodeId: string) {
   void queryClient.invalidateQueries({ queryKey: projectKeys.nodeComments(projectId, nodeId) });
   // The row badges (`openCommentCount`) come from the outline lists.
   void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
   void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
 }
 
-function patchComments(
+export function patchComments(
   queryClient: QueryClient,
   projectId: string,
   nodeId: string,
@@ -79,7 +87,7 @@ function patchComments(
   });
 }
 
-async function snapshot(queryClient: QueryClient, projectId: string, nodeId: string) {
+export async function snapshot(queryClient: QueryClient, projectId: string, nodeId: string) {
   const key = projectKeys.nodeComments(projectId, nodeId);
   await queryClient.cancelQueries({ queryKey: key });
   return queryClient.getQueryData<CommentPage>(key);

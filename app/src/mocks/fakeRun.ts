@@ -25,7 +25,7 @@ export function resetFakeRuns(): void {
   pendingTimers.clear();
 }
 
-function scheduleFakeRunStep(callback: () => void, delayMs: number): void {
+export function scheduleFakeRunStep(callback: () => void, delayMs: number): void {
   const timer = setTimeout(() => {
     pendingTimers.delete(timer);
     callback();

@@ -8,11 +8,12 @@ import '@/index.css';
 
 async function enableMocksIfRequested(): Promise<void> {
   if (import.meta.env.VITE_USE_MOCKS !== '1') return;
-  const [{ worker }, { seedDatabase }] = await Promise.all([
+  const [{ worker }, { seedDatabase, seedReviewDemo }] = await Promise.all([
     import('@/mocks/browser'),
     import('@/mocks/fixtures'),
   ]);
   seedDatabase();
+  seedReviewDemo();
   await worker.start({ onUnhandledRequest: 'bypass' });
 }
 

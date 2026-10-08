@@ -1,5 +1,12 @@
 import { apiBaseUrl, apiClient, unwrap } from './client';
-import type { Run, RunEvent, RunEventPage } from './types';
+import type {
+  Comment,
+  Run,
+  RunEvent,
+  RunEventPage,
+  SuggestionProgress,
+  SuggestionTerminal,
+} from './types';
 
 export type RunEventName = 'log' | 'stage' | 'section' | 'done';
 
@@ -176,6 +183,151 @@ export function subscribeRunEvents(runId: string, options: SubscribeRunEventsOpt
   signal?.addEventListener('abort', () => {
     stopped = true;
     cleanup();
+  });
+
+  return () => {
+    stopped = true;
+    cleanup();
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Suggestions (the copilot's revisions, issue #182 phase 4)
+// ---------------------------------------------------------------------------------------------
+
+export type SuggestionTerminalName = 'done' | 'failed' | 'cancelled';
+const SUGGESTION_TERMINAL_NAMES: SuggestionTerminalName[] = ['done', 'failed', 'cancelled'];
+
+/** What `EventSource` reports besides events; absent on test fakes. `0` = the browser is reconnecting. */
+export interface ReadyStateSource extends EventSourceLike {
+  readyState?: number;
+}
+
+export interface SubscribeSuggestionEventsOptions {
+  onProgress: (event: SuggestionProgress) => void;
+  /** Called once, with the suggestion in its final state (or its state when the stream ended); no more events follow. */
+  onTerminal: (name: SuggestionTerminalName, suggestion: Comment | null) => void;
+  onError?: (error: unknown) => void;
+  /** Polling cadence once the stream is abandoned. Default 2000ms. */
+  pollIntervalMs?: number;
+  /** Test seam: construct the transport. Defaults to `new EventSource(url)`. */
+  createEventSource?: (url: string) => ReadyStateSource;
+  /** Test seam: fetch the suggestion row, for the polling fallback. */
+  fetchSuggestion?: (suggestionId: string) => Promise<Comment>;
+}
+
+async function defaultFetchSuggestion(suggestionId: string): Promise<Comment> {
+  return unwrap(
+    apiClient.GET('/api/v1/comments/{comment_id}', {
+      params: { path: { comment_id: suggestionId } },
+    }),
+  );
+}
+
+function terminalNameOf(status: Comment['status']): SuggestionTerminalName | null {
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  // `pending`, and already `accepted` / `rejected`, all end the stream with `done`.
+  return status === 'running' ? null : 'done';
+}
+
+/**
+ * Follows one revision: `GET /suggestions/{id}/events/stream` (progress events, then exactly one
+ * terminal event). The server persists progress events and numbers them (`id` = `seq`), so a
+ * reconnect replays what was missed: the browser's own `EventSource` reconnect sends
+ * `Last-Event-ID` by itself, and events already seen are dropped by `seq` here either way. After
+ * two connection errors in a row (or a connection the browser gave up on) the stream is abandoned
+ * and the suggestion row is polled until it leaves `running`, so a proxy that buffers or kills
+ * event streams only costs the live progress line. Returns an unsubscribe function.
+ */
+export function subscribeSuggestionEvents(
+  suggestionId: string,
+  options: SubscribeSuggestionEventsOptions,
+): () => void {
+  const {
+    onProgress,
+    onTerminal,
+    onError,
+    pollIntervalMs = 2000,
+    createEventSource = (url: string) => new EventSource(url) as ReadyStateSource,
+    fetchSuggestion = defaultFetchSuggestion,
+  } = options;
+
+  let source: ReadyStateSource | undefined;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastSeq = -1;
+  let consecutiveErrors = 0;
+  let stopped = false;
+
+  function cleanup(): void {
+    source?.close();
+    source = undefined;
+    if (pollTimer !== undefined) clearTimeout(pollTimer);
+    pollTimer = undefined;
+  }
+
+  function finish(name: SuggestionTerminalName, suggestion: Comment | null): void {
+    if (stopped) return;
+    stopped = true;
+    cleanup();
+    onTerminal(name, suggestion);
+  }
+
+  async function pollOnce(): Promise<void> {
+    if (stopped) return;
+    try {
+      const row = await fetchSuggestion(suggestionId);
+      const name = terminalNameOf(row.status);
+      if (name) {
+        finish(name, row);
+        return;
+      }
+    } catch (cause) {
+      onError?.(cause);
+    }
+    if (!stopped) pollTimer = setTimeout(() => void pollOnce(), pollIntervalMs);
+  }
+
+  function abandonStream(): void {
+    source?.close();
+    source = undefined;
+    void pollOnce();
+  }
+
+  const es = createEventSource(
+    `${apiBaseUrl}/api/v1/suggestions/${encodeURIComponent(suggestionId)}/events/stream`,
+  );
+  source = es;
+  es.addEventListener('progress', (raw) => {
+    consecutiveErrors = 0;
+    try {
+      const event = JSON.parse(raw.data as string) as SuggestionProgress;
+      if (event.seq <= lastSeq) return;
+      lastSeq = event.seq;
+      onProgress(event);
+    } catch (cause) {
+      onError?.(cause);
+    }
+  });
+  for (const name of SUGGESTION_TERMINAL_NAMES) {
+    es.addEventListener(name, (raw) => {
+      let suggestion: Comment | null = null;
+      try {
+        suggestion = (JSON.parse(raw.data as string) as SuggestionTerminal).suggestion ?? null;
+      } catch (cause) {
+        onError?.(cause);
+      }
+      finish(name, suggestion);
+    });
+  }
+  es.addEventListener('error', (raw) => {
+    onError?.(raw);
+    if (stopped) return;
+    consecutiveErrors += 1;
+    // `readyState` 0: the browser is already reconnecting (and will send `Last-Event-ID`); anything
+    // else means it gave up (an HTTP error, a closed connection).
+    const reconnecting = es.readyState === 0;
+    if (!reconnecting || consecutiveErrors >= ERRORS_BEFORE_FALLBACK) abandonStream();
   });
 
   return () => {
