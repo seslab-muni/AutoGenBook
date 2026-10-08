@@ -90,6 +90,9 @@ function keepReactOutOfTheEditor(dom: HTMLElement) {
   });
 }
 
+/** What the editor's element carries outside production builds, for tests and browser checks. */
+export type EditorDebugElement = HTMLElement & { __md?: { view: EditorView; core: EditorCore } };
+
 export class EditorController {
   readonly host: AtomHost;
   readonly core: EditorCore;
@@ -183,8 +186,9 @@ export class EditorController {
     });
 
     keepReactOutOfTheEditor(this.view.dom);
-    (this.view.dom as unknown as { __core?: unknown; __view?: unknown }).__core = this.core;
-    (this.view.dom as unknown as { __view?: unknown }).__view = this.view;
+    // Browser checks and route tests drive the editor through this (stripped from production builds).
+    if (!import.meta.env.PROD)
+      (this.view.dom as EditorDebugElement).__md = { view: this.view, core: this.core };
     const initial = props.initialSelection?.() ?? null;
     if (initial) this.placeSelection(initial.from, initial.to, true);
     this.schedulePaint();

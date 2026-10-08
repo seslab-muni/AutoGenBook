@@ -1,5 +1,7 @@
 import { act } from '@testing-library/react';
 
+import type { EditorDebugElement } from './controller';
+
 /** The editable Write view's root, once it has loaded. */
 export function editorRoot(): HTMLElement {
   const root = document.querySelector<HTMLElement>('.md-editor');
@@ -30,4 +32,11 @@ export function selectInEditor(text: string, root: HTMLElement = editorRoot()) {
     selection.addRange(range);
     document.dispatchEvent(new Event('selectionchange'));
   });
+}
+
+/** The ProseMirror view and core behind the editable Write view (a development and test hook). */
+export function editorInternals() {
+  const internals = (editorRoot() as EditorDebugElement).__md;
+  if (!internals) throw new Error('the editor exposes no internals (a production build?)');
+  return internals;
 }

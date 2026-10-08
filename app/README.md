@@ -107,7 +107,18 @@ copilot's **suggestions** (`prompt-window.tsx` for the prompt, `suggestion-card.
 `use-suggestion-actions.ts` for accept, reject, cancel and undo, `suggestion-progress.ts` for the
 event streams). The earlier right-pane tabs (Copilot, Review) and the Margin | Copilot switch are
 gone: the Review tab became the review cards, the Copilot tab the prompt window, and the run
-event log lives on the run page (the drawer's stage timeline was dropped). `src/test/viewport.ts`
+event log lives on the run page (the drawer's stage timeline was dropped). The Write view is a
+ProseMirror editor over the section's Markdown (`features/editor/wysiwyg/`, loaded as its own chunk
+when a view is first made editable; `components/write-body.tsx` swaps it in for the read-only text):
+a source model (`source-model.ts`, `parse.ts`, `serialize.ts`, `patch.ts`, `equivalence.ts`) keeps
+untouched Markdown byte for byte and writes only the blocks an edit changed, verified by reading them
+back; math, citations, tables, callouts and anything unknown are atoms that open in Source
+(`node-views.ts`); `controller.ts` ties the editor to the draft, the anchors, highlights and the
+selection store. The design, the guarantee and its exact limits, the shortcuts, the bundle decision
+and the numbers are in `docs/WEB_UI.md` ("The editable Write view"). Pure parts are unit-tested
+(`*.test.ts` there, with seeded random documents in `test-docs.ts`); the routed flows
+(`features/editor/write-editing-*.route.test.tsx`) each have a file of their own, like the other routed
+studio tests, and drive the editor through `editorInternals()` (`wysiwyg/dom-test-utils.ts`). `src/test/viewport.ts`
 runs a test at a given screen width;
 `pnpm test` covers them with unit tests, MSW-backed component tests and routed flow
 tests (`margin-flow`, `margin-write`, `margin-editing`, `copilot-flow`, `copilot-races` and `copilot-saves` `.route.test.tsx`).
@@ -280,7 +291,8 @@ several minutes on top of the `app`/`python` jobs.
 (`pnpm check:bundle-budget`, also a CI step right after `pnpm build`) reads it
 plus `dist/.vite/manifest.json` (for finding the eagerly-loaded entry chunk)
 and fails if that entry chunk exceeds 300 kB gzipped or the whole JS+CSS
-bundle exceeds 1 MB gzipped — override either via `BUNDLE_MAIN_CHUNK_BUDGET_KB`
+bundle exceeds 1136 kB gzipped (it was 1 MB until the editable Write view added its
+lazily loaded editor chunk, see `docs/WEB_UI.md`) — override either via `BUNDLE_MAIN_CHUNK_BUDGET_KB`
 / `BUNDLE_TOTAL_BUDGET_KB` env vars if a deliberate size increase needs a
 higher ceiling. The editor's CodeMirror setup is a trimmed copy of `basicSetup`
 (`src/features/editor/lib/editor-setup.ts`, aliased in `vite.config.ts`) without the autocompletion

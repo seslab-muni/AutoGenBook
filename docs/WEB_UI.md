@@ -53,7 +53,8 @@ a header (left to right): the content-lock icon button
 (`lock-content-button.tsx`, same enablement rules as the outline row; a button
 that cannot act is `aria-disabled`, not `disabled`, so its tooltip stays
 reachable), a **Write / Source** toggle group (Source is the CodeMirror
-`SectionEditor`; Write is the rendered, read-only manuscript view — the
+`SectionEditor`; Write is the rendered manuscript view, editable in place since phase 5 (see
+*The editable Write view* below), read-only where a section cannot be edited — the
 persisted `editor-store` view is `'write' | 'source'`, a stored legacy
 `'preview'` migrates to `'write'`), a **Chapter options** chip opening a popover
 (`chapter-options-popover.tsx`) with the section's standing generation brief —
@@ -73,7 +74,7 @@ removed with it.
 The editor's status bar (`editor-status-bar.tsx`) shows `N characters · M words`
 of the live draft on the left (characters are Unicode code points), an
 **`N sources`** button in the middle and, in the Source view, the caret position
-`Ln x, Col y` (column in code points) on the right (hidden in Write, which has
+`Ln x, Col y` (column in code points) on the right (in the read-only Write view, which has
 no caret of its own; since phase 2 it publishes the Markdown position of the
 text selection, so the readout appears there once something is selected). The caret and selection live in
 `stores/editor-selection-store.ts` as `{from, to, line, column}` with `from`/`to`
@@ -161,7 +162,7 @@ which goes stale around the user's edits; so deleting the quoted words orphans t
 card (after that short search) and undoing brings it back. Until the search has failed
 once a card is *pending*, not orphaned; the search runs at most once per text and anchor,
 and quotes over 500 characters are matched by their first and last 200 (an alignment of
-a long quote would take far too long). The Write view's text only changes from outside
+a long quote would take far too long). The read-only Write view's text only changes from outside
 (server content), which re-resolves every anchor from its quote (`resetKey`); it has no
 edits of its own to map. The decoration field is only pushed to when the resolved
 set really differs from what it holds (never per keystroke) and never during an IME
@@ -236,7 +237,7 @@ bar), **Prompt…** (`Ctrl+Alt+P`) and the quick chips (`Add proof`, `More rigor
 `Shorter`, `Cite`), and never takes focus or the selection. The copilot's buttons render
 only with their handler in the card context (there is no feature flag any more), so a LaTeX-only
 section, which the server cannot anchor, shows none.
-**Keyboard-only commenting and prompting work from the Source view**: the Write view has
+**Keyboard-only commenting and prompting work from the Source view and from the editable Write view**: the read-only Write view has
 no caret, so there a keyboard user can read the cards but cannot start one (the header
 Copilot button, which prompts about the whole section, works in both views).
 
@@ -498,6 +499,167 @@ page's event log still shows every event with its tag); the node's source scope 
 the content-locked hint -> the header lock button. There is no run tray in the studio: run status
 stays on the runs page and in the row spinners, and a running revision is the running state of its
 own card.
+
+**The editable Write view (issue #182, phase 5).** The Write view is a ProseMirror editor over the
+section's Markdown whenever the section can be edited (Markdown, not being generated, a leaf; a
+content-locked section is editable, the lock only protects the text against runs). It is the same
+text the Source view edits, in the same `draft` string, through the same `handleChange` /
+`useDebouncedMutation` path: base hash, autosave holds, the error bar, the "changed elsewhere"
+notice, leave-confirm, and the flush on blur, `Ctrl+S`, view toggle and unmount are all unchanged.
+The code is `features/editor/wysiwyg/` (the model, pure and unit-tested) and `components/write-body.tsx`.
+
+*Source preservation (the guarantee).* The document is Markdown, anchors are text-quote selectors over
+it and pending suggestions carry hunks against the exact stored text, so the editor never owns the
+document: `wysiwyg/source-model.ts` does. `parse.ts` reads the section with the read-only view's own
+remark pipeline (`remark-parse`, GFM, math, over the display-math normalised text) into *segments*,
+one per top-level block: its exact source, the exact whitespace before it, and a position map per
+textblock (`inline-map.ts`: editor offset <-> source offset, UTF-16 on both sides, built from remark
+positions and the same character aligner the highlights use). Concatenating them gives the input back
+byte for byte; opening a section, moving the caret and blurring change nothing and save nothing. An edit
+is a ProseMirror transaction; `SourceModel.update` finds the top-level blocks that changed by node
+identity (ProseMirror shares every node an edit did not touch) and
+1. for typing, deleting and replacing text inside one run of text (`patch.ts`): changes the block's
+   source by *exactly that text* - an `_emphasis_` stays `_`, an entity stays `&amp;`, escapes and hard
+   breaks stay, the source change is the minimal one anchors are mapped through;
+2. for everything else (Enter, joining, marks, lists, quotes, input rules, paste): writes only the changed
+   blocks with the serializer (`serialize.ts`) in the document's own style (emphasis/strong delimiters and
+   hard-break form detected from the text, list marker, numbering and tightness kept per list, setext
+   headings and indented code kept), and leaves every other block's source slice and the whitespace
+   around it untouched; the gap before a new block is the neighbouring gap (at least one blank line);
+3. **verifies what it wrote**: the block's source is parsed again with the same pipeline and must mean what
+   the edited block means (`equivalence.ts`: marker characters, tightness, escapes and edge whitespace do
+   not count; marks and text do). Escaping is minimal first (a `\` before punctuation, an entity, a line
+   that would become a heading/list/quote/fence), then the inline syntax characters, then all
+   punctuation; a block that does not read back as itself at any level makes the edit *refused* (the
+   transaction is dropped, the DOM redrawn from the state, a toast says to use Source) - never saved as
+   something else.
+Undo and redo give the source back exactly (a block that returns to a recent shape gets its recorded
+source, not the serializer's). `parse(serialize(...))` is covered by property tests over random
+documents (astral characters, math, citations, callouts, tables, HTML, footnotes, nested lists and
+quotes, code fences, hard breaks, CR LF-normalised text, EOF whitespace, an empty document, a
+document that is one atom): the bytes outside the edited block are identical, the maps equal a fresh
+read of the new source, and undo restores the bytes.
+
+*Exact limits of the guarantee.* (1) Edited blocks may change *that block's* source where Markdown
+leaves a choice and the edit was not a plain text edit: entities (`&amp;` -> `&`), redundant escapes,
+the extra characters of an emphasis style other than the document's, trailing whitespace before a
+line break, and the other items of a *list or quote that is one top-level block* (the unit of
+rewriting is the top-level block, so an item's neighbours are rewritten in the document's style when
+an item is restructured; typing in an item never does that). (2) The whitespace around a block that
+was split, joined, added or removed is the neighbour's (or a blank line); two lists left adjacent
+with the same marker get different markers (the later one, even outside the edited window) so they
+do not merge. (3) An empty top-level paragraph has no source (Enter at the end of a block changes
+nothing until something is typed); an empty paragraph inside a quote or item has none either, apart
+from an empty item. (4) A CR LF section is saved as LF the first time it is edited (as in Source).
+(5) Text typed as `$x$`, `$$x$$` or `[@key]` stays literal text - written unescaped - until the editor
+is left (blur): then the block is read again from its source and becomes the formula or citation; the
+source does not change by that. (6) Leading spaces at the start of a line are kept as typed
+(Markdown ignores up to three; four would make code and are refused). (7) `**`/`*` delimiters
+cannot close against punctuation directly followed by a letter in Markdown (`**"x"**y`): such an edit
+is refused rather than written differently.
+
+*Atoms (what stays raw).* Whatever the editor cannot represent faithfully is an atom carrying its exact
+source, drawn by the read-only view's own renderers (KaTeX, citation chips, callouts, tables) and
+edited in Source: inline - math (`$..$`, `$$..$$`), citations (`[@key]`, `\cite{key}`; one atom per
+token even with several keys), raw HTML, footnote references, images, reference links, autolinks and
+bare URLs, and the text of a `delete`; blocks - display math, **tables (atoms in this phase)**,
+callouts (`> **Theorem ..**` and the other four kinds), HTML, footnote definitions, link
+definitions, thematic breaks, task lists, and any list or quote that contains a block atom or an
+inline atom spanning lines (the whole top-level block is then one raw atom, shown as the read-only
+view shows it). A construct the parser does not know becomes a raw atom; nothing is dropped or
+normalised. Footnote and link definitions and raw HTML, which the read-only view draws as nothing,
+are shown as their source in a dashed box so they can be found. Atoms are selectable, not focusable:
+arrow keys move over them, `Enter` on a selected atom (or a double click, or the "Edit in Source"
+label on a block atom) switches to Source with the atom's source selected; nothing inside the
+editable region is a tab stop and a formula/chip/table has an accessible name
+("Formula: x^2. Press Enter to edit in Source.").
+
+*Editing.* Typing, `Enter`/`Backspace`/`Delete` (split, join, leave a list), `Shift+Enter` (hard break),
+`Tab`/`Shift+Tab` in lists only (everywhere else `Tab` belongs to the browser; `Escape` makes the next `Tab`
+pass even in a list), `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+E` inline code, `Ctrl+K` link (a prompt for the
+address; empty removes it), `Ctrl+Z`/`Ctrl+Y`/`Ctrl+Shift+Z`, `Ctrl+S` (save now), `Ctrl+Alt+M` /
+`Ctrl+Alt+P` (the selection layer's, unchanged). Markdown input rules: `#`..`######` + space, `- `/`* `/`+ `,
+`1. `, `> `, ```` ``` ```` + space, `**x**`, `*x*`, `_x_`, `~~x~~`, `` `x` ``; Backspace right after a rule
+undoes it. Paste: plain text is read as Markdown with the app's parser (blocks that begin on a new line stay
+blocks, between the text around the caret; a fragment keeps its edge spaces; in a code block it is
+inserted as it is); HTML goes through the schema (text, paragraphs, headings, lists, quotes, code, bold,
+italic, links; `javascript:` links, scripts, styles, images, forms and tables degrade to their text) and
+no raw HTML ever enters the document. Copy puts Markdown on the clipboard. The editable region is a
+labelled multiline textbox (`role="textbox"`, "Section text"), with a visible focus ring, in both themes.
+
+*Highlights, selection, margin, anchors.* All card kinds are drawn over text through the same CSS Custom
+Highlight registry as the read-only view (`lib/write-highlights.ts`'s `paintHighlights`; `<mark>` decorations
+where the API is missing); atoms get `data-anchor-hit`. Source ranges become editor ranges through the
+position map (`SourceModel.rangesForSource`), so a range over a formula, a citation or a table is drawn on
+the atom. Clicking a highlight focuses its card (the same hit-test as the read-only view). The editor
+publishes its own selection to `editor-selection-store` as code-point offsets over the Markdown (the
+status bar's `Ln, Col` shows in Write now; `useWriteSelection` is off while the editor owns the
+selection), so the selection toolbar's Comment/Prompt…/chips make anchors with exact Markdown
+ranges. Margin geometry is `writeGeometry(region, locate)`; `data-markdown-root` is on the editor's
+root. While typing, `EditorController` tracks every located range through each *source* change with
+`mapRangeThroughChange` - the Source view's own rules (text typed right before a range stays outside,
+inside grows it, deleting its words flags it) - and reports them with `onHighlightsMapped`, so
+`use-anchor-positions` behaves as in Source: local positions are the truth while dirty, a refetch
+moves nothing, deleting the quote orphans the card after the short search, `Ctrl+Z` brings it back.
+
+*External replacement.* A `value` that is not one the editor produced (an accepted suggestion, "Load the
+other version", another user's change) replaces the content with a fresh editor state: nothing of it is in
+the undo history (so `Ctrl+Z` cannot bring back what the other side replaced and autosave it), the
+anchors are re-resolved from their quotes by the sheet (`resetKey`), the caret stays at its source
+offset. The editor's own texts handed back late by the owner are recognised and ignored. During an IME
+composition neither highlight painting nor decoration updates touch the DOM, and a replacement waits for
+`compositionend`.
+
+*Switching views.* One draft string: nothing can be lost by toggling, and unsaved edits are carried (the
+autosave timer keeps running; leave-confirm and the flush on unmount are unchanged). The selection is
+carried through source offsets (Write -> Source selects the same range and scrolls to it; Source -> Write puts
+the caret there); the undo history of each view starts empty when it opens; the scroll position is not
+carried except through the revealed selection. "Edit in Source" on an atom is the same switch with the atom's
+source selected.
+
+*First paint and loading.* The editor is its own chunk (`markdown-editor`): ProseMirror plus the model,
+fetched when a Write view is first made editable. The read-only view paints first (it is the same
+typography, in the same scroll container, so nothing moves) and is replaced when the chunk has loaded; the
+read-only view, the Source view and the studio never load it (`check-bundle-budget.mjs` fails if anything
+imports the chunk statically). If the chunk cannot be fetched the section stays read-only with a notice and
+*Try again*; Source remains the way to edit. Sections that cannot be edited (generating, a container node,
+LaTeX-only) stay the read-only view.
+
+*Performance.* Only the edited block is written or verified per keystroke (a source splice and one parse of
+that block); the model is O(blocks) arithmetic. Measured in a production build with Chromium and real
+typing in a 100 kB section (about 370 blocks, 600 formulas, 130 comment cards): about 19 ms per key
+including the browser's and the test driver's own overhead, against 10 ms in Source. Two things matter
+for that: blocks away from the viewport have `content-visibility: auto` (without it the same section
+cost 38 ms per key - the browser lays out and hit-tests tens of thousands of KaTeX nodes), so the margin
+places a card whose text is in a block the browser has not laid out at that block's position
+(`MarginGeometry.measure`'s `locate`) until it is drawn; and React saves the focused element's selection
+before every commit by walking the whole contenteditable, which is made not to apply to the editor's element
+(`keepReactOutOfTheEditor` in `wysiwyg/controller.ts`: its `contentEditable` property reads `"inherit"`; it
+cost about 6 ms per key). The status bar's counts are deferred (`useDeferredValue`), which also helps Source.
+Formulas are rendered as HTML only (no MathML copy; the atom carries its accessible name).
+
+*Library choice and the budget.* Compared (gzipped, summed per module like `check-bundle-budget.mjs`, in this
+build on top of the 1012.9 kB baseline, each as a lazy chunk with its own demo glue only): bare ProseMirror
+(state, view, model, transform, commands, history, keymap, inputrules, schema-list) +88.6 kB; Milkdown
+(core, commonmark, gfm, history) +148.0 kB; Tiptap (StarterKit + Markdown) +197.1 kB (standalone esbuild
+bundles: 65 / 136 / 138 kB). Milkdown and Tiptap re-serialise the whole document with their own Markdown
+serializers, which is exactly what the guarantee above forbids, so a block-preserving model would have been
+written on top of them anyway; bare ProseMirror driven by the app's existing remark pipeline is the
+smallest and gives the control. With the model, serializer, atoms and glue the chunk adds +120.9 kB
+(1133.8 kB total, real gzip of the chunk 80.9 kB); `BUNDLE_TOTAL_BUDGET_KB` therefore goes from 1024 to
+1136 (the next 16 kB), the entry chunk's 300 kB is unchanged. Dependencies added: `prosemirror-model`,
+`-state`, `-view`, `-transform`, `-commands`, `-history`, `-keymap`, `-inputrules`, `-schema-list`.
+
+*Development hooks.* Outside production builds the editor's element carries `__md = { view, core }`
+(`EditorDebugElement`) for browser checks and the route tests that drive it; `window.__mockDb` and
+`window.__queryClient` exist in mock mode (`VITE_USE_MOCKS=1`) to put content in the mock database and have
+the app read it.
+
+*Known limits.* Tables, callouts and other atoms are edited in Source; lists or quotes that contain such a
+thing are one raw atom. The unit of rewriting is the top-level block (see the limits above). A formula
+typed as text is a formula only after blur. `Ctrl+K` uses the browser's prompt. Pressing a key within the
+few milliseconds before the browser has reported a caret move to ProseMirror (`selectionchange` is
+asynchronous) is applied at the previous caret - a ProseMirror property that only synthetic input shows.
 
 *Editor setup and the bundle.* The build aliases `@uiw/codemirror-extensions-basic-setup` to
 `lib/editor-setup.ts` (`vite.config.ts`), a copy of its extension list without the autocompletion
