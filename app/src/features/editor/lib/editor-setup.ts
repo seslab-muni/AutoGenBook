@@ -24,15 +24,16 @@ import {
 } from '@codemirror/view';
 
 /**
- * The editor's CodeMirror setup, standing in for `@uiw/codemirror-extensions-basic-setup` (the
- * build aliases that module to this file, see `vite.config.ts`). The original is a list of imports
- * and an array literal that its own docs say to copy and adjust; this is that copy, minus what a
- * Markdown/LaTeX source editor never uses and what costs bundle: the autocompletion popup
- * (`@codemirror/autocomplete`'s completion machinery, 16 kB gzipped) and the lint keymap (with
- * `@codemirror/lint`, 6 kB). Everything else is unchanged: line numbers, undo history, the default
- * and search keymaps (the search panel, `Ctrl+F`), bracket matching and closing, selection
- * drawing, rectangular selection, active-line and selection-match highlighting, fold keys.
- * Options use the original's names; `@uiw/react-codemirror` passes the `basicSetup` prop through.
+ * The editor's CodeMirror setup, standing in for `@uiw/codemirror-extensions-basic-setup` (the build
+ * and the test runner alias that module to this file, see `vite.config.ts`). The original is a list of
+ * imports and an array literal that its own docs say to copy and adjust; this is that copy, minus what
+ * a Markdown/LaTeX source editor never uses: the autocompletion popup and its keymap (only
+ * `closeBrackets` is kept from `@codemirror/autocomplete`, so the completion machinery, 16 kB gzipped,
+ * is not bundled) and the lint keymap (with `@codemirror/lint`, 6 kB). Everything else is unchanged:
+ * line numbers, undo history, the default and search keymaps (the search panel, `Ctrl+F`), bracket
+ * matching and closing, selection drawing, rectangular selection, active-line and selection-match
+ * highlighting, fold keys. Options use the original's names; `@uiw/react-codemirror` passes its
+ * `basicSetup` prop through. `lib/editor-setup.test.ts` pins the behaviours the editor relies on.
  */
 export interface BasicSetupOptions {
   lineNumbers?: boolean;
@@ -92,19 +93,27 @@ export function basicSetup(options: BasicSetupOptions = {}): Extension[] {
   if (options.crosshairCursor === true) extensions.push(crosshairCursor());
   if (options.highlightActiveLine !== false) extensions.push(highlightActiveLine());
   if (options.highlightSelectionMatches !== false) extensions.push(highlightSelectionMatches());
-  if (typeof options.tabSize === 'number')
+  if (typeof options.tabSize === 'number' && options.tabSize > 0) {
     extensions.push(indentUnit.of(' '.repeat(options.tabSize)));
+  }
   extensions.push(keymap.of(keymaps));
   return extensions;
 }
 
 /** Not used by this app; exported because the module this one replaces exports it. */
-export function minimalSetup(): Extension[] {
-  return [
-    highlightSpecialChars(),
-    history(),
-    drawSelection(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-    keymap.of([...defaultKeymap, ...historyKeymap]),
-  ];
+export function minimalSetup(options: BasicSetupOptions = {}): Extension[] {
+  const extensions: Extension[] = [];
+  if (options.highlightSpecialChars !== false) extensions.push(highlightSpecialChars());
+  if (options.history !== false) extensions.push(history());
+  if (options.drawSelection !== false) extensions.push(drawSelection());
+  if (options.syntaxHighlighting !== false) {
+    extensions.push(syntaxHighlighting(defaultHighlightStyle, { fallback: true }));
+  }
+  extensions.push(
+    keymap.of([
+      ...(options.defaultKeymap !== false ? defaultKeymap : []),
+      ...(options.historyKeymap !== false ? historyKeymap : []),
+    ]),
+  );
+  return extensions;
 }
