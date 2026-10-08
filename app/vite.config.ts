@@ -34,6 +34,13 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
+      // `@uiw/react-codemirror` imports its basic setup statically, which keeps the completion
+      // popup and the lint keymap (22 kB gzipped) in the bundle even though the app never uses
+      // them. This swaps in the same setup without those two; see the file's own comment.
+      '@uiw/codemirror-extensions-basic-setup': path.resolve(
+        import.meta.dirname,
+        './src/features/editor/lib/editor-setup.ts',
+      ),
     },
   },
   build: {
