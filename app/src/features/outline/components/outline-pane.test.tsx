@@ -18,7 +18,7 @@ import { OutlinePane } from './outline-pane';
 import { STRUCTURE_LOCKED_MESSAGE } from './outline-row';
 
 // `useProjectRuns` (mounted by `OutlinePane`) keeps a live SSE subscription open for any active run
-// via `useRunStream` — mocked the same way as `copilot-panel.test.tsx`/`start-run-dialog.test.tsx`.
+// via `useRunStream` — mocked the same way as `start-run-dialog.test.tsx`.
 vi.mock('@/api/sse', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/sse')>();
   return { ...actual, subscribeRunEvents: vi.fn() };

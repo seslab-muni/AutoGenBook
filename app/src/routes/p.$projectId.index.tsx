@@ -6,7 +6,6 @@ import { projects } from '@/api/queries/projects';
 import { StudioLayout } from '@/components/layout/studio-layout';
 import { useState } from 'react';
 
-import { type CopilotTab } from '@/features/editor/components/copilot-drawer';
 import { MarginHostContext } from '@/features/editor/margin/margin-host';
 import { RightColumn } from '@/features/editor/margin/right-pane';
 import { EditorPane } from '@/features/editor/components/editor-pane';
@@ -22,7 +21,7 @@ export const Route = createFileRoute('/p/$projectId/')({
 
 function StudioPage() {
   const { projectId } = Route.useParams();
-  const { node, tab } = ProjectRoute.useSearch();
+  const { node } = ProjectRoute.useSearch();
   const { project: loaderProject } = ProjectRoute.useLoaderData();
   // Re-subscribe (rather than relying on the loader snapshot alone) so a run finishing — which
   // sets/updates `lastRunId` — is reflected here without a full route reload; see `p.$projectId.tsx`.
@@ -45,10 +44,6 @@ function StudioPage() {
         return nodeId ? { ...rest, node: nodeId } : rest;
       },
     });
-  }
-
-  function handleTabChange(nextTab: CopilotTab) {
-    void navigate({ search: (prev) => ({ ...prev, tab: nextTab }) });
   }
 
   const selectedNode = node ? (flatNodes.find((n) => n.id === node) ?? null) : null;
@@ -75,17 +70,7 @@ function StudioPage() {
             onSelectNode={handleSelectNode}
           />
         }
-        copilotPane={
-          <RightColumn
-            projectId={projectId}
-            project={project}
-            node={selectedNode}
-            // Old links may still say `citations` (now in the sources drawer) or `settings`.
-            tab={tab === 'review' ? 'review' : 'copilot'}
-            onTabChange={handleTabChange}
-            onMarginHost={setMarginHost}
-          />
-        }
+        marginPane={<RightColumn node={selectedNode} onMarginHost={setMarginHost} />}
       />
     </MarginHostContext.Provider>
   );

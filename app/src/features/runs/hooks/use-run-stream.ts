@@ -9,7 +9,7 @@ import type { Run, RunEvent } from '@/api/types';
 
 /**
  * One real subscription per `runId`, shared by every `useRunStream` caller
- * (Copilot panel, run detail page, `useProjectRuns`'s app-wide safety net) —
+ * (run detail page, `useProjectRuns`'s app-wide safety net) —
  * ref-counted so mounting the same run in multiple places never opens more
  * than one SSE connection, and the underlying connection survives as long
  * as at least one consumer is mounted.
@@ -164,7 +164,7 @@ const EMPTY_SECTION_IDS: string[] = [];
 /**
  * Subscribes to `runId`'s live progress (SSE, falling back to polling — see
  * `subscribeRunEvents`) and mirrors it into shared query-cache state so every
- * caller observing the same run (the Copilot panel, the run detail page,
+ * caller observing the same run (the run detail page,
  * `useProjectRuns`'s header/outline wiring) sees the same deduped event log
  * without opening more than one connection. No-ops (returns empty state)
  * when `runId` is undefined or already cached as terminal.
@@ -194,8 +194,8 @@ export function useRunStream(
   useEffect(() => {
     if (!runId) return;
     // Only skips a run whose terminal status is *already cached* - a runId a caller passes
-    // before that run's detail has ever been fetched (e.g. a Copilot panel whose
-    // `effectiveRunId` briefly falls back to the project's last, long-finished run before a
+    // before that run's detail has ever been fetched (e.g. a caller whose
+    // run id briefly falls back to the project's last, long-finished run before a
     // new one is tracked) still opens a subscription, immediately closed once the caller's
     // runId moves on. Harmless (the connection is torn down on the very next render), just
     // not worth the extra fetch it'd take to avoid it.

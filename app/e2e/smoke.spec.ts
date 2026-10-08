@@ -87,7 +87,7 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
   await page.getByRole('textbox', { name: `Rename "${chapterTitles[0]}"` }).click();
   await expect(
     page.getByText(
-      'This section is empty. Switch to Source to write it, or use the Copilot to generate it.',
+      'This section is empty. Switch to Source to write it, or start a run to draft it.',
     ),
   ).not.toBeVisible();
   await expect(page.getByText(/Fake generated content/)).toBeVisible();
