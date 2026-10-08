@@ -42,6 +42,26 @@ function separator(candidate: string | undefined): string {
   return candidate && /\n[ \t]*\n/.test(candidate) ? candidate : '\n\n';
 }
 
+/** What makes a list a list of its own in the source: bullets by marker, numbered lists by delimiter. */
+function listKey(segment: Segment): string | null {
+  const type = segment.node.type.name;
+  if (type === 'bullet_list') return `ul${segment.src[0] ?? '-'}`;
+  if (type === 'ordered_list') return `ol${/^\d+([.)])/.exec(segment.src)?.[1] ?? '.'}`;
+  return null;
+}
+
+/** The segment written again with the other marker of its kind (so it does not merge with the list before it). */
+function withOtherMarker(segment: Segment, style: SerializeStyle): Segment | null {
+  const { node } = segment;
+  const attrs =
+    node.type.name === 'bullet_list'
+      ? { ...node.attrs, marker: segment.src[0] === '-' ? '*' : '-' }
+      : { ...node.attrs, delim: /^\d+\)/.test(segment.src) ? '.' : ')' };
+  const other = node.type.create(attrs, node.content, node.marks);
+  const written = serializeVerified(other, style);
+  return written ? { node, gap: segment.gap, src: written.src, tbs: written.tbs } : null;
+}
+
 function countAtoms(node: PMNode): number {
   let count = node.type.name === 'atom_block' ? 1 : 0;
   node.descendants((child) => {
@@ -64,6 +84,11 @@ export class SourceModel {
   private pmSize = 0;
   /** Segments the editor wrote since they were last read from their source. */
   private touched = new WeakSet<Segment>();
+  /**
+   * Blocks the editor replaced lately, newest first. A block that comes back equal to one of them
+   * (an undo, a redo) gets its exact source back - not what the serializer would write for it.
+   */
+  private recent: { node: PMNode; src: string; tbs: TextblockInfo[] }[] = [];
 
   constructor(text: string, parsed = parseDocument(text)) {
     this.text = text;
@@ -161,7 +186,10 @@ export class SourceModel {
         fresh.push({ ...virtualSegment(), node });
         continue;
       }
-      const written = serializeVerified(node, this.style);
+      const known = this.recent.find(
+        (entry) => entry.node.type === node.type && entry.node.eq(node),
+      );
+      const written = known ?? serializeVerified(node, this.style);
       if (!written) return { ok: false };
       let gap: string;
       if (!firstReal) gap = fallbackGap;
@@ -174,6 +202,24 @@ export class SourceModel {
     }
 
     if (patched) fresh.push(patched);
+
+    // Two lists that touch with the same marker would be read as one list: the later one is
+    // written with the other marker (it may be the block after the window).
+    let nextFlipped: Segment | null = null;
+    let before: Segment | null = prevReal;
+    for (let k = 0; k < fresh.length; k += 1) {
+      const segment = fresh[k]!;
+      if (isVirtual(segment)) continue;
+      const key = listKey(segment);
+      if (key && before && listKey(before) === key) {
+        fresh[k] = withOtherMarker(segment, this.style) ?? segment;
+      }
+      before = fresh[k]!;
+    }
+    if (nextReal && before) {
+      const key = listKey(nextReal);
+      if (key && listKey(before) === key) nextFlipped = withOtherMarker(nextReal, this.style);
+    }
     for (const segment of fresh) this.touched.add(segment);
 
     // The gap before the next real block: kept, except where the window took over its leading
@@ -189,23 +235,30 @@ export class SourceModel {
     // of the real block after it (gaps included), or to the window's last block when nothing follows.
     const regionStart = prev >= 0 ? this.srcEnd[prev]! : 0;
     let regionEnd: number;
-    if (nextReal) regionEnd = this.srcStart[next]!;
+    if (nextReal) regionEnd = nextFlipped ? this.srcEnd[next]! : this.srcStart[next]!;
     else {
       const lastOld = [...oldWindow].reverse().findIndex((segment) => !isVirtual(segment));
       regionEnd = lastOld < 0 ? regionStart : this.srcEnd[oldEnd - 1 - lastOld]!;
     }
     const oldRegion = this.text.slice(regionStart, regionEnd);
     const newRegion =
-      freshReals.map((segment) => segment.gap + segment.src).join('') + (nextReal ? nextGap : '');
+      freshReals.map((segment) => segment.gap + segment.src).join('') +
+      (nextReal ? nextGap : '') +
+      (nextFlipped ? nextFlipped.src : '');
 
     const nextSegments = [...old.slice(0, i), ...fresh, ...old.slice(oldEnd)];
-    if (nextReal && nextGap !== nextReal.gap) {
+    if (nextReal && (nextFlipped || nextGap !== nextReal.gap)) {
       const at = nextSegments.indexOf(nextReal);
-      nextSegments[at] = { ...nextReal, gap: nextGap };
+      nextSegments[at] = { ...(nextFlipped ?? nextReal), gap: nextGap };
     }
     const nextText = this.text.slice(0, regionStart) + newRegion + this.text.slice(regionEnd);
 
     const local = diffChange(oldRegion, newRegion);
+    for (const segment of oldWindow) {
+      if (isVirtual(segment) || segment.node.type.name === 'atom_block') continue;
+      this.recent.unshift({ node: segment.node, src: segment.src, tbs: segment.tbs });
+    }
+    if (this.recent.length > 48) this.recent.length = 48;
     this.segments = nextSegments;
     this.text = nextText;
     this.recompute();

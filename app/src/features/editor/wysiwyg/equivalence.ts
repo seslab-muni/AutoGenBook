@@ -43,19 +43,23 @@ function mergeRuns(runs: readonly Run[]): Run[] {
   return out;
 }
 
+const isCode = (marks: string) => marks.split(',').includes('code');
+
 /** Inline content, normalised: see the file comment. */
 export function inlineFingerprint(node: PMNode): [string, string][] {
   const runs = mergeRuns(inlineRuns(node));
   const text = runs.map((run) => run.t).join('');
-  // Characters to drop: edge whitespace, and spaces around a line break.
+  const droppable = (c: string | undefined) =>
+    c !== undefined && (WS.test(c) || c === '\n' || c === HARD);
+  // Characters to drop: edge whitespace and line breaks, and spaces around a line break.
   const drop = new Uint8Array(text.length);
   let start = 0;
-  while (start < text.length && (WS.test(text[start]!) || text[start] === '\n')) {
+  while (start < text.length && droppable(text[start])) {
     drop[start] = 1;
     start += 1;
   }
   let end = text.length;
-  while (end > start && (WS.test(text[end - 1]!) || text[end - 1] === '\n')) {
+  while (end > start && droppable(text[end - 1])) {
     drop[end - 1] = 1;
     end -= 1;
   }
@@ -73,14 +77,35 @@ export function inlineFingerprint(node: PMNode): [string, string][] {
     at += run.t.length;
     kept.push({ t: piece, m: run.m });
   }
-  // Marks on whitespace-only runs mean nothing in Markdown.
-  const plain = mergeRuns(kept.map((run) => (run.t.trim() === '' ? { t: run.t, m: '' } : run)));
-  return plain.map((run) => [run.t, run.m]);
+  // Whitespace at the edge of a marked run belongs to the text around it: Markdown cannot open or
+  // close emphasis next to a space, so where the space sits is the serializer's choice (code is exact).
+  const canonical: Run[] = [];
+  for (const run of kept) {
+    if (run.m === '' || isCode(run.m) || run.t === '') {
+      canonical.push(run);
+      continue;
+    }
+    const lead = /^[ \t]*/.exec(run.t)![0];
+    const trail = lead.length === run.t.length ? '' : /[ \t]*$/.exec(run.t)![0];
+    const core = run.t.slice(lead.length, run.t.length - trail.length);
+    if (lead) canonical.push({ t: lead, m: '' });
+    if (core) canonical.push({ t: core, m: run.m });
+    if (trail) canonical.push({ t: trail, m: '' });
+  }
+  return mergeRuns(canonical).map((run) => [run.t, run.m]);
 }
 
+/**
+ * The children of a container as data. An empty paragraph next to other content has no Markdown
+ * form (blank lines separate blocks, they are not blocks), so it means nothing; the only child of an
+ * item or a quote keeps its meaning (an empty item).
+ */
 function listItemChildren(node: PMNode): unknown[] {
   const out: unknown[] = [];
-  node.forEach((child) => out.push(blockFingerprint(child)));
+  node.forEach((child) => {
+    if (child.type.name === 'paragraph' && child.content.size === 0 && node.childCount > 1) return;
+    out.push(blockFingerprint(child));
+  });
   return out;
 }
 

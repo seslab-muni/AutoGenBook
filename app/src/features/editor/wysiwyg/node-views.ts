@@ -284,7 +284,16 @@ class AtomBlockView implements NodeView {
       'aria-label',
       `${describe(kind, kind === 'math' ? 'display formula' : label)}. Press Enter to edit in Source.`,
     );
-    this.host.setBlock(this.body, { source: this.node.attrs['source'] as string, kind, label });
+    const source = this.node.attrs['source'] as string;
+    if (kind === 'footnote' || kind === 'definition' || kind === 'html') {
+      // The read-only view draws nothing for these (definitions, footnote texts, HTML it will not
+      // render): here they would be invisible and impossible to find, so their source is shown.
+      this.host.removeBlock(this.body);
+      this.body.textContent = source;
+      this.body.className = 'md-atom-body md-atom-source';
+    } else {
+      this.host.setBlock(this.body, { source, kind, label });
+    }
   }
 
   update(node: PMNode): boolean {

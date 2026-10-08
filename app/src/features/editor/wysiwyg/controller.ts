@@ -11,7 +11,13 @@ import {
 } from '@/features/editor/lib/write-highlights';
 import type { EditorSelection } from '@/stores/editor-selection-store';
 
-import { cleanPastedHtml, parseClipboardText, sliceToMarkdown } from './clipboard';
+import {
+  cleanPastedHtml,
+  markdownSlice,
+  parseClipboardText,
+  pasteBlocks,
+  sliceToMarkdown,
+} from './clipboard';
 import { EditorCore, reconcile } from './core';
 import {
   anchorIdsAt,
@@ -144,6 +150,15 @@ export class EditorController {
       clipboardTextParser: (text, $context, plain) => parseClipboardText(text, $context, plain),
       clipboardTextSerializer: (slice) => sliceToMarkdown(slice),
       transformPastedHTML: cleanPastedHtml,
+      handlePaste: (view, event) => {
+        // Plain text (no HTML): ProseMirror opens the slice as far as it can, which folds a pasted
+        // heading into the paragraph at the caret; blocks that began on a new line stay blocks.
+        const data = event.clipboardData;
+        const text = data?.getData('text/plain');
+        if (!text || data?.getData('text/html')) return false;
+        if (view.state.selection.$from.parent.type.spec.code) return false;
+        return pasteBlocks(view, markdownSlice(text));
+      },
       handleDOMEvents: {
         blur: () => {
           // Text typed as `$x$` or `[@key]` becomes the formula or the citation once the writer is elsewhere.
@@ -168,6 +183,8 @@ export class EditorController {
     });
 
     keepReactOutOfTheEditor(this.view.dom);
+    (this.view.dom as unknown as { __core?: unknown; __view?: unknown }).__core = this.core;
+    (this.view.dom as unknown as { __view?: unknown }).__view = this.view;
     const initial = props.initialSelection?.() ?? null;
     if (initial) this.placeSelection(initial.from, initial.to, true);
     this.schedulePaint();

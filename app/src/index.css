@@ -433,6 +433,13 @@
 .md-editor ol[data-tight='true'] > li > p {
   margin: 0;
 }
+.md-editor ul,
+.md-editor ol {
+  /* Markers hang outside the list's content box, which block-level content-visibility clips: the
+     indent is padding, not margin, so they stay inside the box that is painted. */
+  margin-left: 0;
+  padding-left: 1.25rem;
+}
 .md-editor li > ul,
 .md-editor li > ol {
   margin-top: 0.25rem;
@@ -492,9 +499,12 @@
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.md-editor .md-atom-block > .md-atom-body > [data-markdown-root] > :first-child {
-  margin-top: 0;
-}
-.md-editor .md-atom-block > .md-atom-body > [data-markdown-root] > :last-child {
-  margin-bottom: 0;
+.md-editor .md-atom-source {
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
 }

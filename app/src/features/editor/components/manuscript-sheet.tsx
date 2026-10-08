@@ -503,7 +503,9 @@ export function ManuscriptSheet({
   );
 
   const handleRefused = useCallback(() => {
-    toast.error('That change cannot be written as Markdown here. Make it in the Source view.');
+    toast.error('That change cannot be written as Markdown here. Make it in the Source view.', {
+      id: 'write-refused',
+    });
   }, []);
 
   const clearSourceSelection = useCallback(() => setSourceSelection(null), []);
@@ -851,8 +853,9 @@ export function ManuscriptSheet({
         <div
           ref={setRegion}
           className="custom-scrollbar min-h-0 flex-1 overflow-auto"
-          // Scrollable region: focusable so keyboard users can scroll the manuscript.
-          tabIndex={0}
+          // Scrollable region: focusable so keyboard users can scroll the manuscript (the editable
+          // Write view has a focusable textbox of its own, which scrolls it).
+          tabIndex={view === 'write' && editor ? undefined : 0}
           role="region"
           aria-label="Manuscript"
         >

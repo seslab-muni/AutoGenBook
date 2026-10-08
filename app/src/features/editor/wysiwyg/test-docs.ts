@@ -1,8 +1,9 @@
 /** Seeded random Markdown documents for the property tests (issue #182, phase 5). */
 
 export function rng(seed: number): () => number {
-  let s = seed >>> 0 || 1;
-  return () => {
+  // Mixed and warmed up: xorshift's first outputs for small seeds are all close to zero.
+  let s = (Math.imul(seed >>> 0 || 1, 2654435761) ^ 0x9e3779b9) >>> 0 || 1;
+  const step = () => {
     s ^= s << 13;
     s >>>= 0;
     s ^= s >>> 17;
@@ -10,6 +11,8 @@ export function rng(seed: number): () => number {
     s >>>= 0;
     return s / 0x100000000;
   };
+  for (let i = 0; i < 12; i += 1) step();
+  return step;
 }
 
 const WORDS = [

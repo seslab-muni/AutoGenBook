@@ -1,4 +1,6 @@
 import { Fragment, Slice, type Node as PMNode, type ResolvedPos } from 'prosemirror-model';
+import { NodeSelection } from 'prosemirror-state';
+import type { EditorView } from 'prosemirror-view';
 
 import { parseDocument } from './parse';
 import { DEFAULT_STYLE, serializeBlock } from './serialize';
@@ -21,16 +23,32 @@ function codeSlice(text: string): Slice {
 
 /** `text` read as Markdown, as a slice that merges into the surrounding text where it can. */
 export function markdownSlice(text: string): Slice {
-  const parsed = parseDocument(text.replace(/\r\n?/g, '\n'), { trailingParagraph: false });
+  const source = text.replace(/\r\n?/g, '\n');
+  const parsed = parseDocument(source, { trailingParagraph: false });
   const blocks = parsed.segments.map((segment) => segment.node);
-  if (blocks.length === 0) return Slice.empty;
+  if (blocks.length === 0) {
+    // Only whitespace: spaces are text, blank lines are nothing.
+    const spaces = source.replace(/\s*\n\s*/g, ' ');
+    return spaces ? new Slice(Fragment.from(schema.text(spaces)), 0, 0) : Slice.empty;
+  }
   const first = blocks[0]!;
   if (blocks.length === 1 && first.type === para) {
-    return new Slice(first.content, 0, 0);
+    // Markdown drops the edge whitespace of a paragraph; a pasted fragment ` and more` keeps its space.
+    const lead = /^[ \t]+/.exec(source)?.[0] ?? '';
+    const trail = /[ \t]+$/.exec(source)?.[0] ?? '';
+    const parts: PMNode[] = [];
+    if (lead) parts.push(schema.text(lead));
+    first.content.forEach((child) => parts.push(child));
+    if (trail) parts.push(schema.text(trail));
+    return new Slice(Fragment.fromArray(parts), 0, 0);
   }
-  const openStart = first.isTextblock ? 1 : 0;
   const last = blocks[blocks.length - 1]!;
-  const openEnd = last.isTextblock ? 1 : 0;
+  // Blocks that begin or end with a blank line are meant as blocks of their own; otherwise the first
+  // and last join the text around the caret, as pasted paragraphs do.
+  const separateStart = /^[ \t]*\n/.test(source);
+  const separateEnd = /\n[ \t]*$/.test(source);
+  const openStart = first.isTextblock && !separateStart ? 1 : 0;
+  const openEnd = last.isTextblock && !separateEnd ? 1 : 0;
   return new Slice(Fragment.fromArray(blocks), openStart, openEnd);
 }
 
@@ -72,5 +90,41 @@ export function sliceToMarkdown(slice: Slice): string {
     return nodes.map((node) => serializeBlock(node, DEFAULT_STYLE, 1).src).join('\n\n');
   } catch {
     return slice.content.textBetween(0, slice.content.size, '\n\n');
+  }
+}
+
+/**
+ * Pasting whole blocks (a heading, a list, paragraphs that began on a new line) puts them *between*
+ * the text around the caret instead of folding the first block into the paragraph the caret is in,
+ * which is what ProseMirror's fitting does with a closed slice. Returns whether it handled the paste.
+ */
+export function pasteBlocks(view: EditorView, slice: Slice): boolean {
+  const first = slice.content.firstChild;
+  if (slice.openStart > 0 || !first || first.isInline) return false;
+  const { state } = view;
+  if (state.selection instanceof NodeSelection) return false;
+  try {
+    const tr = state.tr;
+    if (!tr.selection.empty) tr.deleteSelection();
+    const { $from } = tr.selection;
+    const parent = $from.parent;
+    if (!parent.isTextblock || parent.type.spec.code || $from.depth < 1) return false;
+    const depth = $from.depth;
+    if (parent.content.size === 0) {
+      tr.replaceWith($from.before(depth), $from.after(depth), slice.content);
+    } else if ($from.parentOffset === parent.content.size) {
+      tr.insert($from.after(depth), slice.content);
+    } else if ($from.parentOffset === 0) {
+      tr.insert($from.before(depth), slice.content);
+    } else {
+      const pos = $from.pos;
+      // Split the paragraph at the caret; the pasted blocks go between the halves.
+      tr.split(pos);
+      tr.insert(pos + 1, slice.content);
+    }
+    view.dispatch(tr.scrollIntoView().setMeta('paste', true).setMeta('uiEvent', 'paste'));
+    return true;
+  } catch {
+    return false;
   }
 }

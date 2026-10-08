@@ -637,12 +637,21 @@ function writeChildren(
   ctx: BlockContext,
   tight: boolean,
 ) {
-  parent.forEach((child, offset, index) => {
-    if (index > 0) {
+  let written = false;
+  parent.forEach((child, offset) => {
+    const pos = parentPos + 1 + offset;
+    // An empty paragraph beside other content has no Markdown form: it takes no space in the
+    // source, and the caret in it maps to where it would be (see `equivalence.ts`).
+    if (child.type.name === 'paragraph' && child.content.size === 0 && parent.childCount > 1) {
+      ctx.tbs.push({ pm: pos + 1, size: 0, s: w.pos, e: w.pos, map: [] });
+      return;
+    }
+    if (written) {
       if (tight && isList(child)) w.newline();
       else w.blankLine();
     }
-    writeBlock(child, parentPos + 1 + offset, w, ctx);
+    written = true;
+    writeBlock(child, pos, w, ctx);
   });
 }
 
