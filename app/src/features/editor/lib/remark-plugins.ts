@@ -1,5 +1,5 @@
 import { toString as mdastToString } from 'mdast-util-to-string';
-import type { Blockquote, PhrasingContent, Root, Text } from 'mdast';
+import type { Blockquote, Paragraph, PhrasingContent, Root, Text } from 'mdast';
 import { visit } from 'unist-util-visit';
 
 import { alignValueToSource } from './source-map';
@@ -19,11 +19,33 @@ import { alignValueToSource } from './source-map';
  */
 const CITE_PATTERN = /\[@([^\]]+)\]|\\cite\{([^}]+)\}/g;
 
-function splitKeys(raw: string): string[] {
+export function splitKeys(raw: string): string[] {
   return raw
     .split(/[,;]/)
     .map((part) => part.replace(/^@/, '').trim())
     .filter(Boolean);
+}
+
+/** One citation token in a text: its extent and the keys it lists (`[@a; @b]` is one token, two keys). */
+export interface CitationMatch {
+  index: number;
+  length: number;
+  keys: string[];
+}
+
+/** Every `[@key]` / `\cite{key}` token in `value`, as `remarkCitations` reads them. */
+export function findCitations(value: string): CitationMatch[] {
+  const out: CitationMatch[] = [];
+  const pattern = new RegExp(CITE_PATTERN.source, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    out.push({
+      index: match.index,
+      length: match[0].length,
+      keys: splitKeys(match[1] ?? match[2] ?? ''),
+    });
+  }
+  return out;
 }
 
 export function remarkCitations() {
@@ -117,17 +139,22 @@ const CALLOUT_PATTERN = new RegExp(`^(${CALLOUT_KEYWORDS.join('|')})\\b`);
  * override can render it as a `<Callout>` card instead — no new tag name,
  * for the same `Components`-typing reason as `remarkCitations`.
  */
+export function calloutOf(node: Blockquote): { kind: CalloutKind; label: string } | null {
+  const firstParagraph = node.children[0];
+  if (!firstParagraph || firstParagraph.type !== 'paragraph') return null;
+  const firstChild = firstParagraph.children[0];
+  if (!firstChild || firstChild.type !== 'strong') return null;
+  const label = mdastToString(firstChild).trim();
+  const kindMatch = CALLOUT_PATTERN.exec(label);
+  return kindMatch ? { kind: kindMatch[1] as CalloutKind, label } : null;
+}
+
 export function remarkCallouts() {
   return (tree: Root) => {
     visit(tree, 'blockquote', (node: Blockquote) => {
-      const firstParagraph = node.children[0];
-      if (!firstParagraph || firstParagraph.type !== 'paragraph') return;
-      const firstChild = firstParagraph.children[0];
-      if (!firstChild || firstChild.type !== 'strong') return;
-
-      const label = mdastToString(firstChild).trim();
-      const kindMatch = CALLOUT_PATTERN.exec(label);
-      if (!kindMatch) return;
+      const callout = calloutOf(node);
+      if (!callout) return;
+      const firstParagraph = node.children[0] as Paragraph;
 
       // Drop the leading `**Theorem 1.1**` (and any immediately-following
       // punctuation like `:`/`—`) from the visible body — it's shown as the
@@ -140,7 +167,7 @@ export function remarkCallouts() {
       firstParagraph.children = rest;
 
       (node as Blockquote & { data?: Record<string, unknown> }).data = {
-        hProperties: { calloutkind: kindMatch[1], calloutlabel: label },
+        hProperties: { calloutkind: callout.kind, calloutlabel: callout.label },
       };
     });
   };
