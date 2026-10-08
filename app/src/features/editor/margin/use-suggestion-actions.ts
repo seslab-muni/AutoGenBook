@@ -23,6 +23,51 @@ export type ActionResult = { ok: true } | { ok: false; failure: CopilotFailure }
 const UNDO_TOAST_MS = 12_000;
 
 /**
+ * How long an accept or an undo waits for the server before giving up and letting autosave go on
+ * (a hold that is never released would leave the section unsaved for good). Mutable for tests.
+ */
+export const requestTiming = { timeoutMs: 20_000 };
+
+class RequestTimeout extends Error {
+  constructor() {
+    super('The server did not answer in time.');
+  }
+}
+
+/** The save-and-hold, given up on after the timeout - and released at once if it only completes late. */
+async function acquireHold(c: MarginCardContext): Promise<() => void> {
+  const pending = c.holdSaving();
+  try {
+    return await withTimeout(pending);
+  } catch (error) {
+    if (error instanceof RequestTimeout) {
+      void pending.then(
+        (release) => release(),
+        () => undefined,
+      );
+    }
+    throw error;
+  }
+}
+
+/** Rejects with `RequestTimeout` if `work` has not settled in time; `work` itself is left running. */
+function withTimeout<T>(work: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new RequestTimeout()), requestTiming.timeoutMs);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/**
  * Suggestions whose text was restored with Undo in this session. The server has no such state (an
  * undo is an ordinary content write), so the card says "Accepted, then undone" only while this tab
  * remembers it; after a reload it reads Accepted again.
@@ -87,29 +132,43 @@ export function useSuggestionActions(ctx: MarginCardContext) {
       const c = ctxRef.current;
       let release: (() => void) | undefined;
       try {
-        release = await c.holdSaving();
+        release = await acquireHold(c);
       } catch (error) {
         toast.error(`Could not undo: ${problemMessage(error)}`);
         return;
       }
       try {
-        const node = await restore.mutateAsync({
-          contentMarkdown: previous,
-          expectedContentHash: appliedHash,
-        });
+        const node = await withTimeout(
+          restore.mutateAsync({
+            contentMarkdown: previous,
+            expectedContentHash: appliedHash,
+          }),
+        );
         c.applyServerContent(node.contentMarkdown, node.contentHash ?? null);
         useUndoneSuggestions.getState().mark(suggestionId);
         // The accept closed these threads and issues; the restored text is back to what they were about.
-        await Promise.allSettled(
+        const reopened = await Promise.allSettled(
           reopen.map((commentId) => resolve.mutateAsync({ commentId, resolved: false })),
         );
+        const failedToReopen = reopened.filter((r) => r.status === 'rejected').length;
         toast.success('Text restored', {
           description:
-            reopen.length > 0
-              ? 'The suggestion stays marked accepted; the comments and issues it closed are open again.'
-              : 'The suggestion stays marked accepted.',
+            reopen.length === 0
+              ? 'The suggestion stays marked accepted.'
+              : failedToReopen === 0
+                ? 'The suggestion stays marked accepted; the comments and issues it closed are open again.'
+                : `The suggestion stays marked accepted. ${failedToReopen} of ${reopen.length} comments and issues it closed could not be reopened: reopen them by hand.`,
         });
       } catch (error) {
+        if (error instanceof RequestTimeout) {
+          void queryClient.invalidateQueries({
+            queryKey: projectKeys.outlineNode(c.projectId, c.nodeId),
+          });
+          toast.error(
+            'The server did not answer the undo in time. The section was refreshed: check whether the text was restored.',
+          );
+          return;
+        }
         toast.error(
           isContentConflict(error)
             ? 'The section was edited after the suggestion was applied, so it was left as it is. Undo it by hand.'
@@ -119,7 +178,7 @@ export function useSuggestionActions(ctx: MarginCardContext) {
         release();
       }
     },
-    [restore, resolve],
+    [restore, resolve, queryClient],
   );
 
   const acceptSuggestion = useCallback(
@@ -130,12 +189,15 @@ export function useSuggestionActions(ctx: MarginCardContext) {
       let release: (() => void) | undefined;
       try {
         try {
-          release = await c.holdSaving();
+          release = await acquireHold(c);
         } catch (error) {
           return {
             ok: false,
             failure: {
-              message: `Your latest edits could not be saved first, so nothing was applied: ${problemMessage(error)}`,
+              message:
+                error instanceof RequestTimeout
+                  ? 'Saving your latest edits took too long, so nothing was applied. Try again.'
+                  : `Your latest edits could not be saved first, so nothing was applied: ${problemMessage(error)}`,
               code: null,
             },
           };
@@ -154,11 +216,13 @@ export function useSuggestionActions(ctx: MarginCardContext) {
                 payload,
               );
           const expectedContentHash = await baseContentHash(queryClient, c.projectId, c.nodeId);
-          const result = await accept.mutateAsync({
-            suggestionId: suggestion.id,
-            ...(hunkIndexes ? { hunkIndexes } : {}),
-            expectedContentHash,
-          });
+          const result = await withTimeout(
+            accept.mutateAsync({
+              suggestionId: suggestion.id,
+              ...(hunkIndexes ? { hunkIndexes } : {}),
+              expectedContentHash,
+            }),
+          );
           c.applyServerContent(result.node.contentMarkdown, result.node.contentHash ?? null);
           const appliedHash = result.node.contentHash;
           toast.success('Suggestion applied', {
@@ -174,6 +238,24 @@ export function useSuggestionActions(ctx: MarginCardContext) {
           });
           return { ok: true };
         } catch (error) {
+          if (error instanceof RequestTimeout) {
+            accept.reset(); // no longer waiting on it: the card's buttons come back
+            // The answer may still arrive (and is merged when it does); look at what the server has now.
+            void queryClient.invalidateQueries({
+              queryKey: projectKeys.outlineNode(c.projectId, c.nodeId),
+            });
+            void queryClient.invalidateQueries({
+              queryKey: projectKeys.nodeComments(c.projectId, c.nodeId),
+            });
+            return {
+              ok: false,
+              failure: {
+                message:
+                  'The server did not answer in time. The section and its suggestions were refreshed: check whether the suggestion was applied before trying again.',
+                code: null,
+              },
+            };
+          }
           return { ok: false, failure: describeAcceptError(error) };
         }
       } finally {

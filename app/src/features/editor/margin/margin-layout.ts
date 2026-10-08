@@ -18,7 +18,7 @@ export interface LayoutOptions {
  * Google-Docs-style stacking: cards sorted by `y` sit at their anchor, each pushed down just
  * enough to clear the one above. With a focused card, it stays at its own `y` and the cards before
  * it are pushed up instead (never past `minTop`; if that would not fit, the plain top-down layout
- * is used). Pure: positions in, tops out. Input order breaks ties between equal `y`.
+ * is used). Pure: positions in, tops out. A focused card wins a tie on `y`, then input order.
  */
 export function layoutMargin(
   items: readonly LayoutItem[],
@@ -26,7 +26,14 @@ export function layoutMargin(
 ): Map<string, number> {
   const sorted = items
     .map((item, order) => ({ item, order }))
-    .sort((a, b) => a.item.y - b.item.y || a.order - b.order)
+    // Equal `y` (cards with no anchor all sit at the top): the focused one goes first, so it is the
+    // one that keeps the spot and the others stack below it instead of pushing it down.
+    .sort(
+      (a, b) =>
+        a.item.y - b.item.y ||
+        Number(b.item.id === focusedId) - Number(a.item.id === focusedId) ||
+        a.order - b.order,
+    )
     .map(({ item }) => item);
 
   const tops = new Array<number>(sorted.length);

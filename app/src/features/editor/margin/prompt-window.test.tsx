@@ -556,6 +556,114 @@ describe('prompt window', () => {
   });
 });
 
+describe('prompt window: review round 2', () => {
+  it('Escape in the "Rewrite this section?" dialog closes only the dialog, not the window or its text', async () => {
+    const user = userEvent.setup();
+    open({ text: 'start over' });
+    await user.click(screen.getByRole('radio', { name: 'Rewrite' }));
+    await user.click(screen.getByRole('button', { name: 'Rewrite' }));
+    await screen.findByRole('alertdialog');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.queryByText('closed')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Instruction for the copilot' })).toHaveValue(
+      'start over',
+    );
+  });
+
+  it('a retry keeps the issues and comments the first request was about, not every open one', async () => {
+    const user = userEvent.setup();
+    const threads = ['a', 'b', 'c', 'd'].map((id, i) =>
+      makeThread(makeReview({ id }), { range: { start: 20 + i, end: 40 } }),
+    );
+    const { startRevision } = open({
+      anchor: null,
+      threads,
+      ctx: { knownIds: () => new Set(['a', 'b', 'c', 'd']) },
+      draft: { fixIssueIds: ['b', 'zzz-deleted'], origin: 'retry' },
+      text: 'again',
+      explicit: true,
+    });
+    // Chips start as the retry's: fix issues on (set through the store like use-copilot does).
+    act(() => useMarginStore.getState().updatePrompt({ chips: { ...noChips(), fixIssues: true } }));
+    expect(screen.getByRole('button', { name: 'fix 1 issue' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(screen.getByRole('button', { name: 'Revise' }));
+    expect(startRevision.mock.calls[0]![0]).toMatchObject({ params: { fixIssueIds: ['b'] } });
+  });
+
+  it('cancelling forgets the Rewrite verb: the next window starts as Revise', async () => {
+    const user = userEvent.setup();
+    open({ text: 'x' });
+    await user.click(screen.getByRole('radio', { name: 'Rewrite' }));
+    await user.keyboard('{Escape}');
+    expect(screen.getByText('closed')).toBeInTheDocument();
+    act(() =>
+      useMarginStore.getState().openPrompt(
+        {
+          kind: 'prompt',
+          anchor: null,
+          verb: 'revise',
+          chips: noChips(),
+          origin: 'header',
+          replaces: null,
+          threadId: null,
+        },
+        'rl-sec-1-1',
+      ),
+    );
+    expect(screen.getByRole('radio', { name: 'Revise' })).toBeChecked();
+  });
+
+  it('builds the request from the passage as it reads now, and refuses when it is gone', async () => {
+    const user = userEvent.setup();
+    const moved = { quote: 'moved text', prefix: 'a', suffix: 'b', start: 55, end: 65 };
+    const anchorFor = vi.fn(() => moved);
+    const { startRevision } = open({
+      anchor: ANCHOR,
+      ctx: { anchorFor },
+      range: { start: 55, end: 65 },
+      text: 'tighten',
+    });
+    await user.click(screen.getByRole('button', { name: 'Revise' }));
+    expect(anchorFor).toHaveBeenCalledWith({ start: 55, end: 65 });
+    expect(startRevision.mock.calls[0]![0]).toMatchObject({
+      scope: 'range',
+      anchor: { quote: 'moved text', start: 55, end: 65 },
+    });
+  });
+
+  it('shows an error instead of sending when the selected passage is gone', async () => {
+    const user = userEvent.setup();
+    const { startRevision } = open({
+      anchor: ANCHOR,
+      ctx: { anchorFor: () => ({ quote: '', start: 0, end: 0 }) },
+      text: 'tighten',
+    });
+    await user.click(screen.getByRole('button', { name: 'Revise' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/changed or is gone/);
+    expect(startRevision).not.toHaveBeenCalled();
+  });
+
+  it('offers Start full run when the server says the outline changed since the base run', async () => {
+    const user = userEvent.setup();
+    useUiStore.setState({ activeModal: null });
+    const { startRevision } = open({ text: 'again' });
+    await user.click(screen.getByRole('radio', { name: 'Rewrite' }));
+    startRevision.mockRejectedValueOnce(
+      problem(409, 'x', 'the outline has changed since the base run; start a full run'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Rewrite' }));
+    await user.click(await screen.findByRole('button', { name: 'Rewrite section' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/outline has changed since the last run/);
+    await user.click(within(alert).getByRole('button', { name: 'Start full run' }));
+    expect(useUiStore.getState().activeModal).toBe('start-run');
+  });
+});
+
 describe('prompt request helpers', () => {
   it('counts sentences, at least one', () => {
     expect(countSentences('One.')).toBe(1);

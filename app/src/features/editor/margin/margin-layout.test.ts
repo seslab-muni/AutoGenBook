@@ -24,6 +24,16 @@ describe('layoutMargin', () => {
     expect(tops.get('late')).toBe(500);
   });
 
+  it('lets the focused card win a tie on y, so the others stack below it', () => {
+    const tops = layoutMargin([item('x', 0), item('y', 0), item('z', 0)], {
+      gap: 0,
+      focusedId: 'z',
+    });
+    expect(tops.get('z')).toBe(0);
+    expect(tops.get('x')).toBe(100);
+    expect(tops.get('y')).toBe(200);
+  });
+
   it('never leaves overlaps for any mix of positions', () => {
     const items = Array.from({ length: 120 }, (_, i) =>
       item(`c${i}`, (i * 37) % 900, 40 + (i % 5) * 30),

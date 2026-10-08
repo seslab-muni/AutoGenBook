@@ -102,12 +102,15 @@ describe('typing while the copilot writes the section (routed, MSW-backed)', () 
     await openSource();
     const card = await pendingSuggestion(user);
     const accepted = serverText();
-    mockRevisionConfig.acceptDelayMs = 400;
+    // Longer than the 800 ms autosave debounce: the debounce fires while the POST is in flight.
+    mockRevisionConfig.acceptDelayMs = 1300;
     const io = recordWrites();
 
     await user.click(within(card).getByRole('button', { name: 'Accept' }));
-    // The POST is in flight: type a character now.
+    // The POST is in flight: type a character now, and ask for a save by hand as well.
     type('X');
+    editorView().focus();
+    await user.keyboard('{Control>}s{/Control}');
     await screen.findByText(/This section was changed elsewhere/, {}, LONG);
     // Give a (wrongly) released autosave time to show itself: its debounce is 800 ms.
     await new Promise((resolve) => setTimeout(resolve, 1500));

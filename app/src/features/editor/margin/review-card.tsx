@@ -45,7 +45,11 @@ export function ReviewStatus({ thread, approximate }: MarginCardPartProps) {
         <Icon aria-hidden="true" />
         {major ? 'Major' : 'Minor'}
       </Badge>
-      <Badge variant="secondary" className="max-w-40 truncate" title={payload.type}>
+      <Badge
+        variant="secondary"
+        className="max-w-full min-w-0 truncate sm:max-w-40"
+        title={payload.type}
+      >
         {reviewTypeLabel(payload.type)}
       </Badge>
       {payload.outdated ? (
@@ -120,11 +124,11 @@ export function ReviewCardBody(props: MarginCardPartProps) {
           className="flex flex-wrap items-center gap-1.5 font-mono text-xs"
           aria-label={`Replace “${payload.replaceFrom}” with “${payload.replaceTo}”`}
         >
-          <span className="rounded border border-destructive/40 bg-destructive/15 px-1.5 py-0.5 break-words text-foreground line-through decoration-destructive">
+          <span className="max-w-full min-w-0 rounded border border-destructive/40 bg-destructive/15 px-1.5 py-0.5 [overflow-wrap:anywhere] text-foreground line-through decoration-destructive">
             {payload.replaceFrom}
           </span>
           <ArrowRight className="size-3 text-muted-foreground" aria-hidden="true" />
-          <span className="rounded border border-success/50 bg-success/15 px-1.5 py-0.5 break-words text-foreground underline decoration-success decoration-2 underline-offset-2">
+          <span className="max-w-full min-w-0 rounded border border-success/50 bg-success/15 px-1.5 py-0.5 [overflow-wrap:anywhere] text-foreground underline decoration-success decoration-2 underline-offset-2">
             {payload.replaceTo}
           </span>
         </p>

@@ -70,6 +70,11 @@ export interface MarginCardContext {
    */
   serverAnchor: (anchor: AnchorLike | null | undefined) => CommentAnchorIn | null;
   /**
+   * The text at a live range of the section's current draft, as an anchor: what a request is
+   * built from when it is sent, so edits made since the selection never leave stale offsets.
+   */
+  anchorFor?: ((range: { start: number; end: number }) => AnchorLike) | undefined;
+  /**
    * Why the copilot's writes (Accept, Undo, a new revision) are blocked right now - the section was
    * changed elsewhere and the person has not chosen yet - or `null`.
    */

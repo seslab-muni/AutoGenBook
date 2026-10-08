@@ -76,6 +76,19 @@ describe('SelectionLayer', () => {
     expect(onComment).toHaveBeenCalledWith(expect.objectContaining({ quote: 'hello world' }));
   });
 
+  it('brings the bar back when the same text is selected again after the selection collapsed', async () => {
+    const user = userEvent.setup();
+    render(<Harness text="hello world" />);
+    select(0, 5);
+    await screen.findByRole('toolbar');
+    screen.getByTestId('pane').focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+    select(5, 5);
+    select(0, 5);
+    expect(await screen.findByRole('toolbar')).toBeInTheDocument();
+  });
+
   it('with only a caret inside a highlight, Ctrl+Alt+M focuses its card instead of commenting', async () => {
     const user = userEvent.setup();
     const onComment = vi.fn();

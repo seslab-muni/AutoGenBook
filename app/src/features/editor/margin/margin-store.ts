@@ -55,6 +55,13 @@ export type ComposerDraft =
       replaces: { id: string; status: string } | null;
       /** The comment or review thread the suggestion should arrive in (Try again on one that did). */
       threadId: string | null;
+      /**
+       * The review issues / comments the original request was about (Try again): kept as they were
+       * asked, so editing the instruction does not widen "fix this issue" to every open one.
+       * `undefined` = whatever is open in the window's scope.
+       */
+      fixIssueIds?: string[] | undefined;
+      addressCommentIds?: string[] | undefined;
       /** Where this prompt's unsent text and options are kept (`promptKey`): one per scope. */
       key: string;
       /** Shown under the scope pill: why the window is not what the person asked for (a selection that is gone). */
@@ -111,6 +118,8 @@ interface MarginState {
     patch: Partial<Pick<Extract<ComposerDraft, { kind: 'prompt' }>, 'verb' | 'chips'>>,
   ) => void;
   closeComposer: () => void;
+  /** Forgets the verb and options kept for a prompt scope (the window was cancelled on purpose). */
+  forgetPromptExtras: (key: string) => void;
   reset: (nodeId?: string) => void;
 }
 
@@ -194,6 +203,13 @@ export const useMarginStore = create<MarginState>()((set) => ({
       const { [nodeId]: _used, ...rest } = state.savedComposers;
       void _used;
       return { composer: saved, focusedId: DRAFT_ID, savedComposers: rest };
+    }),
+  forgetPromptExtras: (key) =>
+    set((state) => {
+      if (!(key in state.promptExtras)) return state;
+      const { [key]: _removed, ...rest } = state.promptExtras;
+      void _removed;
+      return { promptExtras: rest };
     }),
   closeComposer: () =>
     set((state) => ({

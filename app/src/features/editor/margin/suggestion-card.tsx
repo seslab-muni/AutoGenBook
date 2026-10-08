@@ -45,7 +45,10 @@ import type { MarginThread } from './threads';
 
 function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  const minutes = Math.floor(seconds / 60);
+  // A row left "running" by a crashed worker would otherwise read like 75830:12.
+  if (minutes >= 60) return minutes >= 24 * 60 ? 'over a day' : `${Math.floor(minutes / 60)} h`;
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
 /** Ticks once a second while mounted; the elapsed time of a running revision. */
@@ -279,6 +282,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
   // True for the whole of an action, including the save before an accept: no second click can start another.
   const [working, setWorking] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const editing = useRef(false);
   const own = ctx.currentUserId !== null && suggestion.authorId === ctx.currentUserId;
   const undone = useUndoneSuggestions((state) => suggestion.id in state.ids);
   const status = suggestion.status;
@@ -308,14 +312,17 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
 
   async function run(
     task: () => Promise<{ ok: true } | { ok: false; failure: CopilotFailure }>,
-    leave: boolean,
+    leave: boolean | 'card',
   ) {
     setFailure(null);
     setWorking(true);
     const result = await task().finally(() => setWorking(false));
     if (!result.ok) setFailure(result.failure);
     // The card leaves the margin (finished suggestions are hidden by default): keep the keyboard in the text.
-    else if (leave) ctx.restoreEditorFocus();
+    else if (leave === 'card') {
+      // The button that had focus is gone but the card stays (a cancelled revision): keep the keyboard in it.
+      useMarginStore.getState().focusCard(thread.id);
+    } else if (leave) ctx.restoreEditorFocus();
   }
 
   async function sendAgain() {
@@ -367,11 +374,14 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
     </span>
   );
 
+  // The passage this was about is gone from the text: the server refuses to apply it.
+  const orphanedRange =
+    status === 'pending' && payload.scope === 'range' && suggestion.anchor?.start == null;
   const notice: ReactNode =
     status !== 'pending'
       ? null
-      : payload.scope === 'range' && suggestion.anchor?.start == null
-        ? 'The text changed since this was suggested. You can still accept it, or try again on the current text.'
+      : orphanedRange
+        ? 'The text this was about has changed or is gone, so this can no longer be accepted. Try again to get a suggestion for the current text.'
         : payload.scope === 'section' &&
             currentHash &&
             payload.baseContentHash &&
@@ -382,13 +392,33 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
   const tryAgain = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button type="button" variant="outline" size="xs" disabled={!idle || !!blocked}>
+        <Button
+          type="button"
+          variant={orphanedRange ? 'default' : 'outline'}
+          size="xs"
+          disabled={!idle || !!blocked}
+        >
           Try again
           <ChevronDown aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        <DropdownMenuItem onSelect={() => ctx.onTryAgain?.(suggestion, thread)}>
+      <DropdownMenuContent
+        align="start"
+        // The menu would hand focus back to its button, scrolling the lane to it and away from the
+        // prompt window that has just opened: leave focus where the window put it.
+        onCloseAutoFocus={(event) => {
+          if (editing.current) {
+            event.preventDefault();
+            editing.current = false;
+          }
+        }}
+      >
+        <DropdownMenuItem
+          onSelect={() => {
+            editing.current = true;
+            ctx.onTryAgain?.(suggestion, thread);
+          }}
+        >
           Edit the instruction…
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void sendAgain()}>Ask again as it was</DropdownMenuItem>
@@ -408,7 +438,9 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
       {status === 'running' ? (
         <>
           {payload.instruction ? (
-            <p className="text-xs text-muted-foreground italic">“{payload.instruction}”</p>
+            <p className="text-xs [overflow-wrap:anywhere] text-muted-foreground italic">
+              “{payload.instruction}”
+            </p>
           ) : null}
           <RunningProgress suggestion={suggestion} />
           <div className="flex items-center gap-1.5">
@@ -418,7 +450,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
                 variant="outline"
                 size="xs"
                 disabled={!idle}
-                onClick={() => void run(() => actions.cancelSuggestion(suggestion), false)}
+                onClick={() => void run(() => actions.cancelSuggestion(suggestion), 'card')}
               >
                 Cancel
               </Button>
@@ -478,7 +510,7 @@ function SuggestionActions({ suggestion, thread, ctx }: BodyProps) {
               <Button
                 type="button"
                 size="xs"
-                disabled={!idle || nothingTicked || !!blocked}
+                disabled={!idle || nothingTicked || !!blocked || orphanedRange}
                 title={blocked ?? undefined}
                 onClick={() =>
                   void run(

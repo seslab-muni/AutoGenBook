@@ -1991,6 +1991,7 @@ const suggestionStreamHandler = sse<{
         data: event.data as SuggestionTerminal,
       });
       client.close();
+      stop();
     } else {
       client.send({ id: String(event.seq), event: 'progress', data: event });
     }

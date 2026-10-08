@@ -63,6 +63,12 @@ function StudioPage() {
     });
   }, [navigate]);
 
+  // `?copilot=rewrite` is for one section: with none selected nothing would consume it, and it would
+  // open on whichever section is picked next (and come back with Back/Forward).
+  useEffect(() => {
+    if (copilot && !node) consumeRewrite();
+  }, [copilot, node, consumeRewrite]);
+
   function handleSelectNode(nodeId: string | null) {
     void navigate({
       search: (prev) => {

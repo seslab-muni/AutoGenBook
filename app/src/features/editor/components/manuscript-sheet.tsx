@@ -43,7 +43,7 @@ import { normalizeEol } from '@/features/editor/lib/eol';
 import { sha256Hex } from '@/lib/content-hash';
 import { problemMessage } from '@/features/editor/margin/errors';
 import { ConfirmDialog } from '@/components/confirm-dialog';
-import type { Anchor } from '@/features/editor/lib/anchors';
+import { anchorFromUnitRange, type Anchor } from '@/features/editor/lib/anchors';
 import type { MarginCardContext } from '@/features/editor/margin/card-registry';
 import { writeGeometry, sourceGeometry } from '@/features/editor/margin/geometry';
 import { useMarginHost } from '@/features/editor/margin/margin-host';
@@ -227,16 +227,6 @@ export function ManuscriptSheet({
   useEffect(() => {
     flushRef.current = flush;
   }, [flush]);
-  /** Set when the person chose to leave and discard: nothing is saved on the way out. */
-  const discardRef = useRef(false);
-  useEffect(
-    () => () => {
-      // Leaving saves what is pending - unless it was discarded on purpose, or the server's text moved
-      // under it (the save would only be refused again).
-      if (!discardRef.current && incomingRef.current === null) flushRef.current();
-    },
-    [],
-  );
 
   // Stable identities (here, `closeSources` and the store's `setSelection`) keep `SectionEditor`'s
   // CodeMirror extensions from being reconfigured on every keystroke or caret move.
@@ -291,6 +281,17 @@ export function ManuscriptSheet({
   }, [node]);
   /** The other version waiting for the user's choice, raw, with its hash (null until known). */
   const incomingRef = useRef<{ raw: string; hash: string | null } | null>(null);
+
+  /** Set when the person chose to leave and discard: nothing is saved on the way out. */
+  const discardRef = useRef(false);
+  useEffect(
+    () => () => {
+      // Leaving saves what is pending - unless it was discarded on purpose, or the server's text moved
+      // under it (the save would only be refused again).
+      if (!discardRef.current && incomingRef.current === null) flushRef.current();
+    },
+    [],
+  );
 
   const adoptServerContent = useCallback(
     (raw: string, hash?: string | null, updatedAt?: string) => {
@@ -505,6 +506,11 @@ export function ManuscriptSheet({
       toServerAnchor(anchor, { crlf: baseRawRef.current.includes('\r') }),
     [],
   );
+  const anchorFor = useCallback(
+    (range: { start: number; end: number }) =>
+      anchorFromUnitRange(draftRef.current, range.start, range.end),
+    [],
+  );
   const copilot = useCopilot({
     projectId,
     nodeId: node.id,
@@ -597,6 +603,7 @@ export function ManuscriptSheet({
       holdSaving,
       sectionNumber: node.sectionNumber,
       serverAnchor,
+      anchorFor,
       editBlockedReason,
       revisable: anchorsEnabled,
       rewriteBlock,
@@ -618,6 +625,7 @@ export function ManuscriptSheet({
       flushEdits,
       holdSaving,
       serverAnchor,
+      anchorFor,
       editBlockedReason,
       anchorsEnabled,
       rewriteBlock,

@@ -78,6 +78,9 @@ export function SelectionLayer({
   }, [enabled, selection, text]);
   const selectionKey = range ? `${view}:${range.from}:${range.to}` : null;
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  // A dismissal is for that selection only: once it collapses or moves, selecting the same text
+  // again brings the toolbar back.
+  if (dismissedKey !== null && selectionKey !== dismissedKey) setDismissedKey(null);
   const [box, setBox] = useState<Box | null>(null);
   const [paneSize, setPaneSize] = useState({ width: 0, height: 0 });
   const visible = selectionKey !== null && selectionKey !== dismissedKey;

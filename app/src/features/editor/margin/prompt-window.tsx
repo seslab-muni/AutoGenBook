@@ -90,6 +90,7 @@ export function PromptDraftCard({
 }: DraftCardProps) {
   const prompt = draft.kind === 'prompt' ? draft : null;
   const closeComposer = useMarginStore((state) => state.closeComposer);
+  const forgetPromptExtras = useMarginStore((state) => state.forgetPromptExtras);
   const updatePrompt = useMarginStore((state) => state.updatePrompt);
   const setDraftText = useMarginStore((state) => state.setDraftText);
   const clearDraftText = useMarginStore((state) => state.clearDraftText);
@@ -121,9 +122,17 @@ export function PromptDraftCard({
     () => threadsInScope(threads, 'comment', range, sectionScope),
     [threads, range, sectionScope],
   );
+  // A retry keeps the cards the first request was about; otherwise it is whatever is open in scope.
+  const known = ctx.knownIds();
+  const issueIds = prompt?.fixIssueIds
+    ? prompt.fixIssueIds.filter((id) => known.has(id))
+    : issues.map((thread) => thread.id);
+  const commentIds = prompt?.addressCommentIds
+    ? prompt.addressCommentIds.filter((id) => known.has(id))
+    : comments.map((thread) => thread.id);
   const cap = idCap(prompt?.threadId);
-  const issueCount = Math.min(issues.length, cap);
-  const commentCount = Math.min(comments.length, cap);
+  const issueCount = Math.min(issueIds.length, cap);
+  const commentCount = Math.min(commentIds.length, cap);
   // Why Rewrite is unavailable, worked out before anything is sent.
   const rewriteBlocked = !sectionScope
     ? 'Rewrite drafts the whole section again; it cannot be limited to a selection.'
@@ -153,7 +162,11 @@ export function PromptDraftCard({
   }, [laidOut]);
 
   function close(clear: boolean) {
-    if (clear) clearDraftText(key);
+    if (clear) {
+      clearDraftText(key);
+      // Cancelled on purpose: the next window starts as a plain Revise again.
+      if (prompt) forgetPromptExtras(prompt.key);
+    }
     closeComposer();
     // Back to what opened it: the header button, else the text.
     const origin = prompt?.origin;
@@ -174,10 +187,20 @@ export function PromptDraftCard({
       setConfirming(true);
       return;
     }
-    const serverAnchor = anchor ? ctx.serverAnchor(anchor) : null;
-    if (anchor && !serverAnchor && verb === 'revise') {
-      setError({ message: 'Select the text again, then choose Prompt….', code: null });
-      return;
+    // The passage as it reads now, not as it was when the window opened: offsets from then would be
+    // wrong after edits above it (and could point the server at another copy of a repeated quote).
+    let serverAnchor = null;
+    if (anchor) {
+      const live = range && ctx.anchorFor ? ctx.anchorFor(range) : range ? anchor : null;
+      serverAnchor = live ? ctx.serverAnchor(live) : null;
+      if (!serverAnchor && verb === 'revise') {
+        setError({
+          message:
+            'The selected text has changed or is gone. Select it again, then choose Prompt….',
+          code: null,
+        });
+        return;
+      }
     }
     inFlight.current = true;
     setBusy(true);
@@ -189,8 +212,8 @@ export function PromptDraftCard({
         instruction: text.trim(),
         threadId: prompt.threadId,
         chips,
-        fixIssueIds: issues.map((thread) => thread.id),
-        addressCommentIds: comments.map((thread) => thread.id),
+        fixIssueIds: issueIds,
+        addressCommentIds: commentIds,
       });
       await ctx.startRevision(request, { moveFocus: true });
       // Try again: the new request replaces the suggestion it was made from.
@@ -231,6 +254,9 @@ export function PromptDraftCard({
       style={{ top: top ?? 0 }}
       // Anywhere in the window (a chip has focus after a click): Ctrl+Enter sends, Escape closes.
       onKeyDown={(event) => {
+        // The "Rewrite this section?" dialog is portalled but its events bubble here: its own keys
+        // (Escape closes it) are not the window's.
+        if (confirming) return;
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
           event.preventDefault();
           void submit();
@@ -319,16 +345,16 @@ export function PromptDraftCard({
         </Chip>
         <Chip
           pressed={chips.fixIssues}
-          disabled={chipsLocked || issues.length === 0}
-          title={issues.length === 0 ? 'No open review issues in this scope' : undefined}
+          disabled={chipsLocked || issueIds.length === 0}
+          title={issueIds.length === 0 ? 'No open review issues in this scope' : undefined}
           onToggle={() => toggle({ fixIssues: !chips.fixIssues })}
         >
           {`fix ${issueCount} ${issueCount === 1 ? 'issue' : 'issues'}`}
         </Chip>
         <Chip
           pressed={chips.addressComments}
-          disabled={chipsLocked || comments.length === 0}
-          title={comments.length === 0 ? 'No open comments in this scope' : undefined}
+          disabled={chipsLocked || commentIds.length === 0}
+          title={commentIds.length === 0 ? 'No open comments in this scope' : undefined}
           onToggle={() => toggle({ addressComments: !chips.addressComments })}
         >
           {`address ${commentCount} ${commentCount === 1 ? 'comment' : 'comments'}`}
@@ -416,6 +442,17 @@ export function PromptDraftCard({
               onClick={() => openModal('account')}
             >
               Account settings
+            </Button>
+          ) : null}
+          {error.remedy === 'start-run' ? (
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto p-0 text-xs text-foreground"
+              onClick={() => openModal('start-run')}
+            >
+              Start full run
             </Button>
           ) : null}
           {error.code === 'section_too_large' ? (

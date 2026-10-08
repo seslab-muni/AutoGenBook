@@ -159,6 +159,8 @@ export function useCopilot(options: UseCopilotOptions) {
         verb?: 'revise' | 'rewrite';
         replaces?: { id: string; status: string } | null;
         threadId?: string | null;
+        fixIssueIds?: string[];
+        addressCommentIds?: string[];
         notice?: string;
         explicit?: boolean;
       } = {},
@@ -175,6 +177,8 @@ export function useCopilot(options: UseCopilotOptions) {
           origin,
           replaces: o.replaces ?? null,
           threadId: o.threadId ?? null,
+          fixIssueIds: o.fixIssueIds,
+          addressCommentIds: o.addressCommentIds,
           notice: o.notice,
         },
         l.nodeId,
@@ -267,6 +271,8 @@ export function useCopilot(options: UseCopilotOptions) {
             },
             replaces: { id: suggestion.id, status: suggestion.status },
             threadId: payload.threadId,
+            fixIssueIds: payload.params.fixIssueIds,
+            addressCommentIds: payload.params.addressCommentIds,
             ...(lostRange
               ? {
                   notice:

@@ -1,4 +1,4 @@
-import { queryOptions, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { apiClient, unwrap } from '@/api/client';
 import type {
@@ -14,20 +14,6 @@ import { bumpNodeCount, invalidateAfterWrite, patchComments } from './comments';
 import { projectKeys } from './keys';
 
 /** The copilot (issue #182 phase 4): revisions, suggestions and what accepting one does to the caches. */
-
-export const suggestions = {
-  /** One suggestion with its full payload (the polling fallback of the event stream reads this). */
-  detail: (suggestionId: string) =>
-    queryOptions({
-      queryKey: ['suggestions', suggestionId] as const,
-      queryFn: () =>
-        unwrap(
-          apiClient.GET('/api/v1/comments/{comment_id}', {
-            params: { path: { comment_id: suggestionId } },
-          }),
-        ),
-    }),
-};
 
 /** Puts `row` into a node's threads: a new thread at the end, a row of an existing thread after its last row. */
 function insertRow(items: Comment[], row: Comment): Comment[] {

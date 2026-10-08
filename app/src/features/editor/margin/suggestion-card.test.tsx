@@ -16,7 +16,7 @@ import type { MarginCardContext } from './card-registry';
 import { MarginCard } from './margin-card';
 import { useMarginStore } from './margin-store';
 import { useSuggestionProgress } from './suggestion-progress';
-import { useUndoneSuggestions } from './use-suggestion-actions';
+import { requestTiming, useUndoneSuggestions } from './use-suggestion-actions';
 import { makeComment, makeContext, makeSuggestion, makeThread } from './test-helpers';
 
 const toasts = vi.hoisted(() => ({
@@ -309,15 +309,15 @@ describe('suggestion card: ready to review', () => {
     expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument();
   });
 
-  it('warns that the text changed under a range suggestion whose anchor is orphaned, and still offers Accept and Try again', async () => {
+  it('says an orphaned range suggestion can no longer be accepted: Accept is off and Try again leads', async () => {
     const { row: made } = await pendingSuggestion({ scope: 'range', params: { moreProofs: true } });
     // The range is gone from the text: the suggestion's own anchor has no offsets any more.
     const row = { ...made, anchor: { ...made.anchor!, start: null, end: null } } as Comment;
     renderSuggestion(row, { orphaned: true });
-    expect(screen.getByText(/The text changed since this was suggested/)).toBeInTheDocument();
+    expect(screen.getByText(/can no longer be accepted/)).toBeInTheDocument();
     expect(screen.getByText('Orphaned')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Accept' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
   });
 
   it('Reject sends the reject request and keeps the keyboard in the text', async () => {
@@ -548,6 +548,24 @@ describe('suggestion card: accept', () => {
     );
     expect(calls.filter((call) => call === 'hold')).toHaveLength(2);
     expect(toasts.success).toHaveBeenCalledWith('Text restored', expect.anything());
+  });
+
+  it('gives up on an accept the server never answers, releases the hold and says to check the text', async () => {
+    const user = userEvent.setup();
+    const { row } = await pendingSuggestion({ params: { moreProofs: true } });
+    server.use(http.post('*/api/v1/suggestions/:id/accept', () => new Promise(() => {})));
+    requestTiming.timeoutMs = 200;
+    try {
+      const { calls } = renderSuggestion(row);
+      await user.click(screen.getByRole('button', { name: 'Accept' }));
+      expect(await screen.findByRole('alert', undefined)).toHaveTextContent(
+        /did not answer in time/,
+      );
+      expect(calls).toContain('release');
+      expect(screen.getByRole('button', { name: 'Accept' })).toBeEnabled();
+    } finally {
+      requestTiming.timeoutMs = 20_000;
+    }
   });
 
   it('leaves the section alone and says why when the text was edited after the accept', async () => {

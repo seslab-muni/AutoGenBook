@@ -6,6 +6,8 @@ export interface CopilotFailure {
   message: string;
   /** The API's `code`, when it sent one (`llm_key_required` offers a shortcut to the account dialog). */
   code: string | null;
+  /** A way out the window can offer next to the message (a Rewrite needs a finished run first). */
+  remedy?: 'start-run' | undefined;
 }
 
 /** Why a revision could not start: the problem `code`s of `POST .../revisions`. */
@@ -62,10 +64,21 @@ function codeOf(error: unknown): string | null {
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
 /** What a Rewrite (the regenerate endpoint) can refuse with: it sends free text, so it is matched, not coded. */
-const REWRITE_PATTERNS: [RegExp, string][] = [
+const REWRITE_PATTERNS: [RegExp, string, 'start-run'?][] = [
   [
     /no successful prior run|work directory no longer exists/i,
     'There is no finished run to rewrite from. Start a full run first.',
+    'start-run',
+  ],
+  [
+    /outline has changed since the base run/i,
+    'The outline has changed since the last run, so this section cannot be rewritten on its own. Start a full run first.',
+    'start-run',
+  ],
+  [
+    /start a full run/i,
+    'There is no earlier run to rewrite this section from. Start a full run first.',
+    'start-run',
   ],
   [
     /already has a regenerate queued|already .*queued or running/i,
@@ -101,6 +114,7 @@ export function describeStartError(
     return {
       message: matched ? matched[1] : 'The rewrite could not be started. Try again later.',
       code,
+      remedy: matched?.[2],
     };
   }
   // Never an id the person cannot use.

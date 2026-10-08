@@ -2,7 +2,7 @@ import { memo, useCallback } from 'react';
 
 import { cn } from '@/lib/utils';
 import { cardKind, type MarginCardContext } from './card-registry';
-import { reviewPayload, reviewTypeLabel } from '@/features/editor/lib/card-payloads';
+import { cardRegionName } from './card-name';
 import { DefaultQuote, DefaultStatus } from './default-parts';
 import type { MarginThread } from './threads';
 
@@ -17,24 +17,8 @@ interface MarginCardProps {
   /** The anchor has no rendered highlight in the current view. */
   approximate?: boolean;
   onFocusCard: (id: string) => void;
-}
-
-/** Short label for the card region, read by screen readers: "Comment by Ada on “quote”". */
-function describeCard(thread: MarginThread, label: string): string {
-  if (thread.kind === 'review') {
-    // Reviewer cards have no author; what tells them apart is the issue itself.
-    const payload = reviewPayload(thread.root);
-    const text = thread.root.bodyMarkdown;
-    const gist = text.length > 50 ? `${text.slice(0, 50)}…` : text;
-    return `Review issue, ${payload.severity} ${reviewTypeLabel(payload.type)}: ${gist}`;
-  }
-  const author = thread.root.authorName;
-  const head = `${label}${author ? ` by ${author}` : ''}`;
-  if (thread.sectionLevel) return `${head} on the whole section`;
-  // By code point: a UTF-16 slice could cut an astral character in half.
-  const points = Array.from(thread.quote);
-  const quote = points.length > 60 ? `${points.slice(0, 60).join('')}…` : thread.quote;
-  return `${head}${thread.orphaned ? ' (orphaned)' : ''} on “${quote}”`;
+  /** Told apart from cards with the same name: " (2 of 3)". */
+  labelSuffix?: string;
 }
 
 /**
@@ -51,6 +35,7 @@ function MarginCardInner({
   focused,
   approximate = false,
   onFocusCard,
+  labelSuffix = '',
 }: MarginCardProps) {
   const ref = useCallback(
     (element: HTMLElement | null) => register(thread.id, element),
@@ -72,7 +57,7 @@ function MarginCardInner({
       data-thread-id={thread.id}
       data-kind={thread.kind}
       data-focused={focused || undefined}
-      aria-label={describeCard(thread, label)}
+      aria-label={`${cardRegionName(thread)}${labelSuffix}`}
       tabIndex={0}
       onFocus={() => onFocusCard(thread.id)}
       onClick={() => onFocusCard(thread.id)}
@@ -113,6 +98,7 @@ export const MarginCard = memo(MarginCardInner, (a, b) => {
     a.register === b.register &&
     a.focused === b.focused &&
     a.approximate === b.approximate &&
+    a.labelSuffix === b.labelSuffix &&
     a.ctx === b.ctx &&
     a.onFocusCard === b.onFocusCard &&
     x.root === y.root &&

@@ -1,5 +1,5 @@
 import { act, render } from '@testing-library/react';
-import { EditorView, runScopeHandlers } from '@codemirror/view';
+import { EditorView, keymap, runScopeHandlers } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
 
 import { SectionEditor } from '@/features/editor/components/section-editor';
@@ -34,6 +34,20 @@ describe('the editor uses the trimmed setup', () => {
     // If this fails, the alias in vite.config.ts is not applied here and the app build may not
     // apply it either (the bundle budget script checks the build itself).
     expect(upstream.basicSetup).toBe(ours.basicSetup);
+  });
+
+  it('is what the mounted editor runs: no completion or lint keymaps', () => {
+    // Unlike the identity check above, this fails whenever the editor was built from the upstream
+    // setup, however the alias is (not) applied.
+    const { view } = mount('abc');
+    const keys = view.state
+      .facet(keymap)
+      .flat()
+      .flatMap((binding) => [binding.key, binding.mac, binding.win, binding.linux])
+      .filter(Boolean);
+    expect(keys).not.toContain('Ctrl-Space'); // completionKeymap: start completion
+    expect(keys).not.toContain('Mod-Shift-m'); // lintKeymap: open the diagnostics panel
+    expect(keys).toContain('Mod-f'); // the search keymap is kept
   });
 
   it('opens the search panel with Ctrl+F', () => {

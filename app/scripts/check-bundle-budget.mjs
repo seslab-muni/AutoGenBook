@@ -30,10 +30,11 @@ function sumLeafGzip(node, nodeParts) {
   return (node.children ?? []).reduce((total, child) => total + sumLeafGzip(child, nodeParts), 0);
 }
 
-/** Every module path the visualizer reports, across all chunks. */
-function moduleNames(node, out = []) {
-  if (node.uid !== undefined) out.push(node.name);
-  for (const child of node.children ?? []) moduleNames(child, out);
+/** Every module the visualizer reports, across all chunks, as its full path (parent names joined). */
+function moduleNames(node, parents = [], out = []) {
+  const here = [...parents, node.name ?? ''];
+  if (node.uid !== undefined) out.push(here.join('/'));
+  for (const child of node.children ?? []) moduleNames(child, here, out);
   return out;
 }
 

@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import type { MarginCardContext } from './card-registry';
 import { COMPOSER_KINDS } from './composer-registry';
 import type { AnchorMeasure, MarginGeometry } from './geometry';
+import { cardRegionName } from './card-name';
 import { MarginCard } from './margin-card';
 import { ReviewSummaryStrip } from './review-summary-strip';
 import type { ReviewSummary } from '@/features/editor/lib/card-payloads';
@@ -281,6 +282,21 @@ export function MarginPanel({
     };
   }, [ordered, measures, focusedId, heights, inset]);
 
+  // Landmarks need distinct names: cards that would read the same ("Comment by Ada on “x”") are numbered.
+  const suffixes = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const item of ordered) {
+      if (!item.thread) continue;
+      const name = cardRegionName(item.thread);
+      groups.set(name, [...(groups.get(name) ?? []), item.id]);
+    }
+    const result = new Map<string, string>();
+    for (const ids of groups.values()) {
+      if (ids.length > 1) ids.forEach((id, i) => result.set(id, ` (${i + 1} of ${ids.length})`));
+    }
+    return result;
+  }, [ordered]);
+
   const extent = useMemo(() => {
     let bottom = 0;
     for (const item of tops.items) {
@@ -371,8 +387,20 @@ export function MarginPanel({
       if (!element || !lane || revealRef.current !== pending) return;
       const box = element.getBoundingClientRect();
       const view = lane.getBoundingClientRect();
-      if (box.bottom > view.bottom - 8) geometry.scrollBy(box.bottom - view.bottom + 24);
-      else if (box.top < view.top + 8) geometry.scrollBy(box.top - view.top - 24);
+      if (box.bottom > view.bottom - 8) {
+        // Never scroll the card's own top out of view, and - while that top is comfortably in view -
+        // never so far that less than a few lines of the text remain on screen.
+        let delta = Math.min(box.bottom - view.bottom + 24, box.top - view.top - 8);
+        if (box.top < view.bottom - 120) {
+          const room = geometry.contentHeight() - 160 - geometry.scrollTop();
+          delta = Math.min(delta, Math.max(0, room));
+        }
+        if (delta > 0) geometry.scrollBy(delta);
+        else {
+          revealRef.current = null;
+          return;
+        }
+      } else if (box.top < view.top + 8) geometry.scrollBy(box.top - view.top - 24);
       else {
         revealRef.current = null;
         return;
@@ -491,7 +519,13 @@ export function MarginPanel({
         {error ? (
           <p role="alert" className="p-4 text-sm text-destructive-text">
             Couldn&apos;t load the comments.{' '}
-            <Button type="button" variant="link" size="xs" className="h-auto p-0 text-foreground" onClick={onRetry}>
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto p-0 text-foreground"
+              onClick={onRetry}
+            >
               Retry
             </Button>
           </p>
@@ -537,6 +571,7 @@ export function MarginPanel({
                 focused={focusedId === item.id}
                 approximate={measures.get(item.id)?.approximate ?? false}
                 onFocusCard={handleFocusCard}
+                labelSuffix={suffixes.get(item.id) ?? ''}
               />
             );
           })}
