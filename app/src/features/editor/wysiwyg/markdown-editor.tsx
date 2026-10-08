@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EditorView } from 'prosemirror-view';
 
@@ -9,6 +9,7 @@ import type { EditorSelection } from '@/stores/editor-selection-store';
 
 import { EditorController, type ControllerProps } from './controller';
 import type { HighlightInput } from './editor-highlights';
+import { LinkPopover, type LinkRequest } from './link-popover';
 import { AtomHost } from './node-views';
 
 /** What the sheet gets once the editor exists. */
@@ -41,16 +42,13 @@ export interface MarkdownEditorProps {
   placeholder?: string;
   ariaLabel?: string;
   initialSelection?: () => { from: number; to: number; focus?: boolean; reveal?: boolean } | null;
+  /** Keys typed while the editor was loading (see `WriteBody`): replayed once, when it is created. */
+  initialInput?: readonly string[];
   className?: string;
 }
 
 const NO_CITATIONS: readonly RagCitation[] = [];
 const NO_HIGHLIGHTS: readonly HighlightInput[] = [];
-
-function defaultRequestLink(current: string | null): string | null {
-  if (typeof window === 'undefined') return null;
-  return window.prompt('Link address (leave empty to remove the link)', current ?? 'https://');
-}
 
 /** Renders the block atoms (callouts, tables, display math...) with the read-only view's renderer. */
 function AtomPortals({
@@ -97,6 +95,36 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<EditorController | null>(null);
   const readyRef = useRef(props.onReady);
+  const [linkRequest, setLinkRequest] = useState<LinkRequest | null>(null);
+
+  /** The link shortcut's prompt: a small form next to the selection (`LinkPopover`). */
+  const askForLink = useCallback((current: string | null) => {
+    return new Promise<string | null>((resolve) => {
+      const view = controllerRef.current?.view;
+      let x = 80;
+      let y = 80;
+      if (view) {
+        try {
+          const coords = view.coordsAtPos(view.state.selection.to);
+          x = coords.left;
+          y = coords.bottom;
+        } catch {
+          // (no layout: the form opens at a fixed place)
+        }
+      }
+      setLinkRequest({
+        current,
+        x,
+        y,
+        resolve: (value) => {
+          setLinkRequest(null);
+          resolve(value);
+          // Back to the text, whatever was decided.
+          controllerRef.current?.focus();
+        },
+      });
+    });
+  }, []);
 
   const controllerProps = (p: MarkdownEditorProps): ControllerProps => ({
     value: p.value,
@@ -112,10 +140,11 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     onSelectionChange: (selection) => p.onSelectionChange?.(selection),
     onEditInSource: (range) => p.onEditInSource?.(range),
     onRefused: () => p.onRefused?.(),
-    requestLink: p.requestLink ?? defaultRequestLink,
+    requestLink: p.requestLink ?? askForLink,
     placeholder: p.placeholder ?? 'Start writing…',
     ariaLabel: p.ariaLabel ?? 'Section text',
     initialSelection: p.initialSelection,
+    initialInput: p.initialInput,
   });
 
   useLayoutEffect(() => {
@@ -149,6 +178,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   return (
     <>
       <div ref={containerRef} className={props.className} />
+      {linkRequest ? <LinkPopover request={linkRequest} /> : null}
       <AtomPortals
         host={host}
         citations={props.citations ?? NO_CITATIONS}

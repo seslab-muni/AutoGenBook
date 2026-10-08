@@ -27,6 +27,7 @@ import { HeaderIconButton } from '@/features/editor/components/header-icon-butto
 import { LockContentButton } from '@/features/editor/components/lock-content-button';
 import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
 import { WriteBody } from '@/features/editor/components/write-body';
+import { isWriteEditingEnabled } from '@/features/editor/lib/write-editing';
 import { SourcesDrawer, type SourcesDrawerView } from '@/features/editor/components/sources-drawer';
 import { SectionEditor } from '@/features/editor/components/section-editor';
 import { SectionJumpSelect } from '@/features/editor/components/section-jump-select';
@@ -286,7 +287,7 @@ export function ManuscriptSheet({
   // side; this covers the UI so the offer isn't made in the first place).
   const nodeIsLeaf = isLeaf(node.id, flatNodes);
   /** The Write view can be typed into: Markdown (not LaTeX), not being generated, a leaf section. */
-  const writeEditable = !readOnly && !useLatex && nodeIsLeaf;
+  const writeEditable = isWriteEditingEnabled() && !readOnly && !useLatex && nodeIsLeaf;
 
   // ---- server content changed under an open editor (an accepted suggestion, another user) ----------
   const draftRef = useRef(draft);

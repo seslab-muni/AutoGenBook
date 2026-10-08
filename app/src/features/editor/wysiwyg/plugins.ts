@@ -33,6 +33,7 @@ import {
 } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 
+import { isSafeHref } from './safe-href';
 import { schema } from './schema';
 
 /**
@@ -49,6 +50,8 @@ export interface EditorCallbacks {
   onFlush: () => void;
   /** Enter on a selected atom: open the Source view on `[from, to)` of the draft (UTF-16 offsets). */
   onEditInSource: (pos: number) => void;
+  /** Space on a selected citation: open its source (the keyboard's way to the chip's click). */
+  onCitation?: (label: string) => void;
   /** Ctrl/Cmd-K: ask for the link target; resolves to `null` when cancelled. */
   requestLink: (current: string | null) => Promise<string | null> | string | null;
 }
@@ -58,8 +61,8 @@ export interface EditorCallbacks {
 const tabKey = new PluginKey<{ free: boolean }>('mdTabEscape');
 
 /**
- * `Escape` lets the next `Tab` through to the browser (focus moves on) even inside a list, where
- * `Tab` otherwise indents - the same escape hatch the Source view has.
+ * `Escape` lets the next `Tab` - only that one - through to the browser (focus moves on) even inside
+ * a list, where `Tab` otherwise indents; the Source view has the same escape hatch.
  */
 const tabEscape = new Plugin<{ free: boolean }>({
   key: tabKey,
@@ -77,9 +80,9 @@ const tabEscape = new Plugin<{ free: boolean }>({
         view.dispatch(view.state.tr.setMeta(tabKey, true));
         return false;
       }
-      if (event.key !== 'Tab' && free && !['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) {
-        view.dispatch(view.state.tr.setMeta(tabKey, false));
-      }
+      if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return false;
+      // The next Tab is the browser's (focus moves on); any other key, and the Tab after it, are not.
+      if (free) view.dispatch(view.state.tr.setMeta(tabKey, false));
       return false;
     },
   },
@@ -141,6 +144,8 @@ function linkCommand(callbacks: EditorCallbacks): Command {
     const current = around?.href ?? null;
     void Promise.resolve(callbacks.requestLink(current)).then((href) => {
       if (href === null || view.isDestroyed || view.state.doc !== doc) return;
+      // (Only addresses the view will keep as links, whatever the prompt let through.)
+      if (href.trim() !== '' && !isSafeHref(href.trim())) return;
       const tr = view.state.tr.removeMark(from, to, link);
       if (href.trim() !== '') tr.addMark(from, to, link.create({ href: href.trim(), title: '' }));
       view.dispatch(tr);
@@ -275,6 +280,18 @@ function editAtomCommand(callbacks: EditorCallbacks): Command {
   };
 }
 
+/** Space on a selected citation opens its source, as clicking the chip does. */
+function openCitationCommand(callbacks: EditorCallbacks): Command {
+  return (state) => {
+    const { selection } = state;
+    if (!(selection instanceof NodeSelection)) return false;
+    const node = selection.node;
+    if (node.type.name !== 'atom_inline' || node.attrs['kind'] !== 'citation') return false;
+    callbacks.onCitation?.(node.attrs['label'] as string);
+    return true;
+  };
+}
+
 const hardBreak: Command = (state, dispatch) => {
   const type = nodes['hard_break']!;
   if (state.selection.$from.parent.type.spec.code) return false;
@@ -341,6 +358,7 @@ export function buildPlugins(callbacks: EditorCallbacks, placeholder: string): P
       'Shift-Enter': hardBreak,
       Enter: enter,
       'Mod-Enter': exitCode,
+      ' ': openCitationCommand(callbacks),
       Backspace: backspace,
       'Mod-Backspace': backspace,
       Delete: del,

@@ -4,7 +4,7 @@ import type { EditorView } from 'prosemirror-view';
 
 import { parseDocument } from './parse';
 import { DEFAULT_STYLE, serializeBlock, LEVELS } from './serialize';
-import { schema } from './schema';
+import { CLIPBOARD_SESSION, schema } from './schema';
 
 /**
  * Copy and paste for the editable Write view (issue #182, phase 5). Pasted plain text is read as
@@ -107,12 +107,56 @@ export function parseClipboardText(text: string, $context: ResolvedPos, plain: b
 const DROP =
   'script, style, head, meta, link, title, iframe, object, embed, noscript, template, svg, math, form, input, button, select, textarea';
 
+/**
+ * Whether an atom element in pasted HTML is one this editor wrote: it carries this page's token,
+ * and its source reads back as exactly one atom of the kind it claims (so a forged `data-md-source`
+ * cannot smuggle Markdown or HTML the person never saw).
+ */
+function ownAtom(el: Element): boolean {
+  if (el.getAttribute('data-md-session') !== CLIPBOARD_SESSION) return false;
+  const source = el.getAttribute('data-md-source') ?? '';
+  const kind = el.getAttribute('data-md-kind');
+  try {
+    if (el.hasAttribute('data-md-atom-block')) {
+      const parsed = parseDocument(source, { trailingParagraph: false }).segments;
+      const node = parsed.length === 1 ? parsed[0]!.node : null;
+      return (
+        node?.type.name === 'atom_block' &&
+        node.attrs['kind'] === kind &&
+        (node.attrs['source'] as string).trim() === source.trim()
+      );
+    }
+    const parsed = parseDocument(source, { trailingParagraph: false }).segments;
+    const para = parsed.length === 1 ? parsed[0]!.node : null;
+    if (para?.type.name !== 'paragraph' || para.childCount !== 1) return false;
+    const atom = para.firstChild!;
+    return (
+      atom.type.name === 'atom_inline' &&
+      atom.attrs['kind'] === kind &&
+      atom.attrs['source'] === source
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Removes what must never be read as content from pasted HTML before the schema rules see it. */
 export function cleanPastedHtml(html: string): string {
   if (typeof document === 'undefined') return html;
   const template = document.createElement('template');
   template.innerHTML = html;
   for (const el of template.content.querySelectorAll(DROP)) el.remove();
+  // The `data-md-*` attributes turn an element into an atom with the source in the attribute: only
+  // for atoms this editor copied itself. From anywhere else they are stripped, and the element is
+  // just text.
+  for (const el of template.content.querySelectorAll('*')) {
+    const atom = el.hasAttribute('data-md-atom-block') || el.hasAttribute('data-md-atom-inline');
+    const own = atom && ownAtom(el);
+    if (own) continue;
+    for (const name of el.getAttributeNames()) {
+      if (name.startsWith('data-md-')) el.removeAttribute(name);
+    }
+  }
   return template.innerHTML;
 }
 

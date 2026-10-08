@@ -56,6 +56,8 @@ export interface ControllerProps {
   requestLink: (current: string | null) => Promise<string | null> | string | null;
   placeholder: string;
   ariaLabel: string;
+  /** Keys typed into the read-only first paint before the editor was there, in order: replayed once. */
+  initialInput?: readonly string[] | undefined;
   /** Where the selection starts out (UTF-16 offsets over the draft), e.g. carried over from the Source view. Asked once. */
   initialSelection?:
     (() => { from: number; to: number; focus?: boolean; reveal?: boolean } | null) | undefined;
@@ -79,17 +81,33 @@ export interface ControllerProps {
  * answers `"inherit"` (the real attribute stays `"true"`, nothing else reads the property), which is
  * not one of the values React's check looks for.
  */
-function keepReactOutOfTheEditor(dom: HTMLElement) {
-  Object.defineProperty(dom, 'contentEditable', {
-    configurable: true,
-    get(this: HTMLElement) {
-      const attr = this.getAttribute('contenteditable');
-      return attr === 'true' ? 'inherit' : (attr ?? 'inherit');
-    },
-    set(this: HTMLElement, value: string) {
-      this.setAttribute('contenteditable', value);
-    },
-  });
+export function keepReactOutOfTheEditor(dom: HTMLElement): boolean {
+  const install = (el: HTMLElement) =>
+    Object.defineProperty(el, 'contentEditable', {
+      configurable: true,
+      get(this: HTMLElement) {
+        const attr = this.getAttribute('contenteditable');
+        return attr === 'true' ? 'inherit' : (attr ?? 'inherit');
+      },
+      set(this: HTMLElement, value: string) {
+        this.setAttribute('contenteditable', value);
+      },
+    });
+  // The workaround rests on the property being something a script can shadow on one element. Check
+  // that on a probe first; where it does not hold the editor simply goes without the workaround
+  // (React walks the tree on commit: slower on a long section, nothing else).
+  try {
+    const probe = dom.ownerDocument.createElement('div');
+    probe.setAttribute('contenteditable', 'true');
+    install(probe);
+    if (probe.contentEditable === 'true' || probe.getAttribute('contenteditable') !== 'true') {
+      return false;
+    }
+    install(dom);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const DELETE_TYPES = new Set([
@@ -108,6 +126,14 @@ const DELETE_TYPES = new Set([
  * loading, when everything is cold. Composition (IME), spell-check replacements, drops and the
  * rest still go through ProseMirror's own reading.
  */
+/** Text typed (or dictated, or replayed) at `[from, to)`: input rules first, as ProseMirror's own typing does. */
+export function typeInto(view: EditorView, from: number, to: number, data: string) {
+  const deflt = () => view.state.tr.insertText(data, from, to).scrollIntoView();
+  if (!view.someProp('handleTextInput', (f) => f(view, from, to, data, deflt))) {
+    view.dispatch(deflt());
+  }
+}
+
 export function handleBeforeInput(view: EditorView, event: InputEvent): boolean {
   if (view.composing || event.isComposing || !view.editable) return false;
   const insert = event.inputType === 'insertText';
@@ -135,10 +161,7 @@ export function handleBeforeInput(view: EditorView, event: InputEvent): boolean 
   if (!insert && from === to) return false;
   event.preventDefault();
   if (insert) {
-    const deflt = () => view.state.tr.insertText(data, from, to).scrollIntoView();
-    if (!view.someProp('handleTextInput', (f) => f(view, from, to, data, deflt))) {
-      view.dispatch(deflt());
-    }
+    typeInto(view, from, to, data);
   } else {
     view.dispatch(view.state.tr.delete(from, to).scrollIntoView());
   }
@@ -196,6 +219,10 @@ export class EditorController {
         {
           onFlush: () => this.props.onFlush(),
           onEditInSource: (pos) => this.editInSource(pos),
+          onCitation: (label) => {
+            const key = label.split(', ')[0];
+            if (key && this.host.citations.has(key)) this.host.onCitationClick?.(key);
+          },
           requestLink: (current) => this.props.requestLink(current),
         },
         props.placeholder,
@@ -225,6 +252,14 @@ export class EditorController {
         class: 'md-editor text-sm text-foreground',
         'data-markdown-root': '',
         spellcheck: 'true',
+        // ProseMirror says translate="no"; prose is exactly what translation is for.
+        translate: 'yes',
+        // Grammar and writing helpers that rewrite the DOM of a contenteditable put their own markup
+        // into the text; this is a plain-text-backed editor, they are not welcome in it.
+        'data-gramm': 'false',
+        'data-gramm_editor': 'false',
+        'data-enable-grammarly': 'false',
+        'data-lt-active': 'false',
       }),
       nodeViews: nodeViews(host),
       clipboardTextParser: (text, $context, plain) => parseClipboardText(text, $context, plain),
@@ -242,6 +277,18 @@ export class EditorController {
       },
       handleDOMEvents: {
         beforeinput: (view, event) => handleBeforeInput(view, event as InputEvent),
+        drop: (_view, event) => {
+          // Files dropped on the page would open in the tab, or be inserted as pictures: neither.
+          const transfer = (event as DragEvent).dataTransfer;
+          if (
+            transfer &&
+            (transfer.files.length > 0 || Array.from(transfer.types).includes('Files'))
+          ) {
+            event.preventDefault();
+            return true;
+          }
+          return false;
+        },
         blur: () => {
           // Leaving the editor changes nothing in the draft or in the document (text typed as
           // `$x$` stays literal until the section is read again): it only asks for a save.
@@ -282,8 +329,35 @@ export class EditorController {
         this.view.focus();
       }
     }
+    if (props.initialInput && props.initialInput.length > 0) {
+      const keys = props.initialInput;
+      this.view.focus();
+      // (After the component has handed the editor its props once: the draft it still holds is the
+      // one from before these keys, and would replace them.)
+      queueMicrotask(() => {
+        if (!this.destroyed) this.replay(keys);
+      });
+    }
     this.schedulePaint();
     this.publishSelection();
+  }
+
+  /** Keys typed before the editor existed, put in as if typed now: text, Enter and Backspace. */
+  private replay(keys: readonly string[]) {
+    const { view } = this;
+    for (const key of keys) {
+      if (key === 'Enter' || key === 'Backspace') {
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+        if (view.someProp('handleKeyDown', (f) => f(view, event))) continue;
+        const { selection } = view.state;
+        if (key === 'Backspace' && selection.empty && selection.$from.parentOffset > 0) {
+          view.dispatch(view.state.tr.delete(selection.from - 1, selection.from));
+        }
+      } else {
+        const { from, to } = view.state.selection;
+        typeInto(view, from, to, key);
+      }
+    }
   }
 
   // ---- props -----------------------------------------------------------------------------

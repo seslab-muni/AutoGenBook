@@ -100,6 +100,8 @@ interface EscapeContext {
   local?: boolean;
   /** The chunk is followed by something that would continue an automatic link (emphasis, an atom): a link at its end is broken. */
   urlEnd?: boolean;
+  /** The character that follows the chunk in the source (a chunk typed into a block), for `<` at its end. */
+  following?: string | undefined;
   /** See `SerializeStyle.labels`. */
   labels?: ReadonlySet<string> | undefined;
 }
@@ -201,7 +203,8 @@ export function escapeText(text: string, ctx: EscapeContext): Escaped {
     }
     if (c === '<') {
       // Inline HTML, an autolink: text that must stay text, at every level.
-      if (level >= 2 || (next !== undefined && /[a-zA-Z/!?]/.test(next))) escapeAt.add(i);
+      const after = next ?? ctx.following;
+      if (level >= 2 || (after !== undefined && /[a-zA-Z/!?]/.test(after))) escapeAt.add(i);
       continue;
     }
     if (c === '$') {

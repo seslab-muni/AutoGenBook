@@ -100,7 +100,7 @@ function fillChips(container: HTMLElement, keys: string[], host: AtomHost) {
   }
 }
 
-function describe(kind: string, label: string): string {
+function describe(kind: string, label: string, block = false): string {
   switch (kind) {
     case 'math':
       return `Formula: ${label}`;
@@ -109,7 +109,9 @@ function describe(kind: string, label: string): string {
     case 'image':
       return `Image: ${label || 'no description'}`;
     case 'footnote':
-      return `Footnote reference ${label}`;
+      return block ? 'Footnote text' : `Footnote reference ${label}`;
+    case 'definition':
+      return 'Link definition';
     case 'html':
       return 'HTML';
     case 'callout':
@@ -167,7 +169,12 @@ class AtomInlineView implements NodeView {
     dom.textContent = '';
     dom.setAttribute('data-md-kind', kind);
     dom.setAttribute('role', 'img');
-    dom.setAttribute('aria-label', `${describe(kind, label)}. Press Enter to edit in Source.`);
+    dom.setAttribute(
+      'aria-label',
+      `${describe(kind, label)}. Press Enter to edit in Source${
+        kind === 'citation' ? ', Space to open its source' : ''
+      }.`,
+    );
     dom.title = HINT;
     dom.className = `md-atom-inline md-atom-${kind}`;
     switch (kind) {
@@ -282,7 +289,7 @@ class AtomBlockView implements NodeView {
     this.dom.setAttribute('role', 'group');
     this.dom.setAttribute(
       'aria-label',
-      `${describe(kind, kind === 'math' ? 'display formula' : label)}. Press Enter to edit in Source.`,
+      `${describe(kind, kind === 'math' ? 'display formula' : label, true)}. Press Enter to edit in Source.`,
     );
     const source = this.node.attrs['source'] as string;
     if (kind === 'footnote' || kind === 'definition' || kind === 'html') {

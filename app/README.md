@@ -65,6 +65,10 @@ Copy `.env.example` to `.env` to override the defaults:
 - `VITE_USE_MOCKS` — set to `1` to run `pnpm dev` entirely against the in-browser
   MSW mock API (`src/mocks/`) instead of a real backend; unset/`0` uses
   `VITE_API_PROXY_TARGET`.
+- `VITE_WRITE_EDITING` — the one switch for the editable Write view (`#182`). On unless
+  set to `0`, `false` or `off` (a build-time variable, read only in
+  `src/features/editor/lib/write-editing.ts`). When off, the Write view is exactly the
+  read-only renderer and the `markdown-editor` chunk is never requested.
 
 ## Folder layout
 
@@ -291,7 +295,7 @@ several minutes on top of the `app`/`python` jobs.
 (`pnpm check:bundle-budget`, also a CI step right after `pnpm build`) reads it
 plus `dist/.vite/manifest.json` (for finding the eagerly-loaded entry chunk)
 and fails if that entry chunk exceeds 300 kB gzipped or the whole JS+CSS
-bundle exceeds 1136 kB gzipped (it was 1 MB until the editable Write view added its
+bundle exceeds 1152 kB gzipped (it was 1 MB until the editable Write view added its
 lazily loaded editor chunk, see `docs/WEB_UI.md`) — override either via `BUNDLE_MAIN_CHUNK_BUDGET_KB`
 / `BUNDLE_TOTAL_BUDGET_KB` env vars if a deliberate size increase needs a
 higher ceiling. The editor's CodeMirror setup is a trimmed copy of `basicSetup`

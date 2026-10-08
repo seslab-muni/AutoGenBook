@@ -6,6 +6,8 @@ import {
   type NodeSpec,
 } from 'prosemirror-model';
 
+import { isSafeHref } from './safe-href';
+
 /**
  * The editable Write view's document model (issue #182, phase 5). It is a *view* of the Markdown
  * source, never its owner: every node that cannot be edited faithfully is an atom that carries its
@@ -15,6 +17,17 @@ import {
  * Class names mirror the read-only renderer's component overrides (`markdown-view.tsx`) so the
  * switch from the read-only first paint to the editor does not move the text.
  */
+/**
+ * Marks the atoms this editor puts on the clipboard: HTML pasted into the editor keeps an atom's
+ * `data-md-*` source only when it carries this page's token (and the source reads back as the same
+ * kind of atom, see `clipboard.ts`) - anything else, such as HTML from a web page that happens to
+ * use the same attribute names, is plain content.
+ */
+export const CLIPBOARD_SESSION: string =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+
 const P_CLASS = 'my-2.5 leading-relaxed';
 const HEADING_CLASS: Record<number, string> = {
   1: 'mt-6 mb-3 font-serif text-2xl font-bold tracking-tight',
@@ -153,6 +166,7 @@ const nodes: Record<string, NodeSpec> = {
         'data-md-source': node.attrs['source'] as string,
         'data-md-kind': node.attrs['kind'] as string,
         'data-md-label': node.attrs['label'] as string,
+        'data-md-session': CLIPBOARD_SESSION,
       },
       node.attrs['source'] as string,
     ],
@@ -201,6 +215,7 @@ const nodes: Record<string, NodeSpec> = {
         'data-md-source': node.attrs['source'] as string,
         'data-md-kind': node.attrs['kind'] as string,
         'data-md-label': node.attrs['label'] as string,
+        'data-md-session': CLIPBOARD_SESSION,
       },
       node.attrs['source'] as string,
     ],
@@ -218,8 +233,8 @@ const marks: Record<string, MarkSpec> = {
         getAttrs: (dom) => {
           const el = dom as HTMLElement;
           const href = el.getAttribute('href') ?? '';
-          // Only links that mean something in Markdown; never a script URL.
-          if (/^\s*(javascript|data|vbscript):/i.test(href)) return false;
+          // Only links that mean something in Markdown, and never a script or data URL.
+          if (!isSafeHref(href)) return false;
           return { href, title: el.getAttribute('title') ?? '' };
         },
       },
@@ -227,7 +242,7 @@ const marks: Record<string, MarkSpec> = {
     toDOM: (mark): DOMOutputSpec => [
       'a',
       {
-        href: mark.attrs['href'] as string,
+        ...(isSafeHref(mark.attrs['href'] as string) ? { href: mark.attrs['href'] as string } : {}),
         ...(mark.attrs['title'] ? { title: mark.attrs['title'] as string } : {}),
         class: LINK_CLASS,
         rel: 'noreferrer noopener',

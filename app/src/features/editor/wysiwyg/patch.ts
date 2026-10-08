@@ -258,6 +258,11 @@ export function patchSegment(
   // may be before the typed text only if they are leading, after it only if they are trailing:
   // typed text next to them would make them part of the line.
   if (token.starts && token.ends && !zeroWidthStays(token, k, kEnd, first, last)) return null;
+  // A letter typed after a `<` that is there unescaped would make it the start of a tag: only the
+  // serializer, which sees the whole text, escapes it.
+  if (!isCode && edit.text !== '' && /^[a-zA-Z!/?]/.test(edit.text) && src[from - 1] === '<') {
+    return null;
+  }
   const hasLink = edit.marks.some((mark) => mark.type.name === 'link');
   // What lies beyond the run's edge must be nothing at all (the start or end of the textblock), a
   // line break or an atom, not a delimiter that the text next to it can change the meaning of.
@@ -302,6 +307,7 @@ export function patchSegment(
           // four would turn the paragraph into code.
           trimStart: first && allZeroBefore(token, k),
           local: true,
+          following: to < src.length ? src[to] : undefined,
           labels,
         });
     const written = src.slice(0, from) + escaped.str + src.slice(to);

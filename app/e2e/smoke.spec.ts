@@ -85,12 +85,17 @@ test('project lifecycle: create, source, outline, run, export', async ({ page })
   // --- A section shows generated content ---
   await page.goto(page.url().replace(/\/runs\/.+$/, ''));
   await page.getByRole('textbox', { name: `Rename "${chapterTitles[0]}"` }).click();
+  // A leaf section opens in the editable Write view: the generated text is in its textbox (and the
+  // empty-section note, which only the read-only view ever shows, is not on the page at all).
+  const writeView = page.getByRole('textbox', { name: 'Section text' });
+  await expect(writeView).toBeVisible();
+  await expect(writeView).toHaveAttribute('contenteditable', 'true');
+  await expect(writeView).toContainText(/Fake generated content/);
   await expect(
     page.getByText(
       'This section is empty. Switch to Source to write it, or start a run to draft it.',
     ),
-  ).not.toBeVisible();
-  await expect(page.getByText(/Fake generated content/)).toBeVisible();
+  ).toHaveCount(0);
 
   // --- Build a PDF export and download it ---
   await page.getByRole('button', { name: /Export/ }).click();
