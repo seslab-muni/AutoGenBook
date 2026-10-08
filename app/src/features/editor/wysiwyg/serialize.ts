@@ -4,7 +4,7 @@ import { findCitations } from '@/features/editor/lib/remark-plugins';
 
 import type { InlineMap, InlineToken } from './inline-map';
 import { marksKey, parseDocument, type TextblockInfo } from './parse';
-import { sameMeaning } from './equivalence';
+import { isBlankParagraph, sameMeaning } from './equivalence';
 import { MARK_ORDER } from './schema';
 
 /**
@@ -25,11 +25,33 @@ import { MARK_ORDER } from './schema';
 
 export type EscapeLevel = 0 | 1 | 2;
 
+/**
+ * How hard the serializer tries, in order: escapes at the least level, then the same with
+ * punctuation at the edge of emphasised text moved out of the emphasis (`**「重要」**です` cannot be
+ * written, `「**重要**」です` can), then more escapes, then both.
+ */
+export interface SerializeLevel {
+  escape: EscapeLevel;
+  /** Punctuation at the edge of emphasised text is written outside the emphasis. */
+  punct: boolean;
+  /** Indented code is written fenced (two indented blocks with a blank line between are one block). */
+  fence: boolean;
+}
+export const LEVELS: readonly SerializeLevel[] = [
+  { escape: 0, punct: false, fence: false },
+  { escape: 0, punct: true, fence: true },
+  { escape: 1, punct: false, fence: true },
+  { escape: 1, punct: true, fence: true },
+  { escape: 2, punct: true, fence: true },
+];
+
 /** The document's conventions where Markdown leaves a choice, so edited blocks do not change style. */
 export interface SerializeStyle {
   emphasis: '*' | '_';
   strong: '**' | '__';
   hardBreak: '\\' | '  ';
+  /** Labels of the link definitions and footnotes in the draft (normalised): literal `[label]` must not become a reference. */
+  labels?: ReadonlySet<string>;
 }
 
 export const DEFAULT_STYLE: SerializeStyle = { emphasis: '*', strong: '**', hardBreak: '\\' };
@@ -69,11 +91,53 @@ interface EscapeContext {
   inLink: boolean;
   /** Spaces at the end of the chunk are dropped (a line break follows). */
   trimEnd: boolean;
+  /** Spaces at the start of the chunk are dropped (it begins a line: leading spaces mean nothing, and can mean code). */
+  trimStart?: boolean;
+  /**
+   * The chunk is a piece typed into a block, not the whole text: `$` is then left to the verification
+   * (a pair of them may be formed with a `$` that is already there) until a stronger level.
+   */
+  local?: boolean;
+  /** The chunk is followed by something that would continue an automatic link (emphasis, an atom): a link at its end is broken. */
+  urlEnd?: boolean;
+  /** See `SerializeStyle.labels`. */
+  labels?: ReadonlySet<string> | undefined;
 }
 
 const LINE_START_TRIGGER =
   /^( {0,3})(#{1,6}(?=[ \t]|$)|>|[-+*](?=[ \t]|$)|(\d{1,9})([.)])(?=[ \t]|$)|`{3,}|~{3,})/;
-const LINE_START_WIDE = /^( {0,3})([#>\-+*=_~`]|\d{1,9}[.)])/;
+const LINE_START_WIDE = /^( {0,3})([#>\-+*=_~`$]|\d{1,9}[.)])/;
+
+/**
+ * The `$` signs of `text` that would be read as the delimiters of a formula that is not one by the
+ * rule the editor writes formulas by (a pair of equal runs on one line with something other than
+ * whitespace inside its edges, see `isCleanMath`): those get a backslash, a clean pair stays as typed.
+ */
+function strayDollars(text: string): Set<number> {
+  const out = new Set<number>();
+  const runs: { at: number; len: number }[] = [];
+  const re = /\$+/g;
+  for (let m = re.exec(text); m; m = re.exec(text)) runs.push({ at: m.index, len: m[0].length });
+  const used = new Set<number>();
+  for (let i = 0; i < runs.length; i += 1) {
+    if (used.has(i)) continue;
+    const open = runs[i]!;
+    for (let j = i + 1; j < runs.length; j += 1) {
+      const close = runs[j]!;
+      if (close.len !== open.len || used.has(j)) continue;
+      used.add(j);
+      const inner = text.slice(open.at + open.len, close.at);
+      if (inner === '' || /^\s|\s$/.test(inner)) {
+        for (let k = 0; k < open.len; k += 1) {
+          out.add(open.at + k);
+          out.add(close.at + k);
+        }
+      }
+      break;
+    }
+  }
+  return out;
+}
 
 /** Text for the source: the characters of `text` with the escapes the level asks for. */
 export function escapeText(text: string, ctx: EscapeContext): Escaped {
@@ -83,21 +147,46 @@ export function escapeText(text: string, ctx: EscapeContext): Escaped {
     while (dropFrom > 0 && (text[dropFrom - 1] === ' ' || text[dropFrom - 1] === '\t'))
       dropFrom -= 1;
   }
+  let dropTo = 0;
+  if (ctx.trimStart) {
+    while (dropTo < dropFrom && (text[dropTo] === ' ' || text[dropTo] === '\t')) dropTo += 1;
+  }
   // Indices that get a backslash before them.
   const escapeAt = new Set<number>();
 
   if (ctx.lineStart) {
-    const trigger = (level >= 1 ? LINE_START_WIDE : LINE_START_TRIGGER).exec(text);
+    const body = text.slice(dropTo);
+    const trigger = (level >= 1 ? LINE_START_WIDE : LINE_START_TRIGGER).exec(body);
     if (trigger) {
       const lead = trigger[1]!.length;
       // For a list number the dot or bracket is escaped, otherwise the first character.
       const numbered = /^(\d{1,9})([.)])/.exec(trigger[2]!);
-      escapeAt.add(lead + (numbered ? numbered[1]!.length : 0));
+      escapeAt.add(dropTo + lead + (numbered ? numbered[1]!.length : 0));
     }
-    if (ctx.lineEnd && /^ {0,3}#{1,6}[ \t]*$/.test(text)) escapeAt.add(text.indexOf('#'));
+    if (ctx.lineEnd && /^ {0,3}#{1,6}[ \t]*$/.test(body)) escapeAt.add(dropTo + body.indexOf('#'));
   }
 
-  for (let i = 0; i < text.length; i += 1) {
+  if (ctx.labels && ctx.labels.size > 0 && text.includes('[')) {
+    const re = /\[([^[\]]*)\]/g;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      const key = m[1]!.trim().toLowerCase().replace(/\s+/g, ' ');
+      if (ctx.labels.has(key)) escapeAt.add(m.index);
+    }
+  }
+  // An address typed right before emphasis or an atom would swallow it (`http://x.y**b**` is one
+  // link): it is written between angle brackets, where it ends where it should.
+  let wrapFrom = -1;
+  if (ctx.urlEnd) {
+    const head = text.slice(0, dropFrom);
+    const m = /(?:^|[^\p{L}\p{N}])((?:https?|ftp):\/\/[^\s<>\\]+)$/iu.exec(head);
+    if (m) wrapFrom = m.index + m[0].length - m[1]!.length;
+    else {
+      const www = /(?:^|[^\p{L}\p{N}])(www\.[^\s]*)$/iu.exec(head);
+      if (www) escapeAt.add(www.index + www[0].length - www[1]!.length + 3);
+    }
+  }
+  const dollars = level === 0 && !ctx.local && text.includes('$') ? strayDollars(text) : null;
+  for (let i = dropTo; i < text.length; i += 1) {
     const c = text[i]!;
     const next = text[i + 1];
     if (c === '\\') {
@@ -108,6 +197,15 @@ export function escapeText(text: string, ctx: EscapeContext): Escaped {
       if (level >= 2 || /^&(#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i.test(text.slice(i, i + 12))) {
         escapeAt.add(i);
       }
+      continue;
+    }
+    if (c === '<') {
+      // Inline HTML, an autolink: text that must stay text, at every level.
+      if (level >= 2 || (next !== undefined && /[a-zA-Z/!?]/.test(next))) escapeAt.add(i);
+      continue;
+    }
+    if (c === '$') {
+      if (level >= 1 || (dollars && dollars.has(i))) escapeAt.add(i);
       continue;
     }
     if (ctx.inLink && (c === '[' || c === ']')) {
@@ -125,9 +223,6 @@ export function escapeText(text: string, ctx: EscapeContext): Escaped {
       case '_':
         if (level >= 2 || !isAlnum(text[i - 1]) || !isAlnum(next)) escapeAt.add(i);
         break;
-      case '<':
-        if (level >= 2 || (next !== undefined && /[a-zA-Z/!?]/.test(next))) escapeAt.add(i);
-        break;
       case '[':
         // `[@key]` is a citation, which stays one: it is parsed into an atom the next time the block is read.
         if (level >= 2 || findCitations(text.slice(i)).every((cite) => cite.index !== 0)) {
@@ -143,7 +238,6 @@ export function escapeText(text: string, ctx: EscapeContext): Escaped {
       case '=':
       case '{':
       case '}':
-      case '$':
         if (level >= 2) escapeAt.add(i);
         break;
       default:
@@ -151,21 +245,29 @@ export function escapeText(text: string, ctx: EscapeContext): Escaped {
     }
   }
 
-  if (escapeAt.size === 0 && dropFrom === text.length) return { str: text };
+  if (wrapFrom >= 0) {
+    // (Nothing inside the brackets is escaped: backslashes do not work there.)
+    for (const at of [...escapeAt]) if (at >= wrapFrom) escapeAt.delete(at);
+  }
+  if (escapeAt.size === 0 && dropFrom === text.length && dropTo === 0 && wrapFrom < 0) {
+    return { str: text };
+  }
   let str = '';
   const starts = new Int32Array(text.length);
   const ends = new Int32Array(text.length);
   for (let i = 0; i < text.length; i += 1) {
-    if (i >= dropFrom) {
+    if (i < dropTo || i >= dropFrom) {
       starts[i] = str.length;
       ends[i] = str.length;
       continue;
     }
+    if (i === wrapFrom) str += '<';
     if (escapeAt.has(i)) str += '\\';
     starts[i] = str.length;
     str += text[i];
     ends[i] = str.length;
   }
+  if (wrapFrom >= 0) str += '>';
   return { str, starts, ends };
 }
 
@@ -282,8 +384,8 @@ function hoistWhitespace(runs: readonly Run[]): Run[] {
     const prev = runs[index - 1];
     const next = runs[index + 1];
     const text = run.text;
-    const lead = /^[ \t]*/.exec(text)![0].length;
-    const trail = text.length === lead ? 0 : /[ \t]*$/.exec(text)![0].length;
+    const lead = /^[\p{Zs}\t]*/u.exec(text)![0].length;
+    const trail = text.length === lead ? 0 : /[\p{Zs}\t]*$/u.exec(text)![0].length;
     const side = (neighbour: Run | undefined) =>
       neighbour && neighbour.kind !== 'soft' && neighbour.kind !== 'hard' ? neighbour.marks : [];
     const toRun = (from: number, to: number, marks: readonly Mark[]): Run => ({
@@ -303,6 +405,50 @@ function hoistWhitespace(runs: readonly Run[]): Run[] {
     if (trail > 0)
       out.push(toRun(text.length - trail, text.length, intersect(run.marks, side(next))));
   });
+  return out;
+}
+
+const EMPHASIS = new Set(['strong', 'em', 'strike']);
+const PUNCT_LEAD = /^[\p{Zs}\t\p{P}\p{S}]+/u;
+const PUNCT_TRAIL = /[\p{Zs}\t\p{P}\p{S}]+$/u;
+
+/**
+ * Moves punctuation at the edge of emphasised text out of the emphasis: Markdown opens emphasis
+ * before punctuation only after a space or punctuation and closes it after punctuation only
+ * before one, so `**「重要」**です` is not strong text but `「**重要**」です` is.
+ */
+function hoistPunctuation(runs: readonly Run[]): Run[] {
+  const out: Run[] = [];
+  for (const run of runs) {
+    if (
+      run.kind !== 'text' ||
+      hasCode(run.marks) ||
+      !run.marks.some((m) => EMPHASIS.has(m.type.name))
+    ) {
+      out.push(run);
+      continue;
+    }
+    const outer = run.marks.filter((mark) => !EMPHASIS.has(mark.type.name));
+    const lead = PUNCT_LEAD.exec(run.text)?.[0].length ?? 0;
+    const rest = run.text.slice(lead);
+    const trail = rest ? (PUNCT_TRAIL.exec(rest)?.[0].length ?? 0) : 0;
+    if (lead === 0 && trail === 0) {
+      out.push(run);
+      continue;
+    }
+    // (UTF-16 lengths of the matched punctuation; `lead`/`trail` above are in code units.)
+    const toRun = (from: number, to: number, marks: readonly Mark[]): Run => ({
+      ...run,
+      text: run.text.slice(from, to),
+      marks,
+      pm: run.pm + from,
+      len: to - from,
+    });
+    const coreEnd = run.text.length - trail;
+    if (lead > 0) out.push(toRun(0, lead, outer));
+    if (coreEnd > lead) out.push(toRun(lead, coreEnd, run.marks));
+    if (trail > 0) out.push(toRun(coreEnd, run.text.length, outer));
+  }
   return out;
 }
 
@@ -361,85 +507,152 @@ interface InlineResult {
   map: InlineMap;
 }
 
+const WORD = /[\p{L}\p{N}]/u;
+
+/** A bare address written right before something that would continue it: ended where it ends. */
+function protectLink(source: string): string {
+  if (/^(?:https?|ftp):\/\/[^\s<>\\]+$/i.test(source)) return `<${source}>`;
+  if (/^www\.[^\s\\]*$/i.test(source)) return `www\\.${source.slice(4)}`;
+  return source;
+}
+
+/**
+ * The delimiter that opens (and closes) `mark` at run `index`: the document's style, except where
+ * that cannot work - an `_` or `__` that touches a letter or digit on either side is not emphasis.
+ */
+function delimiterFor(
+  mark: Mark,
+  style: SerializeStyle,
+  runs: readonly Run[],
+  index: number,
+  before: string,
+): string {
+  const base = openDelimiter(mark, style);
+  if (base !== '_' && base !== '__') return base;
+  let end = index;
+  while (end < runs.length && runs[end]!.marks.some((m) => m.eq(mark))) end += 1;
+  const after = runs[end];
+  const nextChar = after && after.kind === 'text' ? after.text[0] : undefined;
+  if ((before && WORD.test(before)) || (nextChar && WORD.test(nextChar))) {
+    return base === '_' ? '*' : '**';
+  }
+  return base;
+}
+
 function writeInline(
   textblock: PMNode,
   pmStart: number,
   w: Writer,
   style: SerializeStyle,
-  level: EscapeLevel,
+  level: SerializeLevel,
 ): InlineResult {
   const origin = w.pos;
-  const runs = hoistWhitespace(buildRuns(textblock, pmStart));
+  let runs = hoistWhitespace(buildRuns(textblock, pmStart));
+  if (level.punct) runs = hoistPunctuation(runs);
+  const heading = textblock.type.name === 'heading';
+  /** Whether what follows a run could be taken for the rest of an automatic link written right before it. */
+  const continues = (next: Run | undefined) =>
+    !!next &&
+    (next.kind === 'atom' ||
+      (next.kind === 'text' && /\S/.test(next.text[0] ?? ' ')) ||
+      (next.kind === 'hard' && style.hardBreak === '\\'));
   const tokens: InlineToken[] = [];
-  const open: Mark[] = [];
+  const open: { mark: Mark; close: string }[] = [];
+  /** Nothing that matters is on this line yet (the escapes for a line's start apply). */
   let lineStart = true;
+  /** Something other than dropped whitespace is on this line. */
+  let content = false;
 
   const closeTo = (keep: number) => {
-    while (open.length > keep) {
-      const mark = open.pop()!;
-      w.write(closeDelimiter(mark, style));
-    }
+    while (open.length > keep) w.write(open.pop()!.close);
   };
 
   runs.forEach((run, index) => {
     if (run.kind === 'soft' || run.kind === 'hard') {
       closeTo(0);
-      // A hard break with nothing after it would be a literal backslash.
       const rest = runs.slice(index + 1);
-      if (run.kind === 'hard' && !rest.some((r) => r.kind === 'text' || r.kind === 'atom')) {
+      const at = w.pos - origin;
+      // A break that ends nothing (before the end, or on an empty line), or any break in a heading
+      // (a heading is one line): a space, or nothing.
+      if (
+        heading ||
+        !content ||
+        // (Two breaks in a row are one: the hard one is written.)
+        (run.kind === 'soft' && runs[index + 1]?.kind === 'hard') ||
+        (run.kind === 'hard' &&
+          !rest.some((r) => r.kind === 'atom' || (r.kind === 'text' && /[^ \t]/.test(r.text))))
+      ) {
+        const space = heading && content && !w.out.endsWith(' ') && rest.length > 0;
+        if (space) w.write(' ');
         tokens.push({
           pm: run.pm - pmStart,
           len: 1,
-          s: w.pos - origin,
+          s: at,
           e: w.pos - origin,
           kind: 'break',
           marks: '',
         });
         return;
       }
-      const s = w.pos - origin;
       if (run.kind === 'hard') w.write(style.hardBreak);
-      const at = w.pos - origin;
+      const nl = w.pos - origin;
       w.newline();
       tokens.push({
         pm: run.pm - pmStart,
         len: 1,
-        s: run.kind === 'hard' ? s : at,
-        e: at + 1,
+        s: run.kind === 'hard' ? at : nl,
+        e: nl + 1,
         kind: 'break',
         marks: '',
       });
       lineStart = true;
+      content = false;
       return;
     }
 
-    // Marks: keep the common prefix of the open stack, close the rest, open the new ones.
-    const want = [...run.marks].sort(
-      (a, b) =>
-        MARK_ORDER.indexOf(a.type.name as (typeof MARK_ORDER)[number]) -
-        MARK_ORDER.indexOf(b.type.name as (typeof MARK_ORDER)[number]),
-    );
-    const codeMark = want.find((mark) => mark.type.name === 'code');
-    const nonCode = want.filter((mark) => mark.type.name !== 'code');
-    let common = 0;
-    while (common < open.length && common < nonCode.length && open[common]!.eq(nonCode[common]!)) {
-      common += 1;
-    }
-    closeTo(common);
-    for (let i = common; i < nonCode.length; i += 1) {
-      const mark = nonCode[i]!;
-      w.write(openDelimiter(mark, style));
-      open.push(mark);
-      lineStart = false;
+    // Marks: keep the open ones this run still has, close the rest, open the new ones after them
+    // (so `*one **two***` is one emphasis with a strong inside, not two emphasis spans).
+    const want = run.marks
+      .filter((mark) => mark.type.name !== 'code')
+      .sort(
+        (a, b) =>
+          MARK_ORDER.indexOf(a.type.name as (typeof MARK_ORDER)[number]) -
+          MARK_ORDER.indexOf(b.type.name as (typeof MARK_ORDER)[number]),
+      );
+    const codeMark = run.marks.find((mark) => mark.type.name === 'code');
+    let keep = 0;
+    while (keep < open.length && want.some((mark) => mark.eq(open[keep]!.mark))) keep += 1;
+    closeTo(keep);
+    const following = runs[index + 1];
+    const endsLine = !following || following.kind === 'soft' || following.kind === 'hard';
+    // (A run of nothing but whitespace that begins or ends a line is not written, and opens nothing.)
+    const dropped =
+      run.kind === 'text' &&
+      !codeMark &&
+      /^[ \t]*$/.test(run.text) &&
+      ((!content && open.length === 0) || endsLine);
+    if (!dropped) {
+      for (const mark of want) {
+        if (open.some((o) => o.mark.eq(mark))) continue;
+        const delim = delimiterFor(mark, style, runs, index, w.out.slice(-1));
+        w.write(delim);
+        open.push({
+          mark,
+          close: mark.type.name === 'link' ? closeDelimiter(mark, style) : delim,
+        });
+        lineStart = false;
+        content = true;
+      }
     }
 
     const key = marksKey(run.marks);
-    const inLink = open.some((mark) => mark.type.name === 'link');
+    const inLink = open.some((o) => o.mark.type.name === 'link');
     if (run.kind === 'atom') {
       const s = w.pos - origin;
-      w.raw(run.source);
+      w.raw(continues(runs[index + 1]) ? protectLink(run.source) : run.source);
       tokens.push({ pm: run.pm - pmStart, len: 1, s, e: w.pos - origin, kind: 'atom', marks: key });
       lineStart = false;
+      content = true;
       return;
     }
     if (codeMark) {
@@ -456,16 +669,21 @@ function writeInline(
         marks: key,
       });
       lineStart = false;
+      content = true;
       return;
     }
-    const next = runs[index + 1];
-    const lineEnd = !next || next.kind === 'soft' || next.kind === 'hard';
+    const lineEnd = endsLine;
     const escaped = escapeText(run.text, {
-      level,
+      level: level.escape,
       lineStart,
       lineEnd,
       inLink,
-      trimEnd: next?.kind === 'soft',
+      // Spaces that end a line mean nothing (and two of them are a break), spaces that begin one
+      // can turn the line into code or a continuation: neither is written.
+      trimEnd: lineEnd,
+      trimStart: !content && open.length === 0,
+      labels: style.labels,
+      urlEnd: continues(following),
     });
     const s = w.pos - origin;
     w.write(escaped.str);
@@ -484,7 +702,10 @@ function writeInline(
       token.e = token.ends[run.len - 1]!;
     }
     tokens.push(token);
-    if (escaped.str.trim() !== '') lineStart = false;
+    if (escaped.str.trim() !== '') {
+      lineStart = false;
+      content = true;
+    }
   });
   closeTo(0);
   return { map: tokens };
@@ -495,7 +716,7 @@ const isList = (node: PMNode) =>
 
 interface BlockContext {
   style: SerializeStyle;
-  level: EscapeLevel;
+  level: SerializeLevel;
   tbs: TextblockInfo[];
 }
 
@@ -540,7 +761,7 @@ function writeBlock(node: PMNode, pmPos: number, w: Writer, ctx: BlockContext): 
     case 'paragraph': {
       const origin = w.pos;
       const { map } = writeInline(node, pmPos + 1, w, ctx.style, ctx.level);
-      if (node.content.size === 0) w.trimEndSpaces();
+      if (isBlankParagraph(node)) w.trimEndSpaces();
       ctx.tbs.push({ pm: pmPos + 1, size: node.content.size, s: origin, e: w.pos, map });
       return;
     }
@@ -551,6 +772,7 @@ function writeBlock(node: PMNode, pmPos: number, w: Writer, ctx: BlockContext): 
       const origin = w.pos;
       const { map } = writeInline(node, pmPos + 1, w, ctx.style, ctx.level);
       const end = w.pos;
+      if (!setext && end === origin && node.content.size > 0) w.trimEndSpaces();
       if (setext) {
         w.newline();
         w.write((level === 1 ? '=' : '-').repeat(Math.max(3, Math.min(end - origin, 20))));
@@ -563,7 +785,7 @@ function writeBlock(node: PMNode, pmPos: number, w: Writer, ctx: BlockContext): 
       const origin = w.pos;
       const starts: number[] = [];
       const ends: number[] = [];
-      if (node.attrs['fence'] === 'indent' && canIndent(text)) {
+      if (node.attrs['fence'] === 'indent' && canIndent(text) && !ctx.level.fence) {
         writeCodeLines(w, text, '    ', starts, ends);
       } else {
         const info = node.attrs['info'] as string;
@@ -630,6 +852,16 @@ function canIndent(text: string): boolean {
   return text.length > 0 && !/^\s*\n|\n\s*$/.test(text) && text.trim() !== '';
 }
 
+/** A numbered list that does not start at 1 cannot interrupt a paragraph: it is text there. */
+function numberedFrom2(list: PMNode): boolean {
+  return list.type.name === 'ordered_list' && list.attrs['start'] !== 1;
+}
+
+function startsWithEmptyItem(list: PMNode): boolean {
+  const item = list.firstChild;
+  return !!item && item.childCount === 1 && isBlankParagraph(item.firstChild!);
+}
+
 function writeChildren(
   parent: PMNode,
   parentPos: number,
@@ -642,12 +874,14 @@ function writeChildren(
     const pos = parentPos + 1 + offset;
     // An empty paragraph beside other content has no Markdown form: it takes no space in the
     // source, and the caret in it maps to where it would be (see `equivalence.ts`).
-    if (child.type.name === 'paragraph' && child.content.size === 0 && parent.childCount > 1) {
+    if (isBlankParagraph(child) && parent.childCount > 1) {
       ctx.tbs.push({ pm: pos + 1, size: 0, s: w.pos, e: w.pos, map: [] });
       return;
     }
     if (written) {
-      if (tight && isList(child)) w.newline();
+      // (A list whose first item is empty under a paragraph would be that paragraph's underline.)
+      if (tight && isList(child) && !startsWithEmptyItem(child) && !numberedFrom2(child))
+        w.newline();
       else w.blankLine();
     }
     written = true;
@@ -661,13 +895,13 @@ export interface SerializedBlock {
 }
 
 /**
- * Source for one top-level block at an escape level. Textblock offsets in the result are relative
- * to the block's source start; `pm` offsets are relative to the block node's start.
+ * Source for one top-level block at a level. Textblock offsets in the result are relative to the
+ * block's source start; `pm` offsets are relative to the block node's start.
  */
 export function serializeBlock(
   node: PMNode,
   style: SerializeStyle,
-  level: EscapeLevel,
+  level: SerializeLevel,
 ): SerializedBlock {
   const w = new Writer();
   const ctx: BlockContext = { style, level, tbs: [] };
@@ -677,24 +911,28 @@ export function serializeBlock(
 
 /** Whether `source` parses to exactly one block that means `node`. */
 export function reads(source: string, node: PMNode): boolean {
-  if (source.trim() === '') return false;
+  if (!/[^ \t\n]/.test(source)) return false;
   const parsed = parseDocument(source, { trailingParagraph: false });
   if (parsed.segments.length !== 1) return false;
   return sameMeaning([node], [parsed.segments[0]!.node]);
 }
 
-/** The first escape level whose output reads back as the block, or `null` (the edit is refused). */
+/**
+ * The first level, from `from` on (an index into `LEVELS`), whose output reads back as the block,
+ * or `null` (the edit is refused).
+ */
 export function serializeVerified(
   node: PMNode,
   style: SerializeStyle,
-): (SerializedBlock & { level: EscapeLevel }) | null {
+  from = 0,
+): (SerializedBlock & { level: number }) | null {
   if (node.type.name === 'atom_block') {
     return { src: node.attrs['source'] as string, tbs: [], level: 0 };
   }
-  for (const level of [0, 1, 2] as const) {
+  for (let level = from; level < LEVELS.length; level += 1) {
     let result: SerializedBlock;
     try {
-      result = serializeBlock(node, style, level);
+      result = serializeBlock(node, style, LEVELS[level]!);
     } catch {
       return null;
     }

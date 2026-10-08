@@ -199,8 +199,10 @@ describe('serializeVerified escapes as little as it can, and as much as it must'
     expect(out(p(text('a'), soft, text('# b')))).toBe('a\n\\# b');
   });
 
-  it('does not escape $ or a citation: they are text until the block is read again', () => {
-    expect(out(p(text('costs $5 and $6')))).toBe('costs $5 and $6');
+  it('does not escape a formula or a citation: they are text until the block is read again', () => {
+    // (`$...$` with something other than space inside its edges is a formula; any other `$` is escaped.)
+    expect(out(p(text('costs $5 and $6')))).toBe('costs \\$5 and \\$6');
+    expect(out(p(text('costs $5')))).toBe('costs $5');
     expect(out(p(text('as in [@lamport_1982] ok')))).toBe('as in [@lamport_1982] ok');
     expect(out(p(text('$x^2$')))).toBe('$x^2$');
   });
@@ -215,8 +217,8 @@ describe('serializeVerified escapes as little as it can, and as much as it must'
     expect(out(p(text('a [b] c', link('https://x.y'))))).toBe('[a \\[b\\] c](https://x.y)');
   });
 
-  it('refuses a paragraph that cannot be written (four leading spaces would make it code)', () => {
-    expect(serializeVerified(p(text('    x')), DEFAULT_STYLE)).toBeNull();
+  it('does not write the spaces at the start of a paragraph (four of them would make it code)', () => {
+    expect(out(p(text('    x')))).toBe('x');
   });
 
   it('refuses a mark that cannot be written (emphasis closing against punctuation before a letter)', () => {

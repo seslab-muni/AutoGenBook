@@ -67,14 +67,22 @@ export function trackedMatches(
   });
 }
 
-/** The tracked ranges after a source change: shifted like the Source view's change sets shift them. */
+/**
+ * The tracked ranges after a source change, which is a list of hunks in the old source's
+ * coordinates (ascending): each range is mapped through them from the last to the first, exactly as
+ * the Source view's change sets shift an anchor, so text the edit did not touch keeps its anchor.
+ */
 export function mapTracked(
   tracked: readonly TrackedHighlight[],
-  change: TextChange,
+  changes: readonly TextChange[],
 ): TrackedHighlight[] {
+  if (changes.length === 0) return tracked.slice();
   return tracked.map((range) => {
     if (range.deleted) return range;
-    const mapped = mapRangeThroughChange({ start: range.start, end: range.end }, change);
+    let mapped: TextRange | null = { start: range.start, end: range.end };
+    for (let k = changes.length - 1; k >= 0 && mapped; k -= 1) {
+      mapped = mapRangeThroughChange(mapped, changes[k]!);
+    }
     return mapped
       ? { ...range, start: mapped.start, end: mapped.end }
       : { ...range, deleted: true };

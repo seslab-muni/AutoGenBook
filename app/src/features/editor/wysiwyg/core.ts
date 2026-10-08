@@ -4,7 +4,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import type { TextChange } from '@/features/editor/lib/anchors';
 
 import { textEditOf } from './patch';
-import { parseDocument, type Segment } from './parse';
+import { parseDocument } from './parse';
 import { SourceModel } from './source-model';
 
 /**
@@ -18,7 +18,8 @@ export interface Applied {
   state: EditorState;
   /** The new source, and what changed in it (`null`: nothing in the source). */
   text: string;
-  change: TextChange | null;
+  /** What changed in the source: hunks, in the old source's coordinates, ascending (empty: nothing). */
+  changes: TextChange[];
   docChanged: boolean;
 }
 export interface Refused {
@@ -53,32 +54,18 @@ export class EditorCore {
     return this.state;
   }
 
-  apply(tr: Transaction, preset: Segment | null = null): Applied | Refused {
+  apply(tr: Transaction): Applied | Refused {
     const next = this.state.apply(tr);
     if (next.doc === this.state.doc) {
       this.state = next;
-      return { ok: true, state: next, text: this.model.text, change: null, docChanged: false };
+      return { ok: true, state: next, text: this.model.text, changes: [], docChanged: false };
     }
-    const result = this.model.update(next.doc, textEditOf(tr.steps), preset);
+    // (An undo or a redo brings blocks back as they were written; a patch would write them again.)
+    const meta = tr.getMeta('history$') as { redo?: boolean } | undefined;
+    const history = meta === undefined ? false : meta.redo ? 'redo' : 'undo';
+    const result = this.model.update(next.doc, textEditOf(tr.steps), history);
     if (!result.ok) return { ok: false };
     this.state = next;
-    return { ok: true, state: next, text: result.text, change: result.change, docChanged: true };
+    return { ok: true, state: next, text: result.text, changes: result.changes, docChanged: true };
   }
-}
-
-/** Swaps blocks that read back with atoms for the editor's literal text (see `SourceModel.reconcilable`). */
-export function reconcile(core: EditorCore): EditorState | null {
-  const blocks = core.model.reconcilable();
-  let changed = false;
-  // From the end, so positions of the earlier blocks stay valid.
-  for (const { pos, segment } of blocks.reverse()) {
-    const old = core.state.doc.nodeAt(pos);
-    if (!old) continue;
-    const tr = core.state.tr
-      .replaceWith(pos, pos + old.nodeSize, segment.node)
-      .setMeta('addToHistory', false);
-    const applied = core.apply(tr, segment);
-    if (applied.ok) changed = true;
-  }
-  return changed ? core.state : null;
 }

@@ -65,7 +65,7 @@ describe('opening and not editing', () => {
   it('a selection change is not a source change', () => {
     const core = new EditorCore('Hello world\n');
     const result = core.apply(core.state.tr.setSelection(TextSelection.create(core.doc, 3, 6)));
-    expect(result).toMatchObject({ ok: true, docChanged: false, change: null });
+    expect(result).toMatchObject({ ok: true, docChanged: false, changes: [] });
     expect(core.text).toBe('Hello world\n');
   });
 });
@@ -76,7 +76,7 @@ describe('typing and deleting change the source by exactly that text', () => {
     const core = new EditorCore(text);
     const result = insert(core, 'XYZ', posOf(core, 'Hello', 2));
     expect(result.text).toBe('HeXYZllo _emph_ &amp; \\*lit\\* done  \nnext line\n\nOther\n');
-    expect(result.change).toEqual({ from: 2, to: 2, insertedLength: 3 });
+    expect(result.changes).toEqual([{ from: 2, to: 2, insertedLength: 3 }]);
   });
 
   it('types inside emphasis, a link and a code span without touching the delimiters', () => {
@@ -101,13 +101,16 @@ describe('typing and deleting change the source by exactly that text', () => {
     expect(insert(core, ' $x$ [@k]', posOf(core, 'world', 5)).text).toBe('Hello world $x$ [@k]\n');
   });
 
-  it('refuses text that cannot be written (four leading spaces make code), and leaves everything as it was', () => {
+  it('does not write spaces typed at the start of a line (four of them would make code)', () => {
     const core = new EditorCore('Hello\n');
     const before = core.text;
     const result = core.apply(core.state.tr.insertText('    ', 1));
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
     expect(core.text).toBe(before);
-    expect(core.doc.firstChild!.textContent).toBe('Hello');
+    expect(core.doc.firstChild!.textContent).toBe('    Hello');
+    // Typing on after them writes the text, at the start of the line.
+    insert(core, 'X', 5);
+    expect(core.text).toBe('XHello\n');
   });
 
   it('deletes a range inside one run, and a whole run with the delimiters around it', () => {
@@ -157,7 +160,7 @@ describe('structural edits write only the blocks that changed', () => {
     const core = new EditorCore('first\n\nsecond\n');
     select(core, posOf(core, 'first', 5));
     const result = run(core, splitBlock);
-    expect(result).toMatchObject({ ok: true, change: null });
+    expect(result).toMatchObject({ ok: true, changes: [] });
     expect(core.text).toBe('first\n\nsecond\n');
     expect(core.doc.childCount).toBe(3);
     insert(core, 'new', core.state.selection.from);
@@ -168,8 +171,9 @@ describe('structural edits write only the blocks that changed', () => {
     const core = new EditorCore('Hello world\n\nnext\n');
     select(core, posOf(core, 'Hello', 5));
     run(core, splitBlock);
-    // The second paragraph keeps the space that followed the caret (Markdown ignores it).
-    expect(core.text).toBe('Hello\n\n world\n\nnext\n');
+    // The second paragraph keeps the space that followed the caret in the editor; the source does not
+    // write it (a space at the start of a line means nothing, and four of them would be code).
+    expect(core.text).toBe('Hello\n\nworld\n\nnext\n');
   });
 
   it('typing after the last block appends it before the closing newline', () => {

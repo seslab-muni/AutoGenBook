@@ -33,7 +33,7 @@ export type AtomInlineKind =
   'math' | 'citation' | 'html' | 'footnote' | 'image' | 'link' | 'reference' | 'strike' | 'raw';
 
 const nodes: Record<string, NodeSpec> = {
-  doc: { content: 'block+' },
+  doc: { content: '(block | top_block)+' },
   paragraph: {
     content: 'inline*',
     group: 'block',
@@ -128,7 +128,8 @@ const nodes: Record<string, NodeSpec> = {
   /** A block this editor cannot represent faithfully: it keeps its exact source and is edited in Source. */
   atom_block: {
     attrs: { source: { default: '' }, kind: { default: 'raw' }, label: { default: '' } },
-    group: 'block',
+    // (Top level only: its source cannot carry the prefix of a list item or a quote.)
+    group: 'top_block',
     atom: true,
     selectable: true,
     draggable: false,
@@ -173,6 +174,8 @@ const nodes: Record<string, NodeSpec> = {
   },
   atom_inline: {
     attrs: { source: { default: '' }, kind: { default: 'raw' }, label: { default: '' } },
+    // (Not code: an atom is source that is read, a code span is source that is not.)
+    marks: 'link strong em strike',
     inline: true,
     group: 'inline',
     atom: true,

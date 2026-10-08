@@ -157,6 +157,62 @@ function textToken(
   };
 }
 
+/**
+ * The source range of each child. Some mdast extensions create nodes without a position (the GFM
+ * autolink literal splits trailing punctuation off a `www.` link, and the text around it loses its
+ * position too); a run of such nodes covers what lies between its neighbours, divided by aligning
+ * their text with that source.
+ */
+function inferRanges(
+  children: readonly PhrasingContent[],
+  text: string,
+  first: number,
+  bound: number,
+): { s: number; e: number }[] {
+  const out: ({ s: number; e: number } | null)[] = children.map((child) => {
+    const s = child.position?.start.offset;
+    const e = child.position?.end.offset;
+    return s == null || e == null ? null : { s, e };
+  });
+  for (let i = 0; i < out.length; i += 1) {
+    if (out[i]) continue;
+    let end = i;
+    while (end < out.length && !out[end]) end += 1;
+    const from = i > 0 ? out[i - 1]!.e : first;
+    const to = end < out.length ? out[end]!.s : bound;
+    const values = children.slice(i, end).map((child) => {
+      if (child.type === 'text') return child.value;
+      if (child.type === 'link' && child.children.every((c) => c.type === 'text')) {
+        return child.children.map((c) => (c as { value: string }).value).join('');
+      }
+      throw new Unsupported('no position');
+    });
+    const joined = values.join('');
+    const map = alignValueToSource(joined, text.slice(from, to));
+    if (!map) throw new Unsupported('no position');
+    let at = from;
+    let consumed = 0;
+    values.forEach((value, k) => {
+      consumed += value.length;
+      const last = k === values.length - 1;
+      const stop = last ? to : consumed > 0 ? from + map[consumed - 1]! + 1 : at;
+      out[i + k] = { s: at, e: Math.max(at, stop) };
+      at = out[i + k]!.e;
+    });
+    i = end - 1;
+  }
+  return out as { s: number; e: number }[];
+}
+
+/** Length of the delimiter run closing a mark whose source ends at `end`, at most `max`. */
+function closingRun(text: string, end: number, max: number): number {
+  const ch = text.charCodeAt(end - 1);
+  if (ch !== 42 && ch !== 95 && ch !== 126) return 0;
+  let n = 0;
+  while (n < max && text.charCodeAt(end - 1 - n) === ch) n += 1;
+  return n;
+}
+
 class InlineBuilder {
   nodes: PMNode[] = [];
   tokens: InlineToken[] = [];
@@ -246,23 +302,51 @@ class InlineBuilder {
     }
   }
 
-  phrasing(children: readonly PhrasingContent[], marks: readonly Mark[]) {
+  /**
+   * `bound` is the end offset of the parent's content. Some mdast extensions (the GFM autolink
+   * literal splitting off trailing punctuation) create nodes without a position; those are
+   * inferred from their neighbours.
+   */
+  phrasing(
+    children: readonly PhrasingContent[],
+    marks: readonly Mark[],
+    bound: number,
+    first: number,
+  ) {
     const { env } = this;
-    for (const child of children) {
-      const nStart = startOf(child);
-      const nEnd = endOf(child);
+    const ranges = inferRanges(children, env.text, first, bound);
+    for (let index = 0; index < children.length; index += 1) {
+      const child = children[index]!;
+      const nStart = ranges[index]!.s;
+      const nEnd = ranges[index]!.e;
+      const inner = (close: number) => Math.max(nStart, nEnd - closingRun(env.text, nEnd, close));
       switch (child.type) {
         case 'text':
           this.text(child.value, nStart, nEnd, marks);
           break;
         case 'strong':
-          this.phrasing(child.children, schema.marks['strong']!.create().addToSet(marks as Mark[]));
+          this.phrasing(
+            child.children,
+            schema.marks['strong']!.create().addToSet(marks as Mark[]),
+            inner(2),
+            nStart,
+          );
           break;
         case 'emphasis':
-          this.phrasing(child.children, schema.marks['em']!.create().addToSet(marks as Mark[]));
+          this.phrasing(
+            child.children,
+            schema.marks['em']!.create().addToSet(marks as Mark[]),
+            inner(1),
+            nStart,
+          );
           break;
         case 'delete':
-          this.phrasing(child.children, schema.marks['strike']!.create().addToSet(marks as Mark[]));
+          this.phrasing(
+            child.children,
+            schema.marks['strike']!.create().addToSet(marks as Mark[]),
+            inner(2),
+            nStart,
+          );
           break;
         case 'inlineCode': {
           const slice = env.text.slice(nStart, nEnd);
@@ -287,7 +371,7 @@ class InlineBuilder {
               href: child.url,
               title: child.title ?? '',
             });
-            this.phrasing(child.children, link.addToSet(marks as Mark[]));
+            this.phrasing(child.children, link.addToSet(marks as Mark[]), nEnd, nStart + 1);
           } else {
             this.atom('link', slice, nStart, nEnd, marks);
           }
@@ -332,7 +416,7 @@ function textblock(
 ): PMNode {
   const nStart = startOf(node);
   const builder = new InlineBuilder(env, nStart, depth > 0);
-  builder.phrasing(node.children, []);
+  builder.phrasing(node.children, [], endOf(node), nStart);
   const { fragment, map } = builder.finish();
   const result = schema.nodes[type]!.create(attrs ?? null, fragment);
   env.infos.set(result, { s: nStart - env.base, e: endOf(node) - env.base, map });
@@ -525,6 +609,10 @@ function convertTop(
       return { node: converted, tbs: collectTextblocks(converted, env) };
     } catch (error) {
       if (!(error instanceof Unsupported)) throw error;
+      (globalThis as { __smDebug?: (...a: unknown[]) => void }).__smDebug?.(
+        'unsupported',
+        error.message,
+      );
     }
   }
   return { node: atomBlock(node, source), tbs: [] };
@@ -592,4 +680,25 @@ export function parseDocument(text: string, options: ParseOptions = {}): ParsedD
     segments.map((segment) => segment.node),
   );
   return { segments, tail, doc };
+}
+
+/**
+ * Where the markers of the top-level list in `source` are: the offset of the bullet character, or of
+ * the delimiter after the number, of each item. `null` when the source is not one list. Used to
+ * change a list's marker without writing the list again.
+ */
+export function listMarkerOffsets(source: string): { offsets: number[]; ordered: boolean } | null {
+  const tree = processor.parse(source) as Root;
+  const first = tree.children[0];
+  if (tree.children.length !== 1 || first?.type !== 'list') return null;
+  const offsets: number[] = [];
+  for (const item of first.children) {
+    const at = item.position?.start.offset;
+    if (at == null) return null;
+    if (first.ordered) {
+      const digits = /^\d+/.exec(source.slice(at))?.[0].length ?? 0;
+      offsets.push(at + digits);
+    } else offsets.push(at);
+  }
+  return { offsets, ordered: first.ordered === true };
 }

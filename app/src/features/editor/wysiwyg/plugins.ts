@@ -278,16 +278,41 @@ function editAtomCommand(callbacks: EditorCallbacks): Command {
 const hardBreak: Command = (state, dispatch) => {
   const type = nodes['hard_break']!;
   if (state.selection.$from.parent.type.spec.code) return false;
+  // A heading is one line: Shift+Enter there does nothing (it is not an error).
+  if (state.selection.$from.parent.type === nodes['heading']) return true;
   if (dispatch) dispatch(state.tr.replaceSelectionWith(type.create()).scrollIntoView());
   return true;
 };
 
 const wrapMarks = (type: MarkType): Command => toggleMark(type);
 
+/** Code on a selection: the text in it. An atom is source that is read, not text to put in a code span. */
+const toggleCode: Command = (state, dispatch) => {
+  const code = marks['code']!;
+  const { from, to, empty } = state.selection;
+  if (empty) return toggleMark(code)(state, dispatch);
+  if (dispatch) {
+    const tr = state.tr;
+    if (state.doc.rangeHasMark(from, to, code)) tr.removeMark(from, to, code);
+    else {
+      state.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.isText) {
+          tr.addMark(Math.max(from, pos), Math.min(to, pos + node.nodeSize), code.create());
+        }
+      });
+    }
+    dispatch(tr.scrollIntoView());
+  }
+  return true;
+};
+
 export function buildPlugins(callbacks: EditorCallbacks, placeholder: string): Plugin[] {
   const listItem = nodes['list_item']!;
+  // (A selection between top-level blocks, which ProseMirror's own commands do not expect, does nothing.)
+  const betweenBlocks: Command = (state) => state.selection.$from.depth === 0;
   const enter = chainCommands(
     editAtomCommand(callbacks),
+    betweenBlocks,
     newlineInCode,
     splitListItem(listItem),
     createParagraphNear,
@@ -305,7 +330,7 @@ export function buildPlugins(callbacks: EditorCallbacks, placeholder: string): P
       'Mod-Shift-z': redo,
       'Mod-b': wrapMarks(marks['strong']!),
       'Mod-i': wrapMarks(marks['em']!),
-      'Mod-e': wrapMarks(marks['code']!),
+      'Mod-e': toggleCode,
       'Mod-k': linkCommand(callbacks),
       'Mod-s': () => {
         callbacks.onFlush();

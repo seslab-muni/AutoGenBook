@@ -128,8 +128,26 @@ function block(pick: Pick, next: () => number, depth: number): string {
   }
 }
 
-/** A random document: blocks separated by blank lines (sometimes more), with optional leading/trailing whitespace. */
-export function randomDocument(seed: number): string {
+/** Small sections of the engine's golden output (copied here): real documents for the property tests. */
+const goldenFiles = import.meta.glob('./fixtures/*.md', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+export const goldenDocuments: string[] = Object.keys(goldenFiles)
+  .sort()
+  .map((name) => goldenFiles[name]!.replace(/\r\n?/g, '\n'));
+
+export interface DocumentOptions {
+  /** Blocks are often separated by a single newline (where the Markdown allows it) instead of a blank line. */
+  tight?: boolean;
+}
+
+/**
+ * A random document: blocks separated by blank lines (sometimes more, and with `tight`, often by one
+ * newline), with optional leading/trailing whitespace.
+ */
+export function randomDocument(seed: number, options: DocumentOptions = {}): string {
   const next = rng(seed);
   const pick: Pick = (items) => items[Math.floor(next() * items.length)]!;
   const count = 1 + Math.floor(next() * 8);
@@ -139,7 +157,16 @@ export function randomDocument(seed: number): string {
   const trail = pick(['', '\n', '\n\n', '  \n']);
   return (
     lead +
-    parts.map((p, i) => (i === 0 ? p : pick(['\n\n', '\n\n', '\n\n', '\n\n\n']) + p)).join('') +
+    parts
+      .map(
+        (p, i) =>
+          (i === 0
+            ? ''
+            : options.tight
+              ? pick(['\n', '\n', '\n\n', '\n \n'])
+              : pick(['\n\n', '\n\n', '\n\n', '\n\n\n'])) + p,
+      )
+      .join('') +
     trail
   );
 }

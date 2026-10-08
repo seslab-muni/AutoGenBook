@@ -13,12 +13,13 @@ import type { EditorSelection } from '@/stores/editor-selection-store';
 
 import {
   cleanPastedHtml,
+  containerSafe,
   markdownSlice,
   parseClipboardText,
   pasteBlocks,
   sliceToMarkdown,
 } from './clipboard';
-import { EditorCore, reconcile } from './core';
+import { EditorCore } from './core';
 import {
   anchorIdsAt,
   highlightDecorations,
@@ -89,6 +90,59 @@ function keepReactOutOfTheEditor(dom: HTMLElement) {
       this.setAttribute('contenteditable', value);
     },
   });
+}
+
+const DELETE_TYPES = new Set([
+  'deleteContentBackward',
+  'deleteContentForward',
+  'deleteWordBackward',
+  'deleteWordForward',
+]);
+
+/**
+ * Typing and deleting within a textblock are made here, from the range the browser reports it is
+ * about to change, instead of by reading what the browser did to the DOM afterwards. ProseMirror
+ * reads the DOM in a mutation callback, which Chrome can run in the middle of its own editing
+ * command, before it has moved the caret behind the typed character: the next character then
+ * landed in front of the previous one (`e found thatW`), most easily on the first edit after
+ * loading, when everything is cold. Composition (IME), spell-check replacements, drops and the
+ * rest still go through ProseMirror's own reading.
+ */
+export function handleBeforeInput(view: EditorView, event: InputEvent): boolean {
+  if (view.composing || event.isComposing || !view.editable) return false;
+  const insert = event.inputType === 'insertText';
+  if (!insert && !DELETE_TYPES.has(event.inputType)) return false;
+  const data = event.data ?? '';
+  if (insert && (data === '' || /[\r\n]/.test(data))) return false;
+  const ranges = typeof event.getTargetRanges === 'function' ? event.getTargetRanges() : [];
+  let from: number;
+  let to: number;
+  try {
+    if (ranges.length === 1) {
+      const range = ranges[0]!;
+      from = view.posAtDOM(range.startContainer, range.startOffset);
+      to = view.posAtDOM(range.endContainer, range.endOffset);
+    } else if (ranges.length === 0 && view.state.selection instanceof TextSelection) {
+      ({ from, to } = view.state.selection);
+    } else return false;
+    const doc = view.state.doc;
+    if (from > to) [from, to] = [to, from];
+    const $from = doc.resolve(from);
+    if (!$from.parent.inlineContent || !$from.sameParent(doc.resolve(to))) return false;
+  } catch {
+    return false;
+  }
+  if (!insert && from === to) return false;
+  event.preventDefault();
+  if (insert) {
+    const deflt = () => view.state.tr.insertText(data, from, to).scrollIntoView();
+    if (!view.someProp('handleTextInput', (f) => f(view, from, to, data, deflt))) {
+      view.dispatch(deflt());
+    }
+  } else {
+    view.dispatch(view.state.tr.delete(from, to).scrollIntoView());
+  }
+  return true;
 }
 
 /** What the editor's element carries outside production builds, for tests and browser checks. */
@@ -176,6 +230,7 @@ export class EditorController {
       clipboardTextParser: (text, $context, plain) => parseClipboardText(text, $context, plain),
       clipboardTextSerializer: (slice) => sliceToMarkdown(slice),
       transformPastedHTML: cleanPastedHtml,
+      transformPasted: (slice, view) => containerSafe(slice, view.state.selection.$from),
       handlePaste: (view, event) => {
         // Plain text (no HTML): ProseMirror opens the slice as far as it can, which folds a pasted
         // heading into the paragraph at the caret; blocks that began on a new line stay blocks.
@@ -186,13 +241,10 @@ export class EditorController {
         return pasteBlocks(view, markdownSlice(text));
       },
       handleDOMEvents: {
+        beforeinput: (view, event) => handleBeforeInput(view, event as InputEvent),
         blur: () => {
-          // Text typed as `$x$` or `[@key]` becomes the formula or the citation once the writer is elsewhere.
-          const state = reconcile(this.core);
-          if (state) {
-            this.view.updateState(state);
-            this.schedulePaint();
-          }
+          // Leaving the editor changes nothing in the draft or in the document (text typed as
+          // `$x$` stays literal until the section is read again): it only asks for a save.
           this.props.onFlush();
           return false;
         },
@@ -293,8 +345,8 @@ export class EditorController {
     }
     this.view.updateState(applied.state);
     if (applied.docChanged) {
-      if (applied.change && this.tracked.length > 0)
-        this.tracked = mapTracked(this.tracked, applied.change);
+      if (applied.changes.length > 0 && this.tracked.length > 0)
+        this.tracked = mapTracked(this.tracked, applied.changes);
       if (applied.text !== before) {
         this.pending.push(applied.text);
         if (this.pending.length > 8) this.pending.shift();

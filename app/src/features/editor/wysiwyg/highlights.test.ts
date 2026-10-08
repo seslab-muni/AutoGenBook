@@ -18,29 +18,29 @@ const range = (needle: string, id: string, kind = 'comment') => {
 describe("tracking ranges through source changes (the Source view's rules)", () => {
   it('shifts a range after the change and leaves one before it', () => {
     const tracked = trackedFrom([range('gamma', 'a'), range('Alpha', 'b')], text.length);
-    const mapped = mapTracked(tracked, { from: 6, to: 6, insertedLength: 3 });
+    const mapped = mapTracked(tracked, [{ from: 6, to: 6, insertedLength: 3 }]);
     expect(trackedPositions(mapped).get('a')).toEqual({ start: 14, end: 19 });
     expect(trackedPositions(mapped).get('b')).toEqual({ start: 0, end: 5 });
   });
 
   it('keeps text typed right before a range outside it, and right after it outside it', () => {
     const tracked = trackedFrom([range('beta', 'a')], text.length);
-    const before = mapTracked(tracked, { from: 6, to: 6, insertedLength: 2 });
+    const before = mapTracked(tracked, [{ from: 6, to: 6, insertedLength: 2 }]);
     expect(trackedPositions(before).get('a')).toEqual({ start: 8, end: 12 });
-    const after = mapTracked(tracked, { from: 10, to: 10, insertedLength: 2 });
+    const after = mapTracked(tracked, [{ from: 10, to: 10, insertedLength: 2 }]);
     expect(trackedPositions(after).get('a')).toEqual({ start: 6, end: 10 });
   });
 
   it('grows a range that is typed into, and flags one whose text is deleted', () => {
     const tracked = trackedFrom([range('beta', 'a')], text.length);
     expect(
-      trackedPositions(mapTracked(tracked, { from: 8, to: 8, insertedLength: 1 })).get('a'),
+      trackedPositions(mapTracked(tracked, [{ from: 8, to: 8, insertedLength: 1 }])).get('a'),
     ).toEqual({
       start: 6,
       end: 11,
     });
     expect(
-      trackedPositions(mapTracked(tracked, { from: 5, to: 11, insertedLength: 0 })).get('a'),
+      trackedPositions(mapTracked(tracked, [{ from: 5, to: 11, insertedLength: 0 }])).get('a'),
     ).toBeNull();
   });
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { markdownSlice, parseClipboardText, pasteBlocks, sliceToMarkdown } from './clipboard';
 import { lastChange, mount, posOf, press, select, type, type Harness } from './test-harness';
+import { schema } from './schema';
 
 let harness: Harness | null = null;
 afterEach(() => {
@@ -72,14 +73,14 @@ describe('typing', () => {
     expect(h.props.onChange).not.toHaveBeenCalled();
   });
 
-  it('refuses text that cannot be written as Markdown, tells the owner, and keeps the document', () => {
-    const h = open('Hello\n');
-    select(h.view, 1);
-    type(h.view, '    ');
-    // Three spaces are fine (Markdown ignores them); the fourth would make the paragraph code.
+  it('refuses what cannot be written as Markdown, tells the owner, and keeps the document', () => {
+    const h = open('ab`cd`\n');
+    // Emphasis around code that touches a letter has no Markdown form.
+    const from = posOf(h.view, 'cd', 0);
+    h.view.dispatch(h.view.state.tr.addMark(from, from + 2, schema.marks['em']!.create()));
     expect(h.props.onRefused).toHaveBeenCalledTimes(1);
-    expect(h.controller.core.text).toBe('   Hello\n');
-    expect(h.view.state.doc.firstChild!.textContent).toBe('   Hello');
+    expect(h.controller.core.text).toBe('ab`cd`\n');
+    expect(h.view.state.doc.firstChild!.textContent).toBe('abcd');
   });
 
   it('does not take edits while read-only', () => {
@@ -98,20 +99,20 @@ describe('typing', () => {
 });
 
 describe('text typed as formulas and citations', () => {
-  it('stays literal while typed and becomes the atom when the writer leaves the block', () => {
+  it('stays literal until the section is read again: leaving the editor changes nothing', () => {
     const h = open('Hello world\n');
     select(h.view, posOf(h.view, 'world', 5));
     type(h.view, ' $y^2$ and [@k1]');
     const typed = h.controller.core.text;
     expect(typed).toBe('Hello world $y^2$ and [@k1]\n');
-    expect(h.view.dom.querySelector('[data-md-atom-inline]')).toBeNull();
-    h.view.dom.dispatchEvent(new FocusEvent('blur'));
-    expect(h.view.dom.querySelectorAll('[data-md-atom-inline]')).toHaveLength(2);
-    // The source did not change by being read again, and nothing was reported.
-    expect(h.controller.core.text).toBe(typed);
-    expect(lastChange(h.props)).toBe(typed);
+    const doc = h.view.state.doc;
     const calls = (h.props.onChange as ReturnType<typeof vi.fn>).mock.calls.length;
     h.view.dom.dispatchEvent(new FocusEvent('blur'));
+    h.view.dom.dispatchEvent(new FocusEvent('blur'));
+    // Nothing changed: not the document, not the source, nothing was reported.
+    expect(h.view.state.doc).toBe(doc);
+    expect(h.view.dom.querySelector('[data-md-atom-inline]')).toBeNull();
+    expect(h.controller.core.text).toBe(typed);
     expect((h.props.onChange as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
   });
 });
@@ -380,7 +381,7 @@ describe('clipboard', () => {
     const h = open('Hello world\n');
     select(h.view, posOf(h.view, 'Hello', 5));
     expect(pasteBlocks(h.view, markdownSlice('\n\n## Pasted\n\n- a\n- b\n\nlast'))).toBe(true);
-    expect(h.controller.core.text).toBe('Hello\n\n## Pasted\n\n- a\n- b\n\nlast\n\n world\n');
+    expect(h.controller.core.text).toBe('Hello\n\n## Pasted\n\n- a\n- b\n\nlast\n\nworld\n');
   });
 
   it('pastes plain text into a code block as it is', () => {

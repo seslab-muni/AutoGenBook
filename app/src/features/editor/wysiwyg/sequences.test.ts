@@ -16,31 +16,20 @@ import { Selection, TextSelection, type Command } from 'prosemirror-state';
 import { describe, expect, it } from 'vitest';
 
 import { EditorCore } from './core';
-import { fingerprintString } from './equivalence';
+import { fingerprintString, isBlankParagraph } from './equivalence';
 import { parseDocument } from './parse';
 import { schema } from './schema';
-import { randomDocument, rng } from './test-docs';
+import { goldenDocuments, randomDocument, rng } from './test-docs';
 
 const { nodes, marks } = schema;
 
 const meanings = (doc: PMNode): string[] => {
   const out: string[] = [];
   doc.forEach((node) => {
-    if (node.type.name === 'paragraph' && node.content.size === 0) return;
+    if (isBlankParagraph(node)) return;
     out.push(fingerprintString(node));
   });
   return out;
-};
-
-/** Text that may differ between what the editor holds (kept as typed) and what reading the source gives. */
-const unstable = (doc: PMNode): boolean => {
-  let found = false;
-  doc.descendants((node) => {
-    if (node.isTextblock && /(^|\n)[ \t]|[ \t]($|\n)/.test(node.textContent)) found = true;
-    if (node.isTextblock && /\$|\[@|\\/.test(node.textContent)) found = true;
-    return true;
-  });
-  return found;
 };
 
 const commands: Command[] = [
@@ -74,9 +63,10 @@ function runSession(
   count: number,
   withHistoryOps: boolean,
   check: (s: Session, step: number) => void,
+  start: string = randomDocument(seed, { tight: seed % 2 === 0 }),
 ): Session {
   const next = rng(seed * 104729);
-  const original = randomDocument(seed);
+  const original = start;
   const core = new EditorCore(original, [history({ newGroupDelay: -1 })]);
   const session: Session = { core, before: [], steps: 0, refused: 0 };
   for (let step = 0; step < count; step += 1) {
@@ -104,7 +94,21 @@ function runSession(
       }
     };
     if (op < 6) {
-      const words = ['x', 'ab', ' q', '* ', 'é', '😀', '\u00a0', '7.'];
+      const words = [
+        'x',
+        'ab',
+        ' q',
+        '* ',
+        'é',
+        '😀',
+        '\u00a0',
+        '7.',
+        '$',
+        '[@k]',
+        '\\',
+        '   ',
+        'www.a.b',
+      ];
       const { from, to } = core.state.selection;
       apply(core.state.tr.insertText(words[Math.floor(next() * words.length)]!, from, to));
     } else if (op < 8) {
@@ -143,36 +147,51 @@ function runSession(
 }
 
 describe('long random editing sessions keep the source and the editor in agreement', () => {
-  it('150 sessions of 25 edits (with undo and redo among them): no exception, the source always reads as the editor shows', () => {
+  it('300 sessions of 25 edits (with undo and redo among them): no exception, the source always reads as the editor shows', () => {
     let steps = 0;
     let refused = 0;
-    for (let seed = 1; seed <= 150; seed += 1) {
-      const session = runSession(seed, 25, true, ({ core }, step) => {
-        // The model's text is the model's parts, and reading it again gives what the editor shows.
-        expect(core.model.text, `seed ${seed} step ${step}`).toBe(core.model.join());
-        if (unstable(core.doc)) return;
-        const reread = parseDocument(core.text, { trailingParagraph: false });
-        const mine = meanings(core.doc);
-        const theirs = reread.segments
-          .filter((s) => s.src !== '')
-          .map((s) => fingerprintString(s.node));
-        if (JSON.stringify(mine) !== JSON.stringify(theirs)) {
-          throw new Error(
-            `seed ${seed} step ${step}: ${JSON.stringify(core.text)}\n mine ${JSON.stringify(mine)}\n read ${JSON.stringify(theirs)}`,
-          );
-        }
-      });
+    for (let seed = 1; seed <= 300; seed += 1) {
+      // (Documents with single-newline gaps on even seeds, a golden section on every seventh; nothing
+      // is skipped: formulas, citations, backslashes and edge whitespace are all in play.)
+      const start = seed % 7 === 0 ? goldenDocuments[seed % goldenDocuments.length]! : undefined;
+      const session = runSession(
+        seed,
+        25,
+        true,
+        ({ core }, step) => {
+          // The model's text is the model's parts, and reading the WHOLE source again (an independent
+          // parse, the oracle) gives the blocks the editor shows.
+          expect(core.model.text, `seed ${seed} step ${step}`).toBe(core.model.join());
+          const reread = parseDocument(core.text, { trailingParagraph: false });
+          const mine = meanings(core.doc);
+          const theirs = reread.segments
+            .filter((s) => s.src !== '')
+            .map((s) => fingerprintString(s.node));
+          if (JSON.stringify(mine) !== JSON.stringify(theirs)) {
+            throw new Error(
+              `seed ${seed} step ${step}: ${JSON.stringify(core.text)}\n mine ${JSON.stringify(mine)}\n read ${JSON.stringify(theirs)}`,
+            );
+          }
+        },
+        start,
+      );
       steps += session.steps;
       refused += session.refused;
     }
-    expect(steps).toBeGreaterThan(2500);
-    // Refusals are for edits that cannot be written (such as four leading spaces), never routine.
-    expect(refused / steps).toBeLessThan(0.05);
-  }, 60000);
+    expect(steps).toBeGreaterThan(5000);
+    // Refusals are for edits that have no Markdown form, never routine.
+    expect(refused / steps).toBeLessThan(0.01);
+  }, 120000);
 
   it('undoing a session edit by edit gives the source back exactly at every step (300 sessions)', () => {
     for (let seed = 1; seed <= 300; seed += 1) {
-      const session = runSession(seed, 25, false, () => {});
+      const session = runSession(
+        seed,
+        25,
+        false,
+        () => {},
+        seed % 7 === 0 ? goldenDocuments[seed % goldenDocuments.length]! : undefined,
+      );
       const { core, before } = session;
       for (let k = before.length - 1; k >= 0; k -= 1) {
         let applied = false;
@@ -180,9 +199,14 @@ describe('long random editing sessions keep the source and the editor in agreeme
           applied = core.apply(tr).ok;
         });
         if (!applied) throw new Error(`seed ${seed}: undo ${k} refused`);
-        // (A list that took the other marker to stay apart from a neighbour may keep it after an undo.)
+        // (A list that took the other marker to stay apart from a neighbour may keep it after an undo,
+        // and a backslash escape - the same text written escaped or not - is not remembered for blocks
+        // that left the model's bounded memory or were written more than one way.)
         const plain = (text: string) =>
-          text.replace(/^( *)[-*+] /gm, '$1- ').replace(/^( *\d+)\) /gm, '$1. ');
+          text
+            .replace(/^( *)[-*+] /gm, '$1- ')
+            .replace(/^( *\d+)\) /gm, '$1. ')
+            .replace(/\\(?=[!-/:-@[-`{-~])/g, '');
         if (plain(core.text) !== plain(before[k]!)) {
           let i = 0;
           while (i < before[k]!.length && before[k]![i] === core.text[i]) i += 1;

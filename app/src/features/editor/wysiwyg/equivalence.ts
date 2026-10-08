@@ -1,4 +1,4 @@
-import type { Node as PMNode } from 'prosemirror-model';
+import type { Mark, Node as PMNode } from 'prosemirror-model';
 
 import { marksKey } from './parse';
 
@@ -7,27 +7,70 @@ import { marksKey } from './parse';
  * back as the same thing (the serializer's safety net: every edited block is parsed again and
  * compared). It deliberately ignores what Markdown does not preserve or that the serializer is free
  * to choose: marker characters, list tightness, escapes, edge whitespace, whitespace around line
- * breaks, marks on whitespace-only runs. An atom and the literal text of its source are the same
- * thing (typing `$x$` is text until the block is parsed again).
+ * breaks, marks on whitespace and punctuation at the edge of emphasised text. A formula, a citation
+ * and an automatic link are the same thing as their literal source (typing `$x$` is text until the
+ * block is parsed again), and so is a reference to a definition or a footnote; no other atom is.
  */
 
 interface Run {
   t: string;
   m: string;
+  marks: readonly Mark[];
 }
 
 const WS = /[ \t]/;
 const HARD = '\u0000';
+// eslint-disable-next-line no-control-regex
+const BREAKS = /[\n\u0000]{2,}/g;
+const EDGE_LEAD = /^[\p{Zs}\t\p{P}\p{S}]*/u;
+const EDGE_TRAIL = /[\p{Zs}\t\p{P}\p{S}]*$/u;
 
-function inlineRuns(node: PMNode): Run[] {
+/** Whether math source `$...$` reads as formula by the rule the editor writes it by (see `serialize.ts`). */
+export function isCleanMath(source: string): boolean {
+  if (source.includes('\n')) return false;
+  const open = /^\$+/.exec(source)?.[0].length ?? 0;
+  const close = /\$+$/.exec(source)?.[0].length ?? 0;
+  if (open === 0 || open !== close || open * 2 >= source.length) return false;
+  const inner = source.slice(open, source.length - close);
+  return !/^\s|\s$/.test(inner) && !inner.includes('$');
+}
+
+/**
+ * What an atom is worth as text. Only a formula (written the way the editor writes formulas), a
+ * citation and an automatic link are the same thing as their literal source: typing one of them is
+ * text until the block is parsed again. Anything else (inline HTML, an image, a reference link, a
+ * footnote reference) is a construct of its own: text that would read back as one is not equal.
+ */
+function atomText(kind: string, source: string): string {
+  // (A reference link or a footnote reference means what the definitions in the rest of the draft
+  // say, which a block read on its own cannot know: the serializer keeps literal text from becoming
+  // one by escaping the brackets of every label that is defined.)
+  if (kind === 'link') {
+    // (`<https://x.y>` is the address `https://x.y`.)
+    const angle = /^<([^<>\s]+)>$/.exec(source);
+    return (angle ? angle[1]! : source).replace(/\\(?=[!-/:-@[-`{-~])/g, '');
+  }
+  if (kind === 'citation' || kind === 'reference' || kind === 'footnote') return source;
+  if (kind === 'math' && isCleanMath(source)) return source;
+  return `\u0001${kind}\u0002${source}\u0001`;
+}
+
+function inlineRuns(node: PMNode, inHeading: boolean): Run[] {
   const runs: Run[] = [];
   node.forEach((child) => {
     const m = marksKey(child.marks);
-    if (child.isText) runs.push({ t: child.text!, m });
-    else if (child.type.name === 'atom_inline')
-      runs.push({ t: child.attrs['source'] as string, m });
-    else if (child.type.name === 'soft_break') runs.push({ t: '\n', m: '' });
-    else if (child.type.name === 'hard_break') runs.push({ t: HARD, m: '' });
+    if (child.isText) runs.push({ t: child.text!, m, marks: child.marks });
+    else if (child.type.name === 'atom_inline') {
+      runs.push({
+        t: atomText(child.attrs['kind'] as string, child.attrs['source'] as string),
+        m,
+        marks: child.marks,
+      });
+    } else if (child.type.name === 'soft_break') {
+      runs.push({ t: inHeading ? ' ' : '\n', m: '', marks: [] });
+    } else if (child.type.name === 'hard_break') {
+      runs.push({ t: inHeading ? ' ' : HARD, m: '', marks: [] });
+    }
   });
   return runs;
 }
@@ -43,11 +86,23 @@ function mergeRuns(runs: readonly Run[]): Run[] {
   return out;
 }
 
-const isCode = (marks: string) => marks.split(',').includes('code');
+/** A paragraph of nothing but spaces and line breaks: it has no source (like an empty one, it is where the caret can be). */
+export function isBlankParagraph(node: PMNode): boolean {
+  if (node.type.name !== 'paragraph') return false;
+  let blank = true;
+  node.forEach((child) => {
+    const type = child.type.name;
+    if (type === 'soft_break' || type === 'hard_break') return;
+    if (!child.isText || !/^[ \t\n]*$/.test(child.text!)) blank = false;
+  });
+  return blank;
+}
+
+const isCode = (marks: readonly Mark[]) => marks.some((mark) => mark.type.name === 'code');
 
 /** Inline content, normalised: see the file comment. */
 export function inlineFingerprint(node: PMNode): [string, string][] {
-  const runs = mergeRuns(inlineRuns(node));
+  const runs = mergeRuns(inlineRuns(node, node.type.name === 'heading'));
   const text = runs.map((run) => run.t).join('');
   const droppable = (c: string | undefined) =>
     c !== undefined && (WS.test(c) || c === '\n' || c === HARD);
@@ -75,24 +130,32 @@ export function inlineFingerprint(node: PMNode): [string, string][] {
     let piece = '';
     for (let i = 0; i < run.t.length; i += 1) if (!drop[at + i]) piece += run.t[i];
     at += run.t.length;
-    kept.push({ t: piece, m: run.m });
+    kept.push({ t: piece, m: run.m, marks: run.marks });
   }
-  // Whitespace at the edge of a marked run belongs to the text around it: Markdown cannot open or
-  // close emphasis next to a space, so where the space sits is the serializer's choice (code is exact).
+  // Whitespace and punctuation at the edge of an emphasised run belong to the text around it:
+  // Markdown cannot open or close emphasis next to a space, and next to punctuation only when a
+  // letter does not follow (`**「重要」**です`), so where they sit is the serializer's choice (code
+  // and links are exact).
   const canonical: Run[] = [];
   for (const run of kept) {
-    if (run.m === '' || isCode(run.m) || run.t === '') {
+    if (run.m === '' || isCode(run.marks) || run.t === '') {
       canonical.push(run);
       continue;
     }
-    const lead = /^[ \t]*/.exec(run.t)![0];
-    const trail = lead.length === run.t.length ? '' : /[ \t]*$/.exec(run.t)![0];
+    const outer = run.marks.filter((mark) => mark.type.name === 'link');
+    const outerRun = (t: string): Run => ({ t, m: marksKey(outer), marks: outer });
+    const lead = EDGE_LEAD.exec(run.t)![0];
+    const trail = lead.length === run.t.length ? '' : EDGE_TRAIL.exec(run.t)![0];
     const core = run.t.slice(lead.length, run.t.length - trail.length);
-    if (lead) canonical.push({ t: lead, m: '' });
-    if (core) canonical.push({ t: core, m: run.m });
-    if (trail) canonical.push({ t: trail, m: '' });
+    if (lead) canonical.push(outerRun(lead));
+    if (core) canonical.push({ t: core, m: run.m, marks: run.marks });
+    if (trail) canonical.push(outerRun(trail));
   }
-  return mergeRuns(canonical).map((run) => [run.t, run.m]);
+  // (Two line breaks in a row have no Markdown form: one stays.)
+  return mergeRuns(canonical).map((run) => [
+    run.t.replace(BREAKS, (breaks) => (breaks.includes(HARD) ? HARD : '\n')),
+    run.m,
+  ]);
 }
 
 /**
@@ -103,9 +166,11 @@ export function inlineFingerprint(node: PMNode): [string, string][] {
 function listItemChildren(node: PMNode): unknown[] {
   const out: unknown[] = [];
   node.forEach((child) => {
-    if (child.type.name === 'paragraph' && child.content.size === 0 && node.childCount > 1) return;
+    if (isBlankParagraph(child)) return;
     out.push(blockFingerprint(child));
   });
+  // (Nothing but blank paragraphs: an empty item or quote.)
+  if (out.length === 0 && node.childCount > 0) out.push(['p', []]);
   return out;
 }
 
@@ -126,7 +191,7 @@ export function blockFingerprint(node: PMNode): unknown {
     case 'ordered_list':
       return ['ol', node.attrs['start'], ...listItemChildren(node)];
     case 'atom_block':
-      return ['a', node.attrs['source']];
+      return ['a', (node.attrs['source'] as string).replace(/\s+$/, '')];
     default:
       return [node.type.name];
   }
@@ -143,12 +208,13 @@ export function sameMeaning(intended: readonly PMNode[], parsed: readonly PMNode
     const a = intended[i]!;
     const b = parsed[i]!;
     if (fingerprintString(a) === fingerprintString(b)) continue;
-    // A paragraph of literal text that is, as source, a display-math block (typing `$$x$$`): the
-    // text is kept as typed and becomes the formula the next time the block is parsed.
+    // A paragraph of literal text that is, as source, a closed one-line display formula (typing
+    // `$$x$$`): the text is kept as typed and becomes the formula the next time the block is parsed.
     if (
       a.type.name === 'paragraph' &&
       b.type.name === 'atom_block' &&
       b.attrs['kind'] === 'math' &&
+      /^\$\$[^\n$]+\$\$$/.test((b.attrs['source'] as string).trim()) &&
       a.textContent.trim() === (b.attrs['source'] as string).trim() &&
       !a.content.content.some((child) => !child.isText)
     ) {

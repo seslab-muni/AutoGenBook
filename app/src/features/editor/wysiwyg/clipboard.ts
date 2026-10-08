@@ -3,7 +3,7 @@ import { NodeSelection } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 
 import { parseDocument } from './parse';
-import { DEFAULT_STYLE, serializeBlock } from './serialize';
+import { DEFAULT_STYLE, serializeBlock, LEVELS } from './serialize';
 import { schema } from './schema';
 
 /**
@@ -52,6 +52,42 @@ export function markdownSlice(text: string): Slice {
   return new Slice(Fragment.fromArray(blocks), openStart, openEnd);
 }
 
+/**
+ * A block atom (a table, display math, HTML...) keeps its source verbatim, which has no way to carry
+ * the prefix of a list item or a quote: pasted inside one it becomes the text of its source.
+ */
+export function containerSafe(slice: Slice, $from: ResolvedPos): Slice {
+  let inside = false;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const name = $from.node(depth).type.name;
+    if (name === 'list_item' || name === 'blockquote') inside = true;
+  }
+  if (!inside) return slice;
+  let found = false;
+  slice.content.descendants((node) => {
+    if (node.type.name === 'atom_block') found = true;
+    return !found;
+  });
+  if (!found) return slice;
+  const convert = (node: PMNode): PMNode => {
+    if (node.type.name === 'atom_block') {
+      const parts: PMNode[] = [];
+      (node.attrs['source'] as string).split('\n').forEach((line, index) => {
+        if (index > 0) parts.push(schema.nodes['soft_break']!.create());
+        if (line) parts.push(schema.text(line));
+      });
+      return para.create(null, parts);
+    }
+    if (node.isLeaf || node.isInline) return node;
+    const children: PMNode[] = [];
+    node.forEach((child) => children.push(convert(child)));
+    return node.copy(Fragment.fromArray(children));
+  };
+  const blocks: PMNode[] = [];
+  slice.content.forEach((node) => blocks.push(convert(node)));
+  return new Slice(Fragment.fromArray(blocks), slice.openStart, slice.openEnd);
+}
+
 /** Pasting plain text: Markdown unless the caret is in a code block (or Shift was held). */
 export function parseClipboardText(text: string, $context: ResolvedPos, plain: boolean): Slice {
   if ($context.parent.type.spec.code) return codeSlice(text);
@@ -87,7 +123,7 @@ export function sliceToMarkdown(slice: Slice): string {
     slice.content.forEach((node) => blocks.push(node));
     const inlineOnly = blocks.length > 0 && blocks.every((node) => node.isInline);
     const nodes = inlineOnly ? [para.create(null, slice.content)] : blocks;
-    return nodes.map((node) => serializeBlock(node, DEFAULT_STYLE, 1).src).join('\n\n');
+    return nodes.map((node) => serializeBlock(node, DEFAULT_STYLE, LEVELS[2]!).src).join('\n\n');
   } catch {
     return slice.content.textBetween(0, slice.content.size, '\n\n');
   }
@@ -98,7 +134,8 @@ export function sliceToMarkdown(slice: Slice): string {
  * the text around the caret instead of folding the first block into the paragraph the caret is in,
  * which is what ProseMirror's fitting does with a closed slice. Returns whether it handled the paste.
  */
-export function pasteBlocks(view: EditorView, slice: Slice): boolean {
+export function pasteBlocks(view: EditorView, pasted: Slice): boolean {
+  const slice = containerSafe(pasted, view.state.selection.$from);
   const first = slice.content.firstChild;
   if (slice.openStart > 0 || !first || first.isInline) return false;
   const { state } = view;
