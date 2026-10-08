@@ -9,11 +9,7 @@ import type { EditorView } from '@codemirror/view';
 
 import { auth } from '@/api/queries/auth';
 import { ApiError } from '@/api/client';
-import {
-  baseContentHash,
-  outline as outlineQueries,
-  useUpdateOutlineNodeMutation,
-} from '@/api/queries/outline';
+import { outline as outlineQueries, useUpdateOutlineNodeMutation } from '@/api/queries/outline';
 import { runs as runQueries } from '@/api/queries/runs';
 import type { OutlineNode, OutlineNodeUpdate } from '@/api/types';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
@@ -44,11 +40,14 @@ import {
   setFocusedAnchor,
 } from '@/features/editor/lib/cm-anchor-highlights';
 import { normalizeEol } from '@/features/editor/lib/eol';
+import { sha256Hex } from '@/lib/content-hash';
 import type { Anchor } from '@/features/editor/lib/anchors';
 import type { MarginCardContext } from '@/features/editor/margin/card-registry';
-import { COPILOT_ACTIONS_ENABLED } from '@/features/editor/margin/flags';
 import { writeGeometry, sourceGeometry } from '@/features/editor/margin/geometry';
 import { useMarginHost } from '@/features/editor/margin/margin-host';
+import type { RewriteBlock } from '@/features/editor/margin/card-registry';
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
+import { useProjectRuns } from '@/features/runs/hooks/use-project-runs';
 import { MarginPanel } from '@/features/editor/margin/margin-panel';
 import { useCopilot } from '@/features/editor/margin/use-copilot';
 import { useSuggestionStreams } from '@/features/editor/margin/suggestion-progress';
@@ -75,6 +74,9 @@ interface ManuscriptSheetProps {
   flatNodes: readonly OutlineNode[];
   outlineOpen: boolean;
   onSelectNode: (nodeId: string) => void;
+  /** Open with the prompt window on Rewrite, with this instruction ("Regenerate again" on a run page). */
+  initialRewrite?: { instruction: string } | null;
+  onInitialRewriteConsumed?: () => void;
 }
 
 /**
@@ -94,6 +96,8 @@ export function ManuscriptSheet({
   flatNodes,
   outlineOpen,
   onSelectNode,
+  initialRewrite = null,
+  onInitialRewriteConsumed,
 }: ManuscriptSheetProps) {
   const view = useEditorView();
   const setView = useEditorStore((state) => state.setView);
@@ -141,6 +145,21 @@ export function ManuscriptSheet({
   const queryClient = useQueryClient();
   // What this editor has sent (and so what coming back from the server is not "someone else's change").
   const sentRef = useRef(new Set<string>());
+  // The text the draft is based on, as the SERVER holds it: raw (line endings included), its
+  // `contentHash`, and the LF-normalised copy edits are compared against. Moved only when the
+  // baseline itself moves - an adoption, this editor's own successful save, "Keep mine" - never
+  // by whatever the query cache happens to hold when a save runs: a save made on top of text the
+  // user has not seen (an accept that landed meanwhile) must be refused as a conflict, not pass
+  // with the newer text's hash and overwrite it.
+  const baselineRef = useRef(normalizeEol(node[field]));
+  const baseRawRef = useRef(node[field]);
+  const baseHashRef = useRef<string | null>(useLatex ? null : (node.contentHash ?? null));
+  const moveBaseline = useCallback((raw: string, hash: string | null | undefined) => {
+    baselineRef.current = normalizeEol(raw);
+    baseRawRef.current = raw;
+    baseHashRef.current = hash ?? null;
+  }, []);
+
   const { status, schedule, flush, cancel, hold, flushEdits } = useDebouncedMutation<string>({
     onSave: async (text) => {
       // Bounded: only the last few saves matter for recognising our own content coming back.
@@ -150,11 +169,15 @@ export function ManuscriptSheet({
       if (!useLatex) {
         // Without the hash of the text this draft was based on the server would take the write as
         // last-write-wins and overwrite an accepted suggestion or another editor's save.
-        const expectedContentHash = await baseContentHash(queryClient, projectId, node.id);
+        const expectedContentHash =
+          baseHashRef.current ?? (await sha256Hex(baseRawRef.current)) ?? undefined;
         if (expectedContentHash) body.expectedContentHash = expectedContentHash;
       }
       try {
-        return await updateMutation.mutateAsync(body);
+        const saved = await updateMutation.mutateAsync(body);
+        // What this save wrote is the new baseline, with the hash the server gave it.
+        moveBaseline(text, useLatex ? null : (saved.contentHash ?? (await sha256Hex(text))));
+        return saved;
       } catch (error) {
         if (error instanceof ApiError && error.problem?.code === 'content_conflict') {
           // The section changed under this draft: fetch the other version. The effect below turns
@@ -217,8 +240,8 @@ export function ManuscriptSheet({
   const isDirty = isUnsavedStatus(status);
   // Non-leaf nodes (chapters/parts with children) never get LLM-generated content — only leaf
   // sections do (book_builder.py's generate_contents walks leaves only) — so the empty-state
-  // copy and the Copilot's regenerate action must not offer generation for them (issue #77's
-  // 409 guard covers the API side; this covers the UI so the offer isn't made in the first place).
+  // copy and the copilot must not offer generation for them (issue #77's 409 guard covers the API
+  // side; this covers the UI so the offer isn't made in the first place).
   const nodeIsLeaf = isLeaf(node.id, flatNodes);
 
   // ---- server content changed under an open editor (an accepted suggestion, another user) ----------
@@ -226,38 +249,55 @@ export function ManuscriptSheet({
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
-  /** The text the server last had that this editor agrees with: edits are "unsaved" relative to it. */
-  const baselineRef = useRef(serverText);
+  const nodeRef = useRef(node);
+  useEffect(() => {
+    nodeRef.current = node;
+  }, [node]);
+  /** The other version waiting for the user's choice, raw, with its hash (null until known). */
+  const incomingRef = useRef<{ raw: string; hash: string | null } | null>(null);
 
   const adoptServerContent = useCallback(
-    (text: string) => {
-      const next = normalizeEol(text);
+    (raw: string, hash?: string | null) => {
+      const next = normalizeEol(raw);
       cancel();
-      baselineRef.current = next;
+      moveBaseline(raw, hash);
       sentRef.current.clear();
+      incomingRef.current = null;
       setIncoming(null);
       setDraft(next);
       setResetKey((key) => key + 1);
     },
-    [cancel],
+    [cancel, moveBaseline],
+  );
+
+  /** Shows the "changed elsewhere" notice and holds autosave, at once (not after the next render). */
+  const showIncoming = useCallback(
+    (raw: string, hash: string | null | undefined) => {
+      incomingRef.current = { raw, hash: hash ?? null };
+      setIncoming(normalizeEol(raw));
+      hold(true);
+    },
+    [hold],
   );
 
   useEffect(() => {
+    const current = nodeRef.current;
     if (serverText === baselineRef.current) return;
     const unsaved = draftRef.current !== baselineRef.current;
     const ours = sentRef.current.has(serverText) || serverText === draftRef.current;
     if (ours) {
       // Our own save coming back (or the other side reverted to what we have).
-      baselineRef.current = serverText;
+      moveBaseline(current[field], current.contentHash);
+      incomingRef.current = null;
       setIncoming(null);
       // The server holds exactly the draft (a refused save whose other version turned out equal):
       // nothing is left to save, and a failed-save state would be stale.
       if (serverText === draftRef.current) cancel();
       return;
     }
-    if (!unsaved) adoptServerContent(serverText);
-    else setIncoming(serverText);
-  }, [serverText, adoptServerContent, cancel]);
+    if (!unsaved) adoptServerContent(current[field], current.contentHash);
+    else showIncoming(current[field], current.contentHash);
+  }, [serverText, field, adoptServerContent, showIncoming, moveBaseline, cancel]);
 
   // A conflicting change from elsewhere is pending: nothing may be saved until the user has chosen.
   useEffect(() => {
@@ -265,14 +305,16 @@ export function ManuscriptSheet({
     return () => hold(false);
   }, [incoming, hold]);
 
-  /** "Keep mine": the other version is deliberately overwritten by the draft. */
+  /** "Keep mine": the other version is deliberately overwritten by the draft, based on its hash. */
   const keepMine = useCallback(() => {
-    if (incoming !== null) baselineRef.current = incoming;
+    const other = incomingRef.current;
+    if (other) moveBaseline(other.raw, other.hash);
+    incomingRef.current = null;
     setIncoming(null);
     hold(false);
     schedule(draftRef.current);
     flush();
-  }, [incoming, hold, schedule, flush]);
+  }, [hold, schedule, flush, moveBaseline]);
 
   // ---- margin: comments anchored to ranges of the text (issue #182, phase 2) ------------------
   const marginHost = useMarginHost();
@@ -291,15 +333,26 @@ export function ManuscriptSheet({
   const { revealMargin } = useRightColumn();
 
   // Margin state is per open section (the sheet is keyed by node id).
+  const restoreComposer = useMarginStore((state) => state.restoreComposer);
   useEffect(() => {
     resetMargin();
-    return resetMargin;
-  }, [resetMargin]);
+    // The composer this section was left with (an unsent prompt or comment) comes back with it.
+    restoreComposer(node.id);
+    return () => resetMargin(node.id);
+  }, [resetMargin, restoreComposer, node.id]);
 
   const reviewSummary = useMemo(
     () => parseReviewSummary(liveNode.reviewSummary),
     [liveNode.reviewSummary],
   );
+
+  // A section reviewed before review rows existed has only the old flattened notes: no summary and no cards.
+  const legacyNotes =
+    !reviewSummary &&
+    liveNode.reviewerNotes?.trim() &&
+    !section.threads.some((thread) => thread.kind === 'review')
+      ? liveNode.reviewerNotes
+      : null;
 
   const geometry = useMemo(() => {
     if (view === 'source') return cmView ? sourceGeometry(cmView) : null;
@@ -366,6 +419,19 @@ export function ManuscriptSheet({
     [],
   );
 
+  /**
+   * The server now holds `raw` (an accepted suggestion, its undo). Adopted at once when the editor
+   * has nothing unsaved; otherwise the draft stays exactly as typed and the "changed elsewhere"
+   * notice offers the choice - set before the caller releases its hold, so nothing can save over it.
+   */
+  const applyServerContent = useCallback(
+    (raw: string, hash?: string | null) => {
+      if (hasUnsavedEdits()) showIncoming(raw, hash);
+      else adoptServerContent(raw, hash);
+    },
+    [hasUnsavedEdits, showIncoming, adoptServerContent],
+  );
+
   // Holds autosave for a write the server makes to the section (an accept, its undo): the pending
   // edits are saved first, then nothing is saved until the returned function releases the hold.
   const holdCounter = useRef(0);
@@ -376,41 +442,120 @@ export function ManuscriptSheet({
     hold(true, reason);
     return () => {
       hold(false, reason);
-      // Anything typed meanwhile is saved now (an adopted text has already dropped it).
-      flush();
+      // Edits typed meanwhile are saved now - unless the server's text moved under them, in which
+      // case the notice owns them and saving waits for the user's choice.
+      if (incomingRef.current === null) flush();
     };
   }, [flushEdits, hold, flush]);
 
   const getDraft = useCallback(() => draftRef.current, []);
+  // The server stores the text as it was written: with CR LF endings the editor's (LF) offsets would
+  // point at the wrong place, so they are left out and the server finds the quote itself.
+  const serverAnchor = useCallback(
+    (anchor: Parameters<typeof toServerAnchor>[0]) =>
+      toServerAnchor(anchor, { omitOffsets: baseRawRef.current.includes('\r') }),
+    [],
+  );
   const copilot = useCopilot({
     projectId,
     nodeId: node.id,
     getText: getDraft,
     flushEdits,
     enabled: anchorsEnabled,
+    serverAnchor,
   });
   useSuggestionStreams(projectId, node.id, section.threads);
+
+  // "Regenerate again" on a run page lands here: the window opens on Rewrite, once.
+  const rewriteOpened = useRef(false);
+  useEffect(() => {
+    if (!initialRewrite || rewriteOpened.current) return;
+    rewriteOpened.current = true;
+    copilot.openPrompt(null, 'header', {
+      verb: 'rewrite',
+      text: initialRewrite.instruction,
+      explicit: true,
+    });
+    onInitialRewriteConsumed?.();
+  }, [initialRewrite, copilot, onInitialRewriteConsumed]);
+
+  // Why a whole-section Rewrite (a regenerate run) cannot start, found out before anything is sent.
+  const { runningRun, queuedRuns } = useProjectRuns(projectId);
+  const queuedHere = queuedRuns.some(
+    (run) => run.kind === 'regenerate_section' && run.targetNodeId === node.id,
+  );
+  const rewriteBlock = useMemo<RewriteBlock | null>(() => {
+    if (!nodeIsLeaf) {
+      return {
+        reason:
+          'This is a container node — only leaf sections can be rewritten. Select a leaf section below it.',
+        remedy: null,
+      };
+    }
+    if (liveNode.contentLocked) {
+      return {
+        reason: 'This section’s content is locked — unlock it to rewrite it.',
+        remedy: 'unlock',
+      };
+    }
+    if (!node.cliKey) {
+      return {
+        reason: 'This section has no CLI key yet — it appears after the next full run.',
+        remedy: 'start-run',
+      };
+    }
+    if (!lastRunId) {
+      return {
+        reason: 'No successful prior run to resume from — start a full run first.',
+        remedy: 'start-run',
+      };
+    }
+    if (queuedHere) return { reason: 'This section already has a rewrite queued.', remedy: null };
+    if (runningRun) return { reason: 'A run is currently running for this project.', remedy: null };
+    return null;
+  }, [nodeIsLeaf, liveNode.contentLocked, node.cliKey, lastRunId, queuedHere, runningRun]);
+
+  const threadsRef = useRef(section.threads);
+  useEffect(() => {
+    threadsRef.current = section.threads;
+  }, [section.threads]);
+  const knownIds = useCallback(
+    () =>
+      new Set(
+        threadsRef.current.flatMap((thread) => [
+          thread.root.id,
+          ...thread.replies.map((r) => r.id),
+        ]),
+      ),
+    [],
+  );
+
+  const editBlockedReason =
+    incoming !== null
+      ? 'This section was changed elsewhere. Choose Keep mine or Load the other version first.'
+      : null;
 
   const cardContext = useMemo<MarginCardContext>(
     () => ({
       projectId,
       nodeId: node.id,
       currentUserId: me?.id ?? null,
-      copilotActions: COPILOT_ACTIONS_ENABLED,
       restoreEditorFocus,
-      // These two read refs, but only when a card calls them (never while rendering).
-      // eslint-disable-next-line react-hooks/refs
-      applyServerContent: adoptServerContent,
-      // eslint-disable-next-line react-hooks/refs
+      // These read refs, but only when a card calls them (never while rendering).
+      applyServerContent,
       hasUnsavedEdits,
       flushEdits,
-      // eslint-disable-next-line react-hooks/refs
       holdSaving,
       sectionNumber: node.sectionNumber,
-      startRevision: anchorsEnabled ? copilot.startRevision : undefined,
+      serverAnchor,
+      editBlockedReason,
+      revisable: anchorsEnabled,
+      rewriteBlock,
+      knownIds,
+      startRevision: copilot.startRevision,
       onSendToCopilot: anchorsEnabled ? copilot.sendToCopilot : undefined,
       onFixWithCopilot: anchorsEnabled ? copilot.fixWithCopilot : undefined,
-      onTryAgain: anchorsEnabled ? copilot.tryAgain : undefined,
+      onTryAgain: copilot.tryAgain,
       onCommentSent: anchorsEnabled ? copilot.commentSent : undefined,
     }),
     [
@@ -419,11 +564,15 @@ export function ManuscriptSheet({
       node.sectionNumber,
       me?.id,
       restoreEditorFocus,
-      adoptServerContent,
+      applyServerContent,
       hasUnsavedEdits,
       flushEdits,
       holdSaving,
+      serverAnchor,
+      editBlockedReason,
       anchorsEnabled,
+      rewriteBlock,
+      knownIds,
       copilot,
     ],
   );
@@ -478,15 +627,17 @@ export function ManuscriptSheet({
           <HeaderIconButton
             label="Copilot"
             tooltip={
-              !anchorsEnabled
-                ? 'The copilot works on Markdown sections; this one holds LaTeX'
-                : !nodeIsLeaf
-                  ? 'The copilot revises the text of a section; select a leaf section'
+              !nodeIsLeaf
+                ? 'The copilot works on the text of a section; select a leaf section'
+                : !anchorsEnabled
+                  ? 'This section holds LaTeX: the copilot can only rewrite it from its brief'
                   : 'Prompt the copilot about this section'
             }
-            disabled={!anchorsEnabled || !nodeIsLeaf}
+            disabled={!nodeIsLeaf}
             copilotTrigger
-            onClick={() => copilot.openPrompt(null, 'header')}
+            onClick={() =>
+              copilot.openPrompt(null, 'header', { verb: anchorsEnabled ? 'revise' : 'rewrite' })
+            }
           >
             <Sparkles />
           </HeaderIconButton>
@@ -558,7 +709,9 @@ export function ManuscriptSheet({
             type="button"
             size="xs"
             variant="outline"
-            onClick={() => adoptServerContent(incoming)}
+            onClick={() =>
+              adoptServerContent(incomingRef.current?.raw ?? incoming, incomingRef.current?.hash)
+            }
           >
             Load the other version
           </Button>
@@ -640,9 +793,10 @@ export function ManuscriptSheet({
           highlights={section.highlights}
           onComment={startComment}
           onFocusThread={focusThreadCard}
-          copilotActions={COPILOT_ACTIONS_ENABLED}
-          onPrompt={(anchor) => copilot.openPrompt(anchor, 'selection')}
-          onChip={copilot.runChip}
+          onPrompt={
+            anchorsEnabled ? (anchor) => copilot.openPrompt(anchor, 'selection') : undefined
+          }
+          onChip={anchorsEnabled ? copilot.runChip : undefined}
         />
       </div>
 
@@ -661,6 +815,7 @@ export function ManuscriptSheet({
               geometry={geometry}
               reviewSummary={reviewSummary}
               reviewerScore={liveNode.reviewerScore ?? null}
+              legacyNotes={legacyNotes}
               anchorNote={
                 anchorsEnabled
                   ? undefined

@@ -8,12 +8,15 @@ import '@/index.css';
 
 async function enableMocksIfRequested(): Promise<void> {
   if (import.meta.env.VITE_USE_MOCKS !== '1') return;
-  const [{ worker }, { seedDatabase, seedReviewDemo }] = await Promise.all([
+  const [{ worker }, { seedDatabase, seedReviewDemo }, { mockRevisionConfig }] = await Promise.all([
     import('@/mocks/browser'),
     import('@/mocks/fixtures'),
+    import('@/mocks/db'),
   ]);
   seedDatabase();
   seedReviewDemo();
+  // Lets a browser check slow the mock accept and save down (`window.__mockConfig.acceptDelayMs = 2000`).
+  (window as unknown as { __mockConfig?: unknown }).__mockConfig = mockRevisionConfig;
   await worker.start({ onUnhandledRequest: 'bypass' });
 }
 

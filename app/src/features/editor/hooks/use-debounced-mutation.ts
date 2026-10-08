@@ -25,7 +25,8 @@ interface UseDebouncedMutationResult<T> {
   hold: (held: boolean, reason?: string) => void;
   /**
    * Saves what is pending and resolves once nothing is pending or in flight (also when nothing was).
-   * Rejects if a save fails, or if saving is held.
+   * Rejects if a save fails (the value stays pending, so the next call tries again and a draft that
+   * cannot be saved is never reported as flushed), or if saving is held while something is pending.
    */
   flushEdits: () => Promise<void>;
   /**
@@ -91,6 +92,9 @@ export function useDebouncedMutation<T>({
       })
       .catch((error: unknown) => {
         savingRef.current = false;
+        // The value stays pending (unless something newer replaced it): a failed save leaves the
+        // draft unsaved, and `flushEdits` must keep saying so instead of resolving over it.
+        pendingRef.current ??= { value };
         setStatus('error');
         for (const waiter of waitersRef.current.splice(0)) waiter.reject(error);
       });

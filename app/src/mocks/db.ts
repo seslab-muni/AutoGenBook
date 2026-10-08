@@ -27,7 +27,14 @@ export function stripProjectId<T extends { projectId: string }>(row: T): Omit<T,
 }
 
 /** Pace of the mock copilot's progress events; tests set it to a few milliseconds. */
-export const mockRevisionConfig = { stepMs: 700 };
+export const mockRevisionConfig = {
+  stepMs: 700,
+  /** Extra latency of the accept endpoint and of content PATCHes: tests and browser checks widen race windows with it. */
+  acceptDelayMs: 0,
+  patchDelayMs: 0,
+  /** Content PATCHes answer 500 (a save that fails). */
+  failPatch: false,
+};
 
 export type SuggestionTerminalEvent = 'done' | 'failed' | 'cancelled';
 interface SuggestionListener {

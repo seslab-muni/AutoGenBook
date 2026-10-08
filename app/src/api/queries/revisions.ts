@@ -77,7 +77,7 @@ export function settleSuggestion(
   void queryClient.invalidateQueries({ queryKey: projectKeys.nodeComments(projectId, nodeId) });
 }
 
-function currentStatus(
+export function currentStatus(
   queryClient: QueryClient,
   projectId: string,
   nodeId: string,
@@ -147,7 +147,12 @@ export function useAcceptSuggestionMutation(projectId: string, nodeId: string) {
           },
         }),
       ),
-    onSuccess: ({ suggestion, node }, { suggestionId }) => {
+    // A section fetch that started before the accept must not land after it and put the old text
+    // (and its hash) back over what the accept returns.
+    onMutate: () =>
+      queryClient.cancelQueries({ queryKey: projectKeys.outlineNode(projectId, nodeId) }),
+    onSuccess: async ({ suggestion, node }, { suggestionId }) => {
+      await queryClient.cancelQueries({ queryKey: projectKeys.outlineNode(projectId, nodeId) });
       const before = currentStatus(queryClient, projectId, nodeId, suggestionId);
       queryClient.setQueryData<OutlineNode>(projectKeys.outlineNode(projectId, nodeId), node);
       const listRow = { ...node, contentHash: null };
@@ -219,7 +224,10 @@ export function useRestoreContentMutation(projectId: string, nodeId: string) {
           body: { contentMarkdown, expectedContentHash },
         }),
       ),
-    onSuccess: (node) => {
+    onMutate: () =>
+      queryClient.cancelQueries({ queryKey: projectKeys.outlineNode(projectId, nodeId) }),
+    onSuccess: async (node) => {
+      await queryClient.cancelQueries({ queryKey: projectKeys.outlineNode(projectId, nodeId) });
       queryClient.setQueryData<OutlineNode>(projectKeys.outlineNode(projectId, nodeId), node);
       invalidateAfterWrite(queryClient, projectId, nodeId);
     },
