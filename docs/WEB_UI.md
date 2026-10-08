@@ -533,8 +533,10 @@ identity (ProseMirror shares every node an edit did not touch) and
    punctuation; a block that does not read back as itself at any level makes the edit *refused* (the
    transaction is dropped, the DOM redrawn from the state, a toast says to use Source) - never saved as
    something else.
-Undo and redo give the source back exactly (a block that returns to a recent shape gets its recorded
-source, not the serializer's). `parse(serialize(...))` is covered by property tests over random
+Undo and redo give the source back exactly (a block, or a group of blocks with the whitespace around
+them, that returns to a recent shape gets its recorded source, not the serializer's; a long run of typing
+keeps the version it began from; the exceptions are a list that had to take the other marker to stay apart
+from a neighbour, which may keep it, and shapes older than the last few hundred changes). `parse(serialize(...))` is covered by property tests over random
 documents (astral characters, math, citations, callouts, tables, HTML, footnotes, nested lists and
 quotes, code fences, hard breaks, CR LF-normalised text, EOF whitespace, an empty document, a
 document that is one atom): the bytes outside the edited block are identical, the maps equal a fresh
@@ -652,9 +654,9 @@ build on top of the 1012.9 kB baseline, each as a lazy chunk with its own demo g
 bundles: 65 / 136 / 138 kB). Milkdown and Tiptap re-serialise the whole document with their own Markdown
 serializers, which is exactly what the guarantee above forbids, so a block-preserving model would have been
 written on top of them anyway; bare ProseMirror driven by the app's existing remark pipeline is the
-smallest and gives the control. With the model, serializer, atoms and glue the chunk adds +121.5 kB
-(1134.4 kB total; the chunk is 83.7 kB gzipped as the browser receives it); `BUNDLE_TOTAL_BUDGET_KB` therefore goes from 1024 to
-1136 (the next 16 kB, 1.6 kB of headroom), the entry chunk's 300 kB is unchanged. Dependencies added: `prosemirror-model`,
+smallest and gives the control. With the model, serializer, atoms and glue the chunk adds +122.2 kB
+(1135.1 kB total; the chunk is 84.3 kB gzipped as the browser receives it); `BUNDLE_TOTAL_BUDGET_KB` therefore goes from 1024 to
+1136 (the next 16 kB, 0.9 kB of headroom), the entry chunk's 300 kB is unchanged. Dependencies added: `prosemirror-model`,
 `-state`, `-view`, `-transform`, `-commands`, `-history`, `-keymap`, `-inputrules`, `-schema-list`.
 
 *Development hooks.* Outside production builds the editor's element carries `__md = { view, core }`

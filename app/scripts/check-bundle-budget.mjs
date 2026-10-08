@@ -3,7 +3,7 @@
 // under 300 kB gzipped, and the whole JS+CSS bundle (every chunk `rollup-plugin-visualizer`
 // reports — lazy route chunks included, static assets like fonts excluded, since those are
 // never bundled through Rollup) under 1136 kB gzipped (1 MB until the editable Write view, issue
-// #182 phase 5, added its editor as one lazily loaded chunk: 1012.9 kB before, 1134.4 kB after, the
+// #182 phase 5, added its editor as one lazily loaded chunk: 1012.9 kB before, 1135.1 kB after, the
 // total rounded up to the next 16 kB; the entry chunk's 300 kB is unchanged). Both are overridable
 // via env vars so the numbers can be retuned without touching this file (the issue itself says
 // "adjust after the first measurement").
