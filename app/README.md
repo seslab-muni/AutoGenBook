@@ -110,7 +110,7 @@ gone: the Review tab became the review cards, the Copilot tab the prompt window,
 event log lives on the run page (the drawer's stage timeline was dropped). `src/test/viewport.ts`
 runs a test at a given screen width;
 `pnpm test` covers them with unit tests, MSW-backed component tests and routed flow
-tests (`margin-flow`, `margin-write`, `margin-editing` and `copilot-flow` `.route.test.tsx`).
+tests (`margin-flow`, `margin-write`, `margin-editing`, `copilot-flow`, `copilot-races` and `copilot-saves` `.route.test.tsx`).
 `VITE_USE_MOCKS=1 pnpm dev` shows all of it with no backend: the mock revise
 (`src/mocks/fakeRevise.ts`) answers with a diff after a few simulated progress events (an instruction
 containing "slow" never finishes, so it can be cancelled; one containing "fail" fails with a

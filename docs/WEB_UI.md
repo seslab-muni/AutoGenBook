@@ -297,7 +297,8 @@ falls back to whole-node granularity, and a Write selection inside a KaTeX formu
 snaps to the whole formula. After a long run of edits around an orphaned anchor its
 quote may be gone for good; it is then kept as an orphan, never deleted. A CR LF
 section is saved as LF the first time it is edited, and until then a freshly created
-multi-line comment can be orphaned server-side (the server counts the CR LF text); it is
+multi-line comment used to be orphaned server-side (the server counts the CR LF text); the
+quote and its context are now sent with CR LF, which the server matches, and it is
 re-found by its quote in the editor. `::highlight()` supports colours and text decorations
 only, and not every browser paints the underline style there, so on such a browser the kinds
 are told apart by the tint alone (the Custom Highlight API itself is feature-detected and
@@ -381,7 +382,11 @@ referentially stable (handlers read the latest values through a ref), because th
 built from it and a context that changed per keystroke re-rendered every card on every keystroke.
 Anchors sent to the server go through `lib/server-anchor.ts`: never an empty quote (a 422), offsets
 only when they match the quote's code-point length, and no offsets at all for a section the server
-stores with CR LF (the editor counts LF; the server then finds the quote itself). A request carries at
+stores with CR LF (the editor counts LF; the server then finds the quote itself, so for such a section
+the quote and its 32-code-point context are sent with CR LF line breaks, the form the server stores,
+or the context would not match). The prompt window builds its anchor from the passage's live range at
+the moment of sending, not from the one captured when it opened, and says so if the passage is gone.
+A request carries at
 most 25 ids per list (24 with a `threadId`, which the server adds to one of them), and the chip's label
 counts what is sent. One start at a time per section entry (chips, Send/Fix with Copilot).
 
@@ -405,7 +410,8 @@ very long change is clamped until asked for. A section suggestion with several c
 per change (the selected ones go as `hunkIndexes`, *Accept 2 of 3*; the card notes that a partial accept
 leaves the linked comments and issues open, as the API does). A pending suggestion whose own range
 (the row's anchor, re-anchored with the text; `payload.anchor` is the range in the original, which
-clips the diff) is gone says "The text changed since this was suggested" and still offers Accept; a section
+clips the diff) is gone says it can no longer be accepted (the server refuses it as `stale`): Accept is off and *Try
+again* is the primary action; a section
 suggestion made against an older text than the section now has says it may be refused. A model
 that handed the text back unchanged shows "nothing to change" with no Accept. A finished suggestion
 from the node list has no `originalMarkdown` but keeps its hunks: its card shows the removed and added
@@ -414,7 +420,9 @@ the person who may delete the row (its author, or anyone for a row nobody author
 suggestion says "You stopped this revision" only when `payload.cancelledBy` is the signed-in user.
 Try again on a range suggestion whose range is gone opens the window (which says the scope is now the
 section) instead of silently widening it, and "Ask again as it was" drops references to cards that
-were deleted since. The suggestion's
+were deleted since; *Try again > Edit the instruction…* keeps the issue and comment ids the first
+request was about (a retry never widens "fix this issue" to every open one), and moves focus into the
+prompt window it opens (the menu does not hand it back to its button). The suggestion's
 range is highlighted in both views in the suggestion style and focusing the card focuses it.
 Progress: `margin/suggestion-progress.ts`'s `useSuggestionStreams` (mounted by the open section, not
 by the cards, so a filter or the side sheet cannot lose it) follows every running suggestion by id
@@ -431,12 +439,18 @@ nothing is unsaved; otherwise the draft stays exactly as typed, the "changed els
 mine / Load the other version) is set **synchronously** and autosave stays held, and the hold's release
 does **not** flush, so text typed while the POST was in flight can never be saved over the accepted
 text. The hold is released in a `finally`; on any failure the draft is untouched, and `stale` and
-`content_conflict` (the section is also fetched again) are explained inline on the card, not toasted.
+`content_conflict` (the section is also fetched again) are explained inline on the card, not toasted:
+mutations that handle their own refusal are marked `meta: { handlesErrors: true }` (start, accept,
+reject/cancel, restore, and the section's content save), and the global `MutationCache.onError` still
+reports them but raises no toast for them.
+Neither an accept nor an undo waits for ever: the save-and-hold and the request each give up after
+20 s (`requestTiming.timeoutMs`), the hold is released, the section and its comments are fetched again
+and the card says to check whether the change was applied; a hold that completes late is released at once.
 A second click (also during the save before the POST) is ignored and the buttons are disabled for the
 whole action. While the notice is up, or after a failed save (`flushEdits` keeps rejecting while the
 failed value is pending), Accept, Try again, Undo and a new revision are refused with the reason shown.
-Node fetches in flight when an accept or undo starts are cancelled, so a stale answer cannot restore
-the old text and hash afterwards. `Ctrl+Z` right after an accept does nothing useful (the adopted text
+Node fetches in flight when an accept or undo starts are cancelled, and so are the ones still in flight
+when the request has been answered, so a stale answer cannot restore the old text and hash afterwards. `Ctrl+Z` right after an accept does nothing useful (the adopted text
 is not in the editor's history, by design), so a toast, *Suggestion applied · Undo*, offers the way
 back: the same hold and adoption, a PATCH of the previous text guarded by the hash the accept returned
 (refused, with a message, if the section was edited since), and for a full accept the comment threads
@@ -446,17 +460,28 @@ stays *accepted* on the server (an undo is an ordinary content write), and this 
 
 *Content hash everywhere.* The server treats a content PATCH without `expectedContentHash` as
 last-write-wins, so **every autosave** sends it: the hash of the text **the draft was based on**
-(`baseHashRef`, kept beside the baseline text and moved only when the baseline itself moves: an
-adoption, this editor's own successful save with the hash the server returned, Keep mine), never
-whatever the node cache holds when the save runs; a save made on top of text the user has not seen
+(`baseHashRef`, kept beside the baseline text and moved only through `moveBaseline`: an adoption,
+this editor's own successful save with the hash the server returned, a reply that is this editor's
+own save coming back, Keep mine), never whatever the node cache holds when the save runs; a save made on top of text the user has not seen
 (an accept that landed meanwhile) is therefore refused as a conflict instead of passing with the newer
 text's hash. The hash is the server's `contentHash` (the list rows carry none), hashing the baseline
 text (`lib/content-hash.ts`) only where a response had none. A `409 content_conflict` is never retried over: the section is fetched again and
 the existing "changed elsewhere" notice takes over (*Keep mine* saves the draft over the other
 version, now based on its hash; *Load the other version* replaces the draft). Autosave holds are kept
 per reason (`useDebouncedMutation.hold(held, reason)`), so an accept in flight and a pending
-notice cannot lift each other's hold, and a content GET that began before a save is cancelled so
-it cannot put the old text and hash back.
+notice cannot lift each other's hold. A node GET that began before a save is cancelled when the save
+starts (`onMutate`) and again when it succeeds (`onSuccess`), and as a second line of defence the
+adoption effect ignores a fetched node whose hash this editor has already moved past and whose
+`updatedAt` is not newer than the last one it saw (`supersededRef`, `knownUpdatedAtRef`), so a read
+that overlapped a save can never put the old text back. A save that fails for any other reason than
+a conflict shows why in an inline bar above the text (the text is kept and saved again on the next
+edit), not as a toast.
+
+*Leaving with work the server does not have.* Typed-but-unsaved text, a failed save and an unanswered
+"changed elsewhere" notice all count: choosing another section, adding a chapter or any route change
+opens a confirmation (*Stay* / *Leave and discard*), and closing the tab shows the browser's own
+prompt. *Leave and discard* sends nothing on the way out (the unmount flush is skipped, as it is
+whenever the notice is up).
 
 *The legacy drawer is gone.* Removed: `CopilotDrawer`, `CopilotPanel`, the Review tab
 (`ReviewPanel`), `SectionSourcesCard` (its job lives in Chapter options and the sources drawer),

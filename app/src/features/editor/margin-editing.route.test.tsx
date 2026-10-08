@@ -200,6 +200,41 @@ describe('line endings', () => {
     expect(posted!.anchor.end).toBeNull();
     expect(posted!.anchor.quote).toBe('Alpha again');
   }, 30000);
+
+  it('sends a multi-line selection of a CR LF section with CR LF in the quote and its context', async () => {
+    const user = userEvent.setup();
+    seed(TEXT.replace(/\n/g, '\r\n'), 'theorem statement');
+    await open();
+    const view = editorView();
+    let posted:
+      | { anchor: { start: number | null; quote: string; prefix?: string; suffix?: string } }
+      | undefined;
+    server.use(
+      http.post('*/api/v1/projects/:projectId/outline/:nodeId/comments', async ({ request }) => {
+        posted = (await request.json()) as typeof posted;
+        return HttpResponse.json(
+          makeComment({ id: 'new', anchor: posted!.anchor, bodyMarkdown: 'x' }),
+          { status: 201 },
+        );
+      }),
+    );
+    // "holds for every input here.\nAlpha again": a quote that spans a line break.
+    const from = TEXT.indexOf('every input here.');
+    const to = TEXT.indexOf('Alpha again') + 'Alpha again'.length;
+    act(() => view.dispatch({ selection: { anchor: from, head: to } }));
+    await user.click(await screen.findByRole('button', { name: 'Comment' }));
+    await user.type(
+      await screen.findByRole('textbox', { name: 'New comment' }),
+      'hi{Control>}{Enter}{/Control}',
+    );
+    await waitFor(() => expect(posted).toBeDefined(), LONG);
+    expect(posted!.anchor.quote).toBe('every input here.\r\nAlpha again');
+    expect(posted!.anchor.start).toBeNull();
+    // Context in the stored (CR LF) form, so the server can match it.
+    expect(posted!.anchor.prefix).toContain('The theorem statement holds for ');
+    expect(posted!.anchor.suffix ?? '').toContain(' and beta again.');
+    expect(`${posted!.anchor.prefix ?? ''}${posted!.anchor.suffix ?? ''}`).not.toMatch(/(?<!\r)\n/);
+  }, 30000);
 });
 
 describe('typed text survives a failed request', () => {
