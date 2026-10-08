@@ -612,10 +612,11 @@ composition neither highlight painting nor decoration updates touch the DOM, and
 
 *Switching views.* One draft string: nothing can be lost by toggling, and unsaved edits are carried (the
 autosave timer keeps running; leave-confirm and the flush on unmount are unchanged). The selection is
-carried through source offsets (Write -> Source selects the same range and scrolls to it; Source -> Write puts
-the caret there); the undo history of each view starts empty when it opens; the scroll position is not
-carried except through the revealed selection. "Edit in Source" on an atom is the same switch with the atom's
-source selected.
+carried through source offsets (Write -> Source selects the same range, Source -> Write puts the caret
+there) and revealed only when something was selected or the editor had focus (a caret that was merely
+reported does not move the text); the scroll position is carried as the same fraction of the scroll range
+(roughly: the two views estimate heights differently); the undo history of each view starts empty when it
+opens. "Edit in Source" on an atom is the same switch with the atom's source selected and revealed.
 
 *First paint and loading.* The editor is its own chunk (`markdown-editor`): ProseMirror plus the model,
 fetched when a Write view is first made editable. The read-only view paints first (it is the same
@@ -625,18 +626,24 @@ imports the chunk statically). If the chunk cannot be fetched the section stays 
 *Try again*; Source remains the way to edit. Sections that cannot be edited (generating, a container node,
 LaTeX-only) stay the read-only view.
 
-*Performance.* Only the edited block is written or verified per keystroke (a source splice and one parse of
-that block); the model is O(blocks) arithmetic. Measured in a production build with Chromium and real
-typing in a 100 kB section (about 370 blocks, 600 formulas, 130 comment cards): about 19 ms per key
-including the browser's and the test driver's own overhead, against 10 ms in Source. Two things matter
-for that: blocks away from the viewport have `content-visibility: auto` (without it the same section
-cost 38 ms per key - the browser lays out and hit-tests tens of thousands of KaTeX nodes), so the margin
-places a card whose text is in a block the browser has not laid out at that block's position
-(`MarginGeometry.measure`'s `locate`) until it is drawn; and React saves the focused element's selection
-before every commit by walking the whole contenteditable, which is made not to apply to the editor's element
-(`keepReactOutOfTheEditor` in `wysiwyg/controller.ts`: its `contentEditable` property reads `"inherit"`; it
-cost about 6 ms per key). The status bar's counts are deferred (`useDeferredValue`), which also helps Source.
-Formulas are rendered as HTML only (no MathML copy; the atom carries its accessible name).
+*Performance.* Only the edited block is written or verified per keystroke: the model's share is about
+0.2 ms (a source splice and one parse of that block; the first read of a 100 kB section takes about 100
+ms), the rest is the browser's. Measured in a production build with Chromium and real keyboard typing in a
+100 kB section (about 370 blocks, 600 formulas, 130 comment cards): about 21 ms
+per key wall clock (including Chromium's input handling and the test driver), against 11 ms in the
+Source view, no task over 50 ms; key press to painted frame p50 22 ms / p95 34 ms (Source 19 / 28 ms).
+Without the three measures below the same section cost 43 ms per key. (1) Blocks away from the viewport
+have `content-visibility: auto` (the browser otherwise lays out and hit-tests tens of thousands of KaTeX
+nodes on every key: 38 ms against 19 ms), so the margin places a card whose text is in a block the browser
+has not laid out at that block's position (`MarginGeometry.measure`'s `locate`, proportional inside the
+block) until it is drawn; measured over a whole 29,000 px scroll range with 24 comments every visible card
+was level with its text. Lists are indented with padding, not margin, because markers hang outside the
+list's box and `content-visibility` clips them. (2) React saves the focused element's selection before
+every commit by walking the whole contenteditable, which is made not to apply to the editor's element
+(`keepReactOutOfTheEditor` in `wysiwyg/controller.ts`: its `contentEditable` property reads `"inherit"`
+while the attribute stays `"true"`; it cost about 6 ms per key). (3) Formulas are rendered as HTML only (no
+MathML copy; the atom carries its accessible name) and the status bar's counts are deferred
+(`useDeferredValue`, which also helps Source).
 
 *Library choice and the budget.* Compared (gzipped, summed per module like `check-bundle-budget.mjs`, in this
 build on top of the 1012.9 kB baseline, each as a lazy chunk with its own demo glue only): bare ProseMirror
@@ -645,9 +652,9 @@ build on top of the 1012.9 kB baseline, each as a lazy chunk with its own demo g
 bundles: 65 / 136 / 138 kB). Milkdown and Tiptap re-serialise the whole document with their own Markdown
 serializers, which is exactly what the guarantee above forbids, so a block-preserving model would have been
 written on top of them anyway; bare ProseMirror driven by the app's existing remark pipeline is the
-smallest and gives the control. With the model, serializer, atoms and glue the chunk adds +120.9 kB
-(1133.8 kB total, real gzip of the chunk 80.9 kB); `BUNDLE_TOTAL_BUDGET_KB` therefore goes from 1024 to
-1136 (the next 16 kB), the entry chunk's 300 kB is unchanged. Dependencies added: `prosemirror-model`,
+smallest and gives the control. With the model, serializer, atoms and glue the chunk adds +121.5 kB
+(1134.4 kB total; the chunk is 83.7 kB gzipped as the browser receives it); `BUNDLE_TOTAL_BUDGET_KB` therefore goes from 1024 to
+1136 (the next 16 kB, 1.6 kB of headroom), the entry chunk's 300 kB is unchanged. Dependencies added: `prosemirror-model`,
 `-state`, `-view`, `-transform`, `-commands`, `-history`, `-keymap`, `-inputrules`, `-schema-list`.
 
 *Development hooks.* Outside production builds the editor's element carries `__md = { view, core }`

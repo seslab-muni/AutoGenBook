@@ -135,9 +135,15 @@ export function ManuscriptSheet({
   /** The editable Write view, once it exists (the read-only first paint has none). */
   const [editor, setEditor] = useState<MarkdownEditorHandle | null>(null);
   /** Where the Source view puts its selection when it opens (from the Write view's selection or an atom). */
-  const [sourceSelection, setSourceSelection] = useState<{ from: number; to: number } | null>(null);
+  const [sourceSelection, setSourceSelection] = useState<{
+    from: number;
+    to: number;
+    reveal: boolean;
+  } | null>(null);
   /** Where the Write view puts its selection when it opens (the Source view's), consumed once. */
-  const writeSelectionRef = useRef<{ from: number; to: number } | null>(null);
+  const writeSelectionRef = useRef<{ from: number; to: number; reveal: boolean } | null>(null);
+  /** Where the text was scrolled to (as a fraction of its scroll range) when the view was switched. */
+  const carryScrollRef = useRef<number | null>(null);
   const paneRef = useRef<HTMLDivElement>(null);
 
   // The outline's flat cache is what mutations patch optimistically, so the lock button and
@@ -478,25 +484,56 @@ export function ManuscriptSheet({
   const changeView = useCallback(
     (next: 'write' | 'source') => {
       if (next === view) return;
-      const carried = view === 'write' && editor ? editor.sourceSelection() : selectionUnits();
+      const range = view === 'write' && editor ? editor.sourceSelection() : selectionUnits();
+      const scroller = view === 'source' ? cmView?.scrollDOM : region;
+      const focused =
+        view === 'source'
+          ? !!cmView?.hasFocus
+          : !!editor && !!region?.contains(document.activeElement);
+      // A caret that was only reported (nothing was selected or typed) does not move the text.
+      const carried = range ? { ...range, reveal: range.from !== range.to || focused } : null;
       if (next === 'source') setSourceSelection(carried);
       else writeSelectionRef.current = carried;
+      // Roughly the same place in the text: the same fraction of the scroll range.
+      const max = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
+      carryScrollRef.current = scroller && max > 0 ? scroller.scrollTop / max : null;
       setView(next);
     },
-    [view, editor, selectionUnits, setView],
+    [view, editor, cmView, region, selectionUnits, setView],
   );
 
-  /** The Write view asks for its selection when it is created: the Source view's, or what was selected before the upgrade. */
+  // After a switch, the new view is scrolled to the same fraction of its range (once).
+  useEffect(() => {
+    const fraction = carryScrollRef.current;
+    if (fraction === null) return undefined;
+    const scroller = view === 'source' ? cmView?.scrollDOM : region;
+    if (!scroller) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      if (max > 0 && carryScrollRef.current === fraction) scroller.scrollTop = fraction * max;
+      carryScrollRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [view, cmView, region, editor]);
+
+  /**
+   * The Write view asks for its selection when it is created: the Source view's (a toggle: the caret
+   * goes there, focus stays where the person put it), or what was selected in the read-only text it
+   * replaces (an upgrade: the editor takes focus so the selection stays visible, unless the person has
+   * moved on to something else).
+   */
   const initialWriteSelection = useCallback(() => {
     const carried = writeSelectionRef.current;
     writeSelectionRef.current = null;
-    return carried ?? selectionUnits();
+    if (carried) return { ...carried, focus: false };
+    const own = selectionUnits();
+    return own ? { ...own, focus: true } : null;
   }, [selectionUnits]);
 
   /** An atom (math, a table, a callout...) is edited in Source: switch there with its source selected. */
   const handleEditInSource = useCallback(
     (range: { from: number; to: number }) => {
-      setSourceSelection(range);
+      setSourceSelection({ ...range, reveal: true });
       setView('source');
     },
     [setView],

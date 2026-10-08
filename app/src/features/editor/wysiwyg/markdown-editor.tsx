@@ -40,7 +40,7 @@ export interface MarkdownEditorProps {
   onReady?: (handle: MarkdownEditorHandle | null) => void;
   placeholder?: string;
   ariaLabel?: string;
-  initialSelection?: () => { from: number; to: number } | null;
+  initialSelection?: () => { from: number; to: number; focus?: boolean; reveal?: boolean } | null;
   className?: string;
 }
 

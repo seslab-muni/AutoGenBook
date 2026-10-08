@@ -33,7 +33,7 @@ interface SectionEditorProps {
   /** Hands the CodeMirror view to the caller (highlights, selection toolbar) once it exists. */
   onCreateEditor?: (view: EditorView) => void;
   /** Selects this range (UTF-16 offsets) and scrolls it into view when the editor is created. */
-  initialSelection?: { from: number; to: number } | null;
+  initialSelection?: { from: number; to: number; reveal?: boolean } | null;
   /** Fired once the initial selection has been applied (so the owner can forget it). */
   onInitialSelectionApplied?: () => void;
   /** Fired with the anchor ids under a click on a highlighted range (innermost first). Identity may change freely. */
@@ -132,7 +132,9 @@ export function SectionEditor({
       const head = Math.min(initialSelection.to, length);
       view.dispatch({
         selection: { anchor, head },
-        effects: EditorView.scrollIntoView(anchor, { y: 'center' }),
+        ...(initialSelection.reveal === false
+          ? {}
+          : { effects: EditorView.scrollIntoView(anchor, { y: 'center' }) }),
       });
       onInitialSelectionApplied?.();
     }

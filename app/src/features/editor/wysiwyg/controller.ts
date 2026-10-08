@@ -56,7 +56,8 @@ export interface ControllerProps {
   placeholder: string;
   ariaLabel: string;
   /** Where the selection starts out (UTF-16 offsets over the draft), e.g. carried over from the Source view. Asked once. */
-  initialSelection?: (() => { from: number; to: number } | null) | undefined;
+  initialSelection?:
+    (() => { from: number; to: number; focus?: boolean; reveal?: boolean } | null) | undefined;
 }
 
 /**
@@ -92,6 +93,28 @@ function keepReactOutOfTheEditor(dom: HTMLElement) {
 
 /** What the editor's element carries outside production builds, for tests and browser checks. */
 export type EditorDebugElement = HTMLElement & { __md?: { view: EditorView; core: EditorCore } };
+
+/** Keeps every scrolled ancestor of `el` where it is for `ms`, unless the person scrolls or types. */
+function holdScroll(el: HTMLElement, ms: number) {
+  const held: [Element, number][] = [];
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.scrollTop > 0) held.push([node, node.scrollTop]);
+  }
+  if (held.length === 0) return;
+  const restore = () => {
+    for (const [node, top] of held) if (node.scrollTop !== top) node.scrollTop = top;
+  };
+  const doc = el.ownerDocument;
+  const events = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
+  const stop = () => {
+    clearInterval(timer);
+    clearTimeout(end);
+    for (const name of events) doc.removeEventListener(name, stop, true);
+  };
+  const timer = setInterval(restore, 16);
+  const end = setTimeout(stop, ms);
+  for (const name of events) doc.addEventListener(name, stop, { capture: true, passive: true });
+}
 
 export class EditorController {
   readonly host: AtomHost;
@@ -190,7 +213,23 @@ export class EditorController {
     if (!import.meta.env.PROD)
       (this.view.dom as EditorDebugElement).__md = { view: this.view, core: this.core };
     const initial = props.initialSelection?.() ?? null;
-    if (initial) this.placeSelection(initial.from, initial.to, true);
+    if (initial) {
+      // (An upgrade leaves the scroll alone: the selection is already where the person put it.)
+      this.placeSelection(initial.from, initial.to, initial.reveal ?? !initial.focus);
+      // Replacing read-only text that had a selection: take focus so the selection stays visible,
+      // unless the person has meanwhile moved to something else (a comment box).
+      const active = container.ownerDocument.activeElement;
+      if (
+        initial.focus &&
+        (!active || active === container.ownerDocument.body || active.contains(container))
+      ) {
+        // Focusing a contenteditable (and the selection it sets) may scroll the caret into view, a
+        // moment later; the text has not moved and must not: hold the scroll position until the
+        // focus has settled, unless the person scrolls meanwhile.
+        holdScroll(container, 200);
+        this.view.focus();
+      }
+    }
     this.schedulePaint();
     this.publishSelection();
   }
