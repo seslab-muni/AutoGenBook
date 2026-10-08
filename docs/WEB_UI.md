@@ -61,8 +61,9 @@ target pages, equation density, math level, summary, sub-prompt — plus the
 source scope (`NodeSourcesSection`), saved as you edit (sliders/text debounced,
 a pending edit is flushed when the popover closes or the section changes), a
 **Copilot** icon button that opens the prompt window at section scope (it is
-`aria-disabled`, with its reason in the tooltip, for a LaTeX-only section and for a
-container node, and is what keyboard focus returns to when the window closes), and, pinned
+`aria-disabled`, with its reason in the tooltip, for a container node only; for a
+LaTeX-only section it opens the window locked to Rewrite, since the server anchors
+and revises Markdown; it is what keyboard focus returns to when the window closes), and, pinned
 at the far right, a **More** menu (Copy Markdown, Download section .md, Open in
 run) followed by the save status. Below the `xl` breakpoint the Chapter options
 and save-status labels collapse to icons. There is no Properties sheet any more:
@@ -233,8 +234,8 @@ either view and is hidden while the selection is out of view; it offers **Commen
 shortcut instead moves keyboard focus to that highlight's card; Escape dismisses the
 bar), **Prompt…** (`Ctrl+Alt+P`) and the quick chips (`Add proof`, `More rigorous`,
 `Shorter`, `Cite`), and never takes focus or the selection. The copilot's buttons render
-only with `margin/flags.ts`'s `COPILOT_ACTIONS_ENABLED` (on) **and** their handler in the
-card context, so a LaTeX-only section, which the server cannot anchor, shows none.
+only with their handler in the card context (there is no feature flag any more), so a LaTeX-only
+section, which the server cannot anchor, shows none.
 **Keyboard-only commenting and prompting work from the Source view**: the Write view has
 no caret, so there a keyboard user can read the cards but cannot start one (the header
 Copilot button, which prompts about the whole section, works in both views).
@@ -279,10 +280,10 @@ Resolved badges), `Quote` the quote area (default: the quoted text), `Body` ever
 below. A review card puts severity/type pills in `Status` and the issue in `Body`; a
 suggestion card its working / ready / failed state in `Status`, its diff in `Quote` and
 its actions in `Body`; `ReadOnlyCardBody` is the fallback for a kind this client does not
-know. `MarginCardContext` is `{ projectId, nodeId, currentUserId, copilotActions,
+know. `MarginCardContext` is `{ projectId, nodeId, currentUserId,
 restoreEditorFocus, applyServerContent, hasUnsavedEdits, flushEdits, holdSaving,
-sectionNumber, startRevision, onSendToCopilot, onFixWithCopilot, onTryAgain,
-onCommentSent }`. `ComposerDraft` in `margin-store.ts` is a discriminated union
+sectionNumber, serverAnchor, editBlockedReason, revisable, rewriteBlock, knownIds, startRevision,
+onSendToCopilot, onFixWithCopilot, onTryAgain, onCommentSent }`. `ComposerDraft` in `margin-store.ts` is a discriminated union
 (`comment | prompt`; every kind carries `anchor`): the margin positions and highlights any
 draft from `anchor` alone and renders it through `COMPOSER_KINDS`
 (`margin/composer-registry.tsx`), so a new kind of draft is one union member and one entry.
@@ -319,13 +320,21 @@ re-created by a later import). The card's accessible name is the issue itself (`
 Coverage: ...`), since reviewer cards have no author.
 
 `margin/review-summary-strip.tsx` is the section verdict from `OutlineNode.reviewSummary`
-(`okToKeep`, `issueCount`, `suggestedEdits`, `retrievalQueries`, `reviewedAt`), a pinned item at the
-top of the text column with the **All** and **Review** filters: the pill (*Needs revision* /
-*OK to keep*; `okToKeep` with `issueCount` 0 says *No issues found*), `N major · M minor` counted over
-the *open* review cards (a dismissed one is not counted), when it was reviewed, the reviewer score
-if a run produced one (`reviewerScore`, never yet; it used to be the Review tab's badge) and two
-collapsed disclosures, *Suggested edits (N)* and *Searches that would find missing evidence (N)*
-(chips). `reviewerNotes` is no longer read anywhere in the frontend.
+(`okToKeep`, `issueCount`, `suggestedEdits`, `retrievalQueries`, `reviewedAt`): a compact **fixed
+header above the card lane** (the cards scroll, it does not), shown with the **All** and **Review**
+filters: the pill (*Needs revision* / *OK to keep*; `okToKeep` with `issueCount` 0 says *No issues
+found*), `N major · M minor` counted over the *open* review cards (a dismissed one is not counted),
+when it was reviewed, the reviewer score if a run produced one (`reviewerScore`, never yet; it used
+to be the Review tab's badge) and two links, *Suggested edits (N)* and *Searches that would find
+missing evidence (N)*, that open a scrollable panel over the cards (one at a time; Escape closes it).
+The header sits above the lane, so the lane starts lower than the text pane: `MarginPanel` measures
+that offset and keeps cards clear of it (`layoutMargin`'s `minTop`). A section reviewed before review
+rows existed (no `reviewSummary`, no review cards, but a non-empty `reviewerNotes`) shows those old
+notes as a plain *Review notes (previous run)* panel in the same header; once cards exist the notes
+are never read. #164's collapse/expand-per-card design is **superseded** by the margin layout: a card
+is always open, and a description or required fix longer than a few lines is clamped with *Show more*,
+so one issue cannot take the whole lane. Cards with no anchor stack at the top, majors first, then
+oldest, then by id; an unknown or missing severity reads as Minor, the server's default.
 
 *The prompt window (`margin/prompt-window.tsx`).* One window, three entry points, one result (a
 suggestion card): the selection toolbar's **Prompt…** (scope locked to the range; the quick chips skip
@@ -338,21 +347,43 @@ the parameter chips as typed fields (`more proofs`, `more examples`, `more rigor
 `fixIssueIds`, `address N comments` = the open comment threads in scope as `addressCommentIds`;
 a chip with nothing behind it is disabled; scope for a selection is what overlaps the range) and two
 verbs: **Revise** (default) and **Rewrite**, available for the whole section only, with nothing
-else set and not from a thread (the API 422s those, so the toggle refuses with the reason).
+else set and not from a thread (the API 422s those, so the toggle refuses with the reason, shown as
+text under the toggle, not only as a tooltip). Whether a Rewrite can start at all is worked out up
+front, as the old copilot panel did, from the section and the run lane: not a leaf, content-locked,
+no `cliKey`, no resumable run, a regenerate already queued, a run busy; each with its old wording and
+way out (*Start full run*, *Unlock content*). A Rewrite replaces the section through a run, so sending
+it asks first (*Rewrite this section?*), and a refusal the API still makes is mapped to words (known
+reasons) or a generic line; a raw server string, ids included, is never shown. For a LaTeX-only
+section Revise is unavailable (with the reason) and the window opens locked to Rewrite. "Regenerate
+again" on a run page opens the section with the window on Rewrite, filled in with that run's
+instruction (`?copilot=rewrite&instruction=`, consumed once).
 `Ctrl+Enter` sends from anywhere in the window, `Escape` closes it (and forgets its text); focus
 goes into the box when it opens and back to the Copilot button (or the text) when it closes. Unsent
-text lives in `useMarginStore.drafts` (`<node>:prompt`) and the chips and verb in the composer, so
-the window survives the narrow side sheet closing. Refusals are shown **inline**, in words, never as a
+text lives in `useMarginStore.drafts` and the options and verb in `promptExtras`, one pair per
+scope (`prompt:section`, or `prompt:range:<start>-<end>`): opening a window never deletes another
+scope's draft, reopening the same scope restores both, and an unfinished prompt (or a comment with
+text) is saved per section when the section is left and restored when it is opened again. A press on
+the editor that closes the narrow side sheet therefore loses nothing. Refusals are shown **inline**, in words, never as a
 status code: `section_empty`, `node_generating`, `anchor_orphaned`, `revision_in_progress`,
 `llm_key_required` (with an *Account settings* shortcut), `llm_not_configured`, `too_many_revisions`,
 `section_too_large` (suggests selecting a passage); a Rewrite's refusals (no previous run, locked
 node, queue full) are shown as the API sent them. Starting a revision first awaits
 `ctx.flushEdits()` (the server revises the *saved* text). A Rewrite that started toasts that it
-became a run, with a *View run* action. A comment (or reply) that mentions `@copilot` is a prompt:
-it is created first, then a revision with `threadId` is started and the suggestion arrives inside
-that thread; `Send to Copilot` on a thread and `Fix with Copilot` on a review card do the same
+became a run, with a *View run* action, and the run is followed by its id (`trackRun`) so a short run
+that starts and ends between two polls of the run list still refreshes the outline and toasts its
+outcome. A comment (or reply, or an edit that adds the mention) that mentions `@copilot` is a prompt:
+the mention must be plain text (not in code, not in a quoted line, not `@copilot.com`); the composer's
+button then reads *Comment and ask Copilot*; the comment is created first, then a revision with
+`threadId` is started and the suggestion arrives inside that thread; `Send to Copilot` on a thread and `Fix with Copilot` on a review card do the same
 without typing (the review card sends `fixIssueIds: [id]`, with the card's range when it has one,
-else section scope). `margin/use-copilot.ts` holds all of these.
+else section scope). `margin/use-copilot.ts` holds all of these; everything it returns is
+referentially stable (handlers read the latest values through a ref), because the card context is
+built from it and a context that changed per keystroke re-rendered every card on every keystroke.
+Anchors sent to the server go through `lib/server-anchor.ts`: never an empty quote (a 422), offsets
+only when they match the quote's code-point length, and no offsets at all for a section the server
+stores with CR LF (the editor counts LF; the server then finds the quote itself). A request carries at
+most 25 ids per list (24 with a `threadId`, which the server adds to one of them), and the chip's label
+counts what is sent. One start at a time per section entry (chips, Send/Fix with Copilot).
 
 *Suggestions (`margin/suggestion-card.tsx`, `suggestion-diff.tsx`, `lib/diff-view.ts`).* Every state
 of the API's `kind=suggestion` row has its card: **running** (working pill with the elapsed time,
@@ -372,10 +403,18 @@ offset goes through `CodePointIndex` before slicing, context is never cut inside
 a CR LF original is shown with LF. Only the first three changes show until *Show all N changes*; a
 very long change is clamped until asked for. A section suggestion with several changes has a checkbox
 per change (the selected ones go as `hunkIndexes`, *Accept 2 of 3*; the card notes that a partial accept
-leaves the linked comments and issues open, as the API does). A pending suggestion whose anchor is
-orphaned says "The text changed since this was suggested" and still offers Accept; a section
+leaves the linked comments and issues open, as the API does). A pending suggestion whose own range
+(the row's anchor, re-anchored with the text; `payload.anchor` is the range in the original, which
+clips the diff) is gone says "The text changed since this was suggested" and still offers Accept; a section
 suggestion made against an older text than the section now has says it may be refused. A model
-that handed the text back unchanged shows "nothing to change" with no Accept. The suggestion's
+that handed the text back unchanged shows "nothing to change" with no Accept. A finished suggestion
+from the node list has no `originalMarkdown` but keeps its hunks: its card shows the removed and added
+text without context (only the applied changes after a partial accept). Dismiss is offered only to
+the person who may delete the row (its author, or anyone for a row nobody authored); a cancelled
+suggestion says "You stopped this revision" only when `payload.cancelledBy` is the signed-in user.
+Try again on a range suggestion whose range is gone opens the window (which says the scope is now the
+section) instead of silently widening it, and "Ask again as it was" drops references to cards that
+were deleted since. The suggestion's
 range is highlighted in both views in the suggestion style and focusing the card focuses it.
 Progress: `margin/suggestion-progress.ts`'s `useSuggestionStreams` (mounted by the open section, not
 by the cards, so a filter or the side sheet cannot lose it) follows every running suggestion by id
@@ -386,22 +425,33 @@ and failure without a reload.
 *Accept (the data-loss-sensitive part, `margin/use-suggestion-actions.ts`).* The order is fixed:
 `ctx.holdSaving()` awaits `flushEdits()` (the server accepts against the saved text) and then holds
 autosave; the accept is posted with `expectedContentHash` (and `hunkIndexes` if partial); on success the
-returned node replaces the section's cache entries and the editor adopts its text through the
-`ExternalChange` path (kept out of the undo history), unless the user typed during the accept, in
-which case the draft is kept and the "changed elsewhere" notice offers the choice; the hold is
-released in a `finally`. On any failure the hold is released and the draft is untouched; `stale` and
+returned node replaces the section's cache entries and `ctx.applyServerContent(text, hash)` hands the
+editor the new text: adopted at once (kept out of the undo history, via the `ExternalChange` path) when
+nothing is unsaved; otherwise the draft stays exactly as typed, the "changed elsewhere" notice (Keep
+mine / Load the other version) is set **synchronously** and autosave stays held, and the hold's release
+does **not** flush, so text typed while the POST was in flight can never be saved over the accepted
+text. The hold is released in a `finally`; on any failure the draft is untouched, and `stale` and
 `content_conflict` (the section is also fetched again) are explained inline on the card, not toasted.
-Pressing `Ctrl+Z` right after an accept does nothing useful (the adopted text is not in the editor's
-history, by design, so an undo cannot be autosaved over another version), so a toast, *Suggestion
-applied · Undo*, offers the way back: it holds autosave the same way and PATCHes the previous text
-back guarded by the hash the accept returned; if the section was edited since, the undo is refused and
-says so rather than discarding that work. The suggestion stays *accepted* after an undo.
+A second click (also during the save before the POST) is ignored and the buttons are disabled for the
+whole action. While the notice is up, or after a failed save (`flushEdits` keeps rejecting while the
+failed value is pending), Accept, Try again, Undo and a new revision are refused with the reason shown.
+Node fetches in flight when an accept or undo starts are cancelled, so a stale answer cannot restore
+the old text and hash afterwards. `Ctrl+Z` right after an accept does nothing useful (the adopted text
+is not in the editor's history, by design), so a toast, *Suggestion applied · Undo*, offers the way
+back: the same hold and adoption, a PATCH of the previous text guarded by the hash the accept returned
+(refused, with a message, if the section was edited since), and for a full accept the comment threads
+and review issues that accept had resolved are reopened. It says **Text restored**; the suggestion
+stays *accepted* on the server (an undo is an ordinary content write), and this tab marks its card
+*Accepted, then undone* until a reload.
 
 *Content hash everywhere.* The server treats a content PATCH without `expectedContentHash` as
-last-write-wins, so **every autosave** sends it: the `contentHash` of the last single-node
-GET/PATCH/accept response (kept in the node's cache entry by every content write; the list rows
-carry none), falling back to hashing the cached server text (`lib/content-hash.ts`) only where a
-response had none. A `409 content_conflict` is never retried over: the section is fetched again and
+last-write-wins, so **every autosave** sends it: the hash of the text **the draft was based on**
+(`baseHashRef`, kept beside the baseline text and moved only when the baseline itself moves: an
+adoption, this editor's own successful save with the hash the server returned, Keep mine), never
+whatever the node cache holds when the save runs; a save made on top of text the user has not seen
+(an accept that landed meanwhile) is therefore refused as a conflict instead of passing with the newer
+text's hash. The hash is the server's `contentHash` (the list rows carry none), hashing the baseline
+text (`lib/content-hash.ts`) only where a response had none. A `409 content_conflict` is never retried over: the section is fetched again and
 the existing "changed elsewhere" notice takes over (*Keep mine* saves the draft over the other
 version, now based on its hash; *Load the other version* replaces the draft). Autosave holds are kept
 per reason (`useDebouncedMutation.hold(held, reason)`), so an accept in flight and a pending
@@ -410,15 +460,16 @@ it cannot put the old text and hash back.
 
 *The legacy drawer is gone.* Removed: `CopilotDrawer`, `CopilotPanel`, the Review tab
 (`ReviewPanel`), `SectionSourcesCard` (its job lives in Chapter options and the sources drawer),
-the Margin | Copilot switch, the `tab` search parameter (an old `?tab=review` link is just an
-unknown value that is dropped), `ui-store.rightPane` and the aria names that mentioned the
+the Margin | Copilot switch, the `tab` search parameter (an old `?tab=review` link is dropped from the search state and from the
+address bar), `ui-store.rightPane` and the aria names that mentioned the
 copilot (`copilotOpen` / `toggleCopilot` / `copilotPane` became `marginOpen` / `toggleMargin` /
 `marginPane`; the persisted store is migrated: `copilotOpen` -> `marginOpen`, `rightPane` dropped).
 What lived only in the drawer and where it is now: regenerate with an instruction -> *Rewrite* in the
 prompt window (with the API's 409 reasons inline); quick-action presets -> the chips; the event log
-and the status footer -> the run page, which shows them and the cost; the stage timeline -> a
-*Stage timeline* strip above the run page's event log (added with this change, since only the
-drawer summarised the stages); the node's source scope -> Chapter options and the sources drawer;
+and the status footer -> the run page, which shows them and the cost; the stage timeline was
+**removed with the drawer** (a real run's `RunEvent.stage` values are stdout log tags, not pipeline
+stages, so a summary of them says nothing, and the runs page is out of scope for this issue; the run
+page's event log still shows every event with its tag); the node's source scope -> Chapter options and the sources drawer;
 the content-locked hint -> the header lock button. There is no run tray in the studio: run status
 stays on the runs page and in the row spinners, and a running revision is the running state of its
 own card.
@@ -426,12 +477,18 @@ own card.
 *Editor setup and the bundle.* The build aliases `@uiw/codemirror-extensions-basic-setup` to
 `lib/editor-setup.ts` (`vite.config.ts`), a copy of its extension list without the autocompletion
 popup and the lint keymap, which a Markdown source editor never uses and which kept 22 kB gzipped
-(the whole of `@codemirror/autocomplete`'s completion machinery and `@codemirror/lint`) in the
+(the completion machinery of `@codemirror/autocomplete`, of which only `closeBrackets` is kept, and
+`@codemirror/lint`) in the
 bundle. Line numbers, undo history, the default, search (the `Ctrl+F` panel), history, fold and
 close-brackets keymaps, bracket matching and closing, selection drawing, rectangular selection and
 the match/active-line highlights are unchanged. `@codemirror/commands`, `search` and `autocomplete`
 (already installed as peers of `@uiw/react-codemirror`) are now declared as direct dependencies
-because that file imports them.
+because that file imports them. The alias is applied in the build, the dev server and the tests
+(`test.server.deps.inline` runs `@uiw/react-codemirror` through Vite); `lib/editor-setup.test.tsx`
+checks that the upstream import name resolves to the trimmed copy and pins search, undo/redo, bracket
+closing and Tab indentation; and `scripts/check-bundle-budget.mjs` fails if
+`codemirror-extensions-basic-setup` or `@codemirror/lint` appear in the bundle, so an upstream rename
+or a config change cannot bring them back silently.
 
 `routes/__root.tsx` mounts the app shell once (theme toggle, toaster, the
 `NewProjectDialog` — reachable from both the hub and the studio header) and
