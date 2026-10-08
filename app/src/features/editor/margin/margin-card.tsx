@@ -1,8 +1,9 @@
 import { memo, useCallback } from 'react';
 
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { cardKind, type MarginCardContext, type MarginCardPartProps } from './card-registry';
+import { cardKind, type MarginCardContext } from './card-registry';
+import { cardRegionName } from './card-name';
+import { DefaultQuote, DefaultStatus } from './default-parts';
 import type { MarginThread } from './threads';
 
 interface MarginCardProps {
@@ -16,52 +17,8 @@ interface MarginCardProps {
   /** The anchor has no rendered highlight in the current view. */
   approximate?: boolean;
   onFocusCard: (id: string) => void;
-}
-
-/** Short label for the card region, read by screen readers: "Comment by Ada on “quote”". */
-function describeCard(thread: MarginThread, label: string): string {
-  const author = thread.root.authorName;
-  const head = `${label}${author ? ` by ${author}` : ''}`;
-  if (thread.sectionLevel) return `${head} on the whole section`;
-  const quote = thread.quote.length > 60 ? `${thread.quote.slice(0, 60)}…` : thread.quote;
-  return `${head}${thread.orphaned ? ' (orphaned)' : ''} on “${quote}”`;
-}
-
-/** Default header status: where the card points and whether it is finished with. */
-function DefaultStatus({ thread, approximate }: MarginCardPartProps) {
-  return (
-    <>
-      {thread.orphaned ? <Badge variant="outline">Orphaned</Badge> : null}
-      {thread.sectionLevel ? <Badge variant="outline">Whole section</Badge> : null}
-      {approximate && !thread.orphaned ? (
-        <Badge variant="outline">Not shown in this view</Badge>
-      ) : null}
-      {thread.status === 'resolved' ? <Badge variant="secondary">Resolved</Badge> : null}
-    </>
-  );
-}
-
-/** Default quote area: the quoted text, struck through when orphaned. */
-function DefaultQuote({ thread }: MarginCardPartProps) {
-  return (
-    <>
-      {!thread.sectionLevel && thread.quote ? (
-        <blockquote
-          className={cn(
-            'mb-2 line-clamp-3 border-l-2 pl-2 text-xs text-muted-foreground italic',
-            thread.orphaned && 'line-through decoration-muted-foreground/60',
-          )}
-        >
-          {thread.quote}
-        </blockquote>
-      ) : null}
-      {thread.orphaned ? (
-        <p className="mb-2 text-[11px] text-muted-foreground">
-          The text this refers to is gone from the section.
-        </p>
-      ) : null}
-    </>
-  );
+  /** Told apart from cards with the same name: " (2 of 3)". */
+  labelSuffix?: string;
 }
 
 /**
@@ -78,6 +35,7 @@ function MarginCardInner({
   focused,
   approximate = false,
   onFocusCard,
+  labelSuffix = '',
 }: MarginCardProps) {
   const ref = useCallback(
     (element: HTMLElement | null) => register(thread.id, element),
@@ -99,7 +57,7 @@ function MarginCardInner({
       data-thread-id={thread.id}
       data-kind={thread.kind}
       data-focused={focused || undefined}
-      aria-label={describeCard(thread, label)}
+      aria-label={`${cardRegionName(thread)}${labelSuffix}`}
       tabIndex={0}
       onFocus={() => onFocusCard(thread.id)}
       onClick={() => onFocusCard(thread.id)}
@@ -140,6 +98,7 @@ export const MarginCard = memo(MarginCardInner, (a, b) => {
     a.register === b.register &&
     a.focused === b.focused &&
     a.approximate === b.approximate &&
+    a.labelSuffix === b.labelSuffix &&
     a.ctx === b.ctx &&
     a.onFocusCard === b.onFocusCard &&
     x.root === y.root &&

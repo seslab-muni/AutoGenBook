@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/component-test-utils';
 
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
 import type { MarginCardContext } from './card-registry';
 import type { MarginGeometry } from './geometry';
 import { MarginPanel } from './margin-panel';
@@ -15,11 +16,16 @@ const CTX: MarginCardContext = {
   projectId: 'book-reinforcement-learning',
   nodeId: 'rl-sec-1-1',
   currentUserId: 'user-mock-1',
-  copilotActions: false,
   restoreEditorFocus: vi.fn(),
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
   flushEdits: () => Promise.resolve(),
+  holdSaving: () => Promise.resolve(() => {}),
+  serverAnchor: toServerAnchor,
+  editBlockedReason: null,
+  revisable: true,
+  rewriteBlock: null,
+  knownIds: () => new Set<string>(),
 };
 
 function geometry(y: Record<string, number>): MarginGeometry {
@@ -183,5 +189,50 @@ describe('MarginPanel', () => {
     await user.keyboard('{Escape}');
     expect(useMarginStore.getState().composer).toBeNull();
     expect(CTX.restoreEditorFocus).toHaveBeenCalled();
+  });
+
+  describe('review summary strip', () => {
+    const summary = {
+      okToKeep: false,
+      issueCount: 1,
+      suggestedEdits: ['Add a proof.'],
+      retrievalQueries: [],
+      reviewedAt: null,
+    };
+
+    it('is a fixed header above the card lane, not a card that scrolls away with the text', async () => {
+      useMarginStore.getState().setFilter('all');
+      renderPanel([anchored('a', 'First', 10)], { a: 20 }, { reviewSummary: summary });
+      const strip = await screen.findByRole('region', { name: 'Review summary' });
+      const lane = screen.getByRole('region', { name: 'Margin cards' });
+      expect(lane.contains(strip)).toBe(false);
+      expect(strip.compareDocumentPosition(lane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      await waitFor(() => expect(tops().map((t) => t.id)).toEqual(['a']));
+    });
+
+    it('shows with All and Review, not with Comments or Suggestions', async () => {
+      for (const [filter, shown] of [
+        ['all', true],
+        ['review', true],
+        ['comment', false],
+        ['suggestion', false],
+      ] as const) {
+        useMarginStore.getState().setFilter(filter);
+        const view = renderPanel(
+          [anchored('a', 'First', 10)],
+          { a: 20 },
+          { reviewSummary: summary },
+        );
+        await waitFor(() =>
+          expect(!!screen.queryByRole('region', { name: 'Review summary' })).toBe(shown),
+        );
+        view.unmount();
+      }
+    });
+
+    it('shows nothing for a section that was never reviewed', () => {
+      renderPanel([], {}, { reviewSummary: null });
+      expect(screen.queryByRole('region', { name: 'Review summary' })).not.toBeInTheDocument();
+    });
   });
 });

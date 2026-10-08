@@ -18,40 +18,40 @@ export const DEFAULT_OUTLINE_WIDTH = 320;
 export const MIN_OUTLINE_WIDTH = 240;
 export const MAX_OUTLINE_WIDTH = 560;
 
-/** What the right-hand column shows: the margin workspace (default) or the legacy copilot drawer. */
-export type RightPane = 'margin' | 'copilot';
-
 interface UiState {
   outlineOpen: boolean;
-  copilotOpen: boolean;
-  rightPane: RightPane;
+  /** The right column (the margin workspace) is open - the wide-screen preference. */
+  marginOpen: boolean;
   /** Narrow screens show the right column as an overlay instead; this is its (unpersisted) open state. */
   rightOverlayOpen: boolean;
   outlineWidth: number;
   activeModal: ModalKind | null;
   toggleOutline: () => void;
-  toggleCopilot: () => void;
-  setRightPane: (pane: RightPane) => void;
+  toggleMargin: () => void;
   setRightOverlayOpen: (open: boolean) => void;
   setOutlineWidth: (width: number) => void;
   openModal: (modal: ModalKind) => void;
   closeModal: () => void;
 }
 
+/** What is kept across reloads. */
+interface PersistedUi {
+  outlineOpen: boolean;
+  marginOpen: boolean;
+  outlineWidth: number;
+}
+
 export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
       outlineOpen: true,
-      copilotOpen: true,
-      rightPane: 'margin',
+      marginOpen: true,
       rightOverlayOpen: false,
       outlineWidth: DEFAULT_OUTLINE_WIDTH,
       activeModal: null,
       toggleOutline: () => set((state) => ({ outlineOpen: !state.outlineOpen })),
-      toggleCopilot: () => set((state) => ({ copilotOpen: !state.copilotOpen })),
-      setRightPane: (rightPane) => set({ rightPane }),
+      toggleMargin: () => set((state) => ({ marginOpen: !state.marginOpen })),
       setRightOverlayOpen: (rightOverlayOpen) => set({ rightOverlayOpen }),
-      revealMargin: () => set({ rightPane: 'margin', copilotOpen: true, rightOverlayOpen: true }),
       setOutlineWidth: (width) =>
         set({
           outlineWidth: Math.min(MAX_OUTLINE_WIDTH, Math.max(MIN_OUTLINE_WIDTH, width)),
@@ -61,12 +61,29 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: 'autogenbook-ui',
+      version: 1,
+      // v0 stored `copilotOpen` (the right column's wide-screen state) and `rightPane`
+      // (`margin | copilot`, from when the legacy copilot drawer shared the column). The drawer is
+      // gone: keep the open/closed preference under its new name and drop the switch.
+      migrate: (persisted) => {
+        const {
+          copilotOpen,
+          rightPane: _rightPane,
+          ...rest
+        } = (persisted ?? {}) as Record<string, unknown>;
+        void _rightPane;
+        return {
+          ...rest,
+          ...(typeof copilotOpen === 'boolean' && rest['marginOpen'] === undefined
+            ? { marginOpen: copilotOpen }
+            : {}),
+        } as unknown as PersistedUi;
+      },
       // Only pane visibility/size is worth remembering across reloads; `activeModal`
       // always starts closed.
       partialize: (state) => ({
         outlineOpen: state.outlineOpen,
-        copilotOpen: state.copilotOpen,
-        rightPane: state.rightPane,
+        marginOpen: state.marginOpen,
         outlineWidth: state.outlineWidth,
       }),
     },
@@ -74,6 +91,5 @@ export const useUiStore = create<UiState>()(
 );
 
 export const useOutlineOpen = (): boolean => useUiStore((state) => state.outlineOpen);
-export const useRightPaneMode = (): RightPane => useUiStore((state) => state.rightPane);
 export const useOutlineWidth = (): number => useUiStore((state) => state.outlineWidth);
 export const useActiveModal = (): ModalKind | null => useUiStore((state) => state.activeModal);

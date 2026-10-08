@@ -8,7 +8,9 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { routeTree } from '@/routeTree.gen';
 
 /** Renders the real route tree (MSW-backed) at `initialPath`, for router/loader integration tests. */
-export function renderRouterApp(initialPath = '/'): RenderResult & { queryClient: QueryClient } {
+export function renderRouterApp(
+  initialPath = '/',
+): RenderResult & { queryClient: QueryClient; router: ReturnType<typeof createRouter> } {
   const queryClient = createQueryClient();
   const router = createRouter({
     routeTree,
@@ -23,5 +25,5 @@ export function renderRouterApp(initialPath = '/'): RenderResult & { queryClient
       </TooltipProvider>
     </QueryClientProvider>,
   );
-  return { ...result, queryClient };
+  return { ...result, queryClient, router: router as unknown as ReturnType<typeof createRouter> };
 }

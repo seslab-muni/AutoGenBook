@@ -25,6 +25,9 @@ interface EditorPaneProps {
   flatNodes: readonly OutlineNode[];
   outlineOpen: boolean;
   onSelectNode: (nodeId: string) => void;
+  /** Open the section with the prompt window on Rewrite ("Regenerate again"). */
+  initialRewrite?: { instruction: string } | null;
+  onInitialRewriteConsumed?: () => void;
 }
 
 /**
@@ -42,6 +45,8 @@ export function EditorPane({
   flatNodes,
   outlineOpen,
   onSelectNode,
+  initialRewrite = null,
+  onInitialRewriteConsumed,
 }: EditorPaneProps) {
   const nodeQuery = useQuery({
     ...outline.node(projectId, nodeId ?? ''),
@@ -103,6 +108,8 @@ export function EditorPane({
         flatNodes={flatNodes}
         outlineOpen={outlineOpen}
         onSelectNode={onSelectNode}
+        initialRewrite={initialRewrite}
+        {...(onInitialRewriteConsumed ? { onInitialRewriteConsumed } : {})}
       />
     </Suspense>
   );

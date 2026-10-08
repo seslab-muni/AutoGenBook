@@ -217,7 +217,15 @@ function RunPage() {
                 void navigate({
                   to: '/p/$projectId',
                   params: { projectId },
-                  search: { node: regenerateAgainNodeId },
+                  // The studio opens that section with the prompt window on Rewrite, filled in
+                  // with what this run was asked.
+                  search: {
+                    node: regenerateAgainNodeId,
+                    copilot: 'rewrite',
+                    ...(run.options.promptModifier
+                      ? { instruction: run.options.promptModifier }
+                      : {}),
+                  },
                 })
               }
             >

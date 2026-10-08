@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 
 /** Shown on the buttons and wired in `ManuscriptSheet`. */
 export const COMMENT_SHORTCUT = 'Ctrl+Alt+M';
+export const PROMPT_SHORTCUT = 'Ctrl+Alt+P';
 
 const QUICK_CHIPS = ['Add proof', 'More rigorous', 'Shorter', 'Cite'] as const;
 
@@ -16,10 +17,9 @@ interface SelectionToolbarProps {
   containerHeight?: number;
   onComment: () => void;
   /**
-   * `Prompt…` and the quick chips (phase 4); see `flags.ts`. Each renders only with the flag on *and*
-   * its handler supplied; with neither, only `Comment` renders.
+   * `Prompt…` and the quick chips: each renders only with its handler supplied (none for a section the
+   * copilot cannot revise); with neither, only `Comment` renders.
    */
-  copilotActions?: boolean;
   onPrompt?: (() => void) | undefined;
   onChip?: ((chip: string) => void) | undefined;
 }
@@ -35,7 +35,6 @@ export function SelectionToolbar({
   containerWidth,
   containerHeight = Number.POSITIVE_INFINITY,
   onComment,
-  copilotActions = false,
   onPrompt,
   onChip,
 }: SelectionToolbarProps) {
@@ -43,7 +42,7 @@ export function SelectionToolbar({
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
     if (ref.current) setWidth(ref.current.offsetWidth);
-  }, [copilotActions]);
+  }, [onPrompt, onChip]);
 
   const height = 36;
   const above = rect.top - height - 8;
@@ -73,19 +72,21 @@ export function SelectionToolbar({
         <MessageSquarePlus />
         Comment
       </Button>
-      {copilotActions && onPrompt ? (
+      {onPrompt ? (
         <Button
           type="button"
           variant="ghost"
           size="xs"
           className="text-background hover:bg-background/15 hover:text-background"
+          aria-keyshortcuts="Control+Alt+P"
+          title={`Prompt the copilot about the selection (${PROMPT_SHORTCUT})`}
           onClick={onPrompt}
         >
           <Sparkles />
           Prompt…
         </Button>
       ) : null}
-      {copilotActions && onChip ? (
+      {onChip ? (
         <>
           {QUICK_CHIPS.map((chip) => (
             <Button

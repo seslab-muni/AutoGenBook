@@ -304,7 +304,7 @@ function OutlineRowComponent({
               <FileText className="size-3.5 shrink-0 text-muted-foreground" />
             )}
 
-            <span className="shrink-0 font-mono text-[11px] font-semibold text-muted-foreground">
+            <span className="shrink-0 font-mono text-[11px] font-semibold text-foreground/70">
               {highlightQuery
                 ? highlightMatch(node.sectionNumber, highlightQuery)
                 : node.sectionNumber}

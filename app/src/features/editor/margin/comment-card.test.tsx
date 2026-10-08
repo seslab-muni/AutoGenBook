@@ -6,6 +6,7 @@ import { db } from '@/mocks/db';
 import { MOCK_USER } from '@/mocks/fixtures';
 import { renderWithProviders } from '@/test/component-test-utils';
 
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
 import type { MarginCardContext } from './card-registry';
 import { MarginCard } from './margin-card';
 import { useMarginStore } from './margin-store';
@@ -15,11 +16,16 @@ const CTX: MarginCardContext = {
   projectId: 'book-reinforcement-learning',
   nodeId: 'rl-sec-1-1',
   currentUserId: MOCK_USER.id,
-  copilotActions: false,
   restoreEditorFocus: vi.fn(),
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
   flushEdits: () => Promise.resolve(),
+  holdSaving: () => Promise.resolve(() => {}),
+  serverAnchor: toServerAnchor,
+  editBlockedReason: null,
+  revisable: true,
+  rewriteBlock: null,
+  knownIds: () => new Set<string>(),
 };
 
 /** Seeds the mock API with a thread (so the real mutations have rows to act on) and renders its card. */
@@ -234,34 +240,35 @@ describe('comment card', () => {
     expect(db.comments.has('reply-0')).toBe(false);
   });
 
+  it('hands a reply that mentions @copilot to the context, and one that does not, still', async () => {
+    const user = userEvent.setup();
+    const onCommentSent = vi.fn();
+    renderCard({ ctx: { onCommentSent } });
+    await user.click(screen.getByRole('button', { name: 'Reply' }));
+    await user.type(screen.getByRole('textbox', { name: 'Reply' }), '@copilot please check');
+    // The button says what sending will do before it starts a model job.
+    await user.click(screen.getByRole('button', { name: 'Reply and ask Copilot' }));
+    await waitFor(() => expect(onCommentSent).toHaveBeenCalledTimes(1));
+    expect(onCommentSent).toHaveBeenCalledWith(
+      expect.objectContaining({ bodyMarkdown: '@copilot please check', parentId: 'root-1' }),
+    );
+  });
+
   it("offers no edit or delete on someone else's message", () => {
     renderCard({ ownRoot: false });
     expect(screen.queryByRole('button', { name: /^Edit comment/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Delete comment/ })).not.toBeInTheDocument();
   });
 
-  it('shows Send to Copilot only with the flag on AND a handler', async () => {
+  it('shows Send to Copilot only when the context supplies its handler', async () => {
     const user = userEvent.setup();
     const first = renderCard();
     expect(screen.queryByRole('button', { name: 'Send to Copilot' })).not.toBeInTheDocument();
     first.unmount();
-    const second = renderCard({ ctx: { copilotActions: true } });
-    expect(screen.queryByRole('button', { name: 'Send to Copilot' })).not.toBeInTheDocument();
-    second.unmount();
     const onSendToCopilot = vi.fn();
-    renderCard({ ctx: { copilotActions: true, onSendToCopilot } });
+    renderCard({ ctx: { onSendToCopilot } });
     await user.click(screen.getByRole('button', { name: 'Send to Copilot' }));
     expect(onSendToCopilot).toHaveBeenCalledWith(expect.objectContaining({ id: 'root-1' }));
-  });
-
-  it('renders suggestion and review cards read-only instead of dropping them', () => {
-    renderCard({
-      root: { kind: 'review', bodyMarkdown: 'Missing a proof.', authorId: null, authorName: null },
-    });
-    const card = screen.getByRole('region', { name: /^Review on/ });
-    expect(within(card).getByText('Missing a proof.')).toBeInTheDocument();
-    expect(within(card).getByText('open')).toBeInTheDocument();
-    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('keeps the relative time ticking without a re-render from outside', async () => {

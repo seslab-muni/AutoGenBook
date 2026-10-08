@@ -59,7 +59,7 @@ async function open() {
 
 beforeEach(() => {
   useEditorStore.setState({ view: 'source' });
-  useUiStore.setState({ rightPane: 'margin', copilotOpen: true, rightOverlayOpen: false });
+  useUiStore.setState({ marginOpen: true, rightOverlayOpen: false });
   useMarginStore.getState().reset();
   useMarginStore.setState({ drafts: {} });
 });
@@ -176,8 +176,9 @@ describe('line endings', () => {
     const view = editorView();
     expect(view.state.doc.toString()).toBe(TEXT);
 
-    // A new comment on a range after a line break is anchored over LF text.
-    let posted: { anchor: { start: number; end: number; quote: string } } | undefined;
+    // A new comment on a range after a line break: the editor counts LF but the server stores CR LF, so
+    // the offsets would be wrong there. They are left out and the server finds the quote itself.
+    let posted: { anchor: { start: number | null; end: number | null; quote: string } } | undefined;
     server.use(
       http.post('*/api/v1/projects/:projectId/outline/:nodeId/comments', async ({ request }) => {
         posted = (await request.json()) as typeof posted;
@@ -195,8 +196,44 @@ describe('line endings', () => {
       'hi{Control>}{Enter}{/Control}',
     );
     await waitFor(() => expect(posted).toBeDefined(), LONG);
-    expect(posted!.anchor.start).toBe(from);
+    expect(posted!.anchor.start).toBeNull();
+    expect(posted!.anchor.end).toBeNull();
     expect(posted!.anchor.quote).toBe('Alpha again');
+  }, 30000);
+
+  it('sends a multi-line selection of a CR LF section with CR LF in the quote and its context', async () => {
+    const user = userEvent.setup();
+    seed(TEXT.replace(/\n/g, '\r\n'), 'theorem statement');
+    await open();
+    const view = editorView();
+    let posted:
+      | { anchor: { start: number | null; quote: string; prefix?: string; suffix?: string } }
+      | undefined;
+    server.use(
+      http.post('*/api/v1/projects/:projectId/outline/:nodeId/comments', async ({ request }) => {
+        posted = (await request.json()) as typeof posted;
+        return HttpResponse.json(
+          makeComment({ id: 'new', anchor: posted!.anchor, bodyMarkdown: 'x' }),
+          { status: 201 },
+        );
+      }),
+    );
+    // "holds for every input here.\nAlpha again": a quote that spans a line break.
+    const from = TEXT.indexOf('every input here.');
+    const to = TEXT.indexOf('Alpha again') + 'Alpha again'.length;
+    act(() => view.dispatch({ selection: { anchor: from, head: to } }));
+    await user.click(await screen.findByRole('button', { name: 'Comment' }));
+    await user.type(
+      await screen.findByRole('textbox', { name: 'New comment' }),
+      'hi{Control>}{Enter}{/Control}',
+    );
+    await waitFor(() => expect(posted).toBeDefined(), LONG);
+    expect(posted!.anchor.quote).toBe('every input here.\r\nAlpha again');
+    expect(posted!.anchor.start).toBeNull();
+    // Context in the stored (CR LF) form, so the server can match it.
+    expect(posted!.anchor.prefix).toContain('The theorem statement holds for ');
+    expect(posted!.anchor.suffix ?? '').toContain(' and beta again.');
+    expect(`${posted!.anchor.prefix ?? ''}${posted!.anchor.suffix ?? ''}`).not.toMatch(/(?<!\r)\n/);
   }, 30000);
 });
 
@@ -268,7 +305,7 @@ describe('narrow screens: the margin is a managed side sheet', () => {
   it('opens on Comment without changing the saved wide-screen preference, keeps the selection visible by making room, and closes on Escape from the editor', async () => {
     const user = userEvent.setup();
     setViewportWidth(1024);
-    useUiStore.setState({ copilotOpen: false });
+    useUiStore.setState({ marginOpen: false });
     seed(TEXT, 'theorem statement');
     renderRouterApp(NODE_URL);
     await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), LONG);
@@ -278,7 +315,7 @@ describe('narrow screens: the margin is a managed side sheet', () => {
     act(() => view.dispatch({ selection: { anchor: 0, head: 11 } }));
     await user.click(await screen.findByRole('button', { name: 'Comment' }));
     expect(await screen.findByRole('complementary', { name: 'Margin' }, LONG)).toBeInTheDocument();
-    expect(useUiStore.getState().copilotOpen).toBe(false);
+    expect(useUiStore.getState().marginOpen).toBe(false);
     const editorColumn = document.querySelector('.cm-editor')!.closest('[style*="padding-right"]');
     expect(editorColumn).not.toBeNull();
 
@@ -431,7 +468,7 @@ describe('unsent composer text survives the composer unmounting', () => {
     );
   }, 30000);
 
-  it('switching the right pane to Copilot and back keeps a half-written reply', async () => {
+  it('closing the right pane and opening it again keeps a half-written reply', async () => {
     const user = userEvent.setup();
     seed(TEXT, 'theorem statement');
     renderRouterApp(NODE_URL);
@@ -439,8 +476,9 @@ describe('unsent composer text survives the composer unmounting', () => {
     const card = await screen.findByRole('region', { name: /^Comment by Ada/ }, LONG);
     await user.click(within(card).getByRole('button', { name: 'Reply' }));
     await user.type(within(card).getByRole('textbox', { name: 'Reply' }), 'draft reply');
-    await user.click(screen.getByRole('radio', { name: 'Copilot' }));
-    await user.click(await screen.findByRole('radio', { name: 'Margin' }));
+    await user.click(screen.getByRole('button', { name: 'Close right pane' }));
+    expect(screen.queryByRole('region', { name: /^Comment by Ada/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Show right pane' }));
     const back = await screen.findByRole('region', { name: /^Comment by Ada/ }, LONG);
     expect(within(back).getByRole('textbox', { name: 'Reply' })).toHaveValue('draft reply');
   }, 30000);

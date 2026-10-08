@@ -79,6 +79,20 @@ export type CommentKind = components['schemas']['CommentKind'];
 export type CommentAnchor = components['schemas']['CommentAnchorOut'];
 export type CommentAnchorIn = components['schemas']['CommentAnchorIn'];
 export type CommentCreate = components['schemas']['CommentCreate'];
+export type CommentStatus = components['schemas']['CommentStatus'];
+
+/** The copilot (issue #182 phase 4): a revision request, its parameter chips and the answers. */
+export type RevisionCreate = components['schemas']['RevisionCreate'];
+export type RevisionParams = components['schemas']['RevisionParams'];
+export type SuggestionStarted = components['schemas']['SuggestionStarted'];
+/** `verb: 'rewrite'` answers with the regenerate run it became instead of a suggestion. */
+export type RunStarted = components['schemas']['RunStarted'];
+/** What `POST .../revisions` answers: the new suggestion (revise) or the run it became (rewrite). */
+export type StartedRevision = SuggestionStarted | RunStarted;
+export type SuggestionAccept = components['schemas']['SuggestionAccept'];
+export type SuggestionAccepted = components['schemas']['SuggestionAccepted'];
+export type SuggestionProgress = components['schemas']['SuggestionProgress'];
+export type SuggestionTerminal = components['schemas']['SuggestionTerminal'];
 
 export type RunKind = components['schemas']['RunKind'];
 export type RunStatus = components['schemas']['RunStatus'];

@@ -24,12 +24,12 @@ interface StudioLayoutProps {
    * Right pane (the margin workspace, 376px) — fully unmounted while collapsed. Below 1280px it
    * floats over the editor's right edge instead of squeezing it.
    */
-  copilotPane: ReactNode;
+  marginPane: ReactNode;
 }
 
 /**
  * The three-pane "Structured Architect" workspace: closeable outline and
- * copilot panes flank a centre editor pane that always fills the remaining
+ * margin panes flank a centre editor pane that always fills the remaining
  * width. Side panes fully unmount when closed and are restored from buttons
  * in the centre pane's toolbar. Only pane bodies scroll — this container
  * never does.
@@ -37,13 +37,13 @@ interface StudioLayoutProps {
 /** Width of the right column / side sheet. */
 const PANEL_WIDTH = 376;
 
-export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLayoutProps) {
+export function StudioLayout({ outlinePane, editorPane, marginPane }: StudioLayoutProps) {
   const outlineOpen = useOutlineOpen();
-  const { wide, open: copilotOpen, toggle: toggleRight, close: closeRight } = useRightColumn();
+  const { wide, open: marginOpen, toggle: toggleRight, close: closeRight } = useRightColumn();
   const outlineWidth = useOutlineWidth();
   const toggleOutline = useUiStore((state) => state.toggleOutline);
   const setOutlineWidth = useUiStore((state) => state.setOutlineWidth);
-  const overlay = !wide && copilotOpen;
+  const overlay = !wide && marginOpen;
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Below 1280px the right column is a non-modal side sheet: it closes on a press outside it and on
@@ -53,10 +53,12 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Element) || panelRef.current?.contains(target)) return;
-      // Dialogs, menus and toasts the sheet's own cards open live in portals outside it.
+      // Dialogs, menus and toasts the sheet's own cards open live in portals outside it; the
+      // copilot's entry points (the header button, the selection bar) open the sheet themselves, and
+      // closing it first would move the editor under the pointer and lose the click.
       if (
         target.closest(
-          '[role="alertdialog"], [role="dialog"], [role="menu"], [data-sonner-toaster]',
+          '[role="alertdialog"], [role="dialog"], [role="menu"], [data-sonner-toaster], [data-copilot-trigger], [role="toolbar"][aria-label="Selection actions"]',
         )
       ) {
         return;
@@ -93,7 +95,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
           className={cn(
             'flex shrink-0 flex-col overflow-hidden border-r',
             // At the untouched default width, keep the old responsive w-72/lg:w-80 breakpoint
-            // (matching the copilot pane's own w-80/lg:w-96) instead of a flat inline pixel value
+            // (matching the right pane's own w-80/lg:w-96) instead of a flat inline pixel value
             // that doesn't scale down on narrow viewports; a genuinely custom width (drag, or
             // keyboard resize) switches to the fixed inline value below.
             outlineWidth === DEFAULT_OUTLINE_WIDTH && 'w-72 lg:w-80',
@@ -133,7 +135,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
             ) : null}
           </div>
           <div className="flex items-center gap-1">
-            {!copilotOpen ? (
+            {!marginOpen ? (
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -148,7 +150,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
         <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">{editorPane}</div>
       </div>
 
-      {copilotOpen ? (
+      {marginOpen ? (
         <div
           ref={panelRef}
           className={cn(
@@ -156,7 +158,7 @@ export function StudioLayout({ outlinePane, editorPane, copilotPane }: StudioLay
             wide ? 'w-[376px]' : 'absolute inset-y-0 right-0 z-20 w-[376px] shadow-2xl',
           )}
         >
-          {copilotPane}
+          {marginPane}
         </div>
       ) : null}
     </div>

@@ -410,7 +410,7 @@ The graph import (`api/application/review_import.py`, called from `graph_import.
 | `outdated` | `true` only on a row a newer review no longer reports but a user had replied to (kept as resolved history) |
 | `superseded` | `true` only on a soft-deleted row a newer review replaced (never returned by the API) |
 
-The section verdict (`okToKeep`, `suggestedEdits`, `retrievalQueries`) is **not** a card: it is `OutlineNode.reviewSummary` (see **Outline**). `reviewerNotes` is still filled as before (the legacy Review tab).
+The section verdict (`okToKeep`, `suggestedEdits`, `retrievalQueries`) is **not** a card: it is `OutlineNode.reviewSummary` (see **Outline**). `reviewerNotes` is still filled as before, but the web UI no longer reads it (the Review tab is gone; the cards and `reviewSummary` replace it).
 
 **Idempotency.** Importing the same run again, a later run, a regenerate of one node and a resume never duplicate cards: issues are matched to the node's existing rows by `issueKey`. A known issue keeps its row with replies and state (only the anchor, payload and open/orphaned state are refreshed; `resolved` stays `resolved`); a new issue becomes a new row; an issue a user resolved or deleted does not come back; a row whose issue the new review no longer reports is soft-deleted (`superseded`) if it is open and untouched, kept `resolved` + `outdated` if it has replies, and left alone if it is resolved. A review file without issues clears the open untouched rows; a node without a review file keeps its cards. Replacing the outline (`PUT /outline`, `outline: generate` run) strands the old cards with the old nodes as before. Review rows are not counted in `openCommentCount`.
 

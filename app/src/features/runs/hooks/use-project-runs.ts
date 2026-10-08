@@ -32,7 +32,7 @@ export interface UseProjectRunsResult {
  * `POLL_MS` as a safety net while any are active (in case the SSE/poll-
  * fallback in `useRunStream` misses the final `done`), and keeps a live SSE
  * subscription open for `runningRun` app-wide via `useRunStream` — so the
- * outline/header reflect progress even when the Copilot panel isn't open.
+ * outline/header reflect progress even when no run page is open.
  * Mount this once high in the project layout (`AppHeader`'s parent) rather
  * than in every consumer; consumers just read its return value.
  */

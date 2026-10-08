@@ -9,6 +9,7 @@ import type {
   RunArtifact,
   RunEvent,
   Source,
+  SuggestionProgress,
 } from '@/api/types';
 
 /** Project metadata only — `sources`/`outline` are joined in from their own tables on read. */
@@ -25,6 +26,26 @@ export function stripProjectId<T extends { projectId: string }>(row: T): Omit<T,
   return dto;
 }
 
+/** Pace of the mock copilot's progress events; tests set it to a few milliseconds. */
+export const mockRevisionConfig = {
+  stepMs: 700,
+  /** Extra latency of the accept endpoint and of content PATCHes: tests and browser checks widen race windows with it. */
+  acceptDelayMs: 0,
+  patchDelayMs: 0,
+  /** Content PATCHes answer 500 (a save that fails). */
+  failPatch: false,
+  /**
+   * A node GET answers with the node as it was when the request arrived, this many ms later: a read
+   * that overlaps a save and lands after it (what an invalidation during a save produces).
+   */
+  nodeGetDelayMs: 0,
+};
+
+export type SuggestionTerminalEvent = 'done' | 'failed' | 'cancelled';
+interface SuggestionListener {
+  (event: SuggestionProgress | { terminal: SuggestionTerminalEvent; data: unknown }): void;
+}
+
 class MockDatabase {
   files = new Map<string, FileDto>();
   projects = new Map<string, ProjectRow>();
@@ -33,6 +54,9 @@ class MockDatabase {
   comments = new Map<string, Comment>();
   runs = new Map<string, Run>();
   runEvents = new Map<string, RunEvent[]>();
+  /** Progress events of mock revisions (the real API persists them in `revision_events`). */
+  suggestionEvents = new Map<string, SuggestionProgress[]>();
+  private suggestionListeners = new Map<string, Set<SuggestionListener>>();
   runArtifacts = new Map<string, RunArtifact[]>();
   /** Per-user LLM key state behind `GET /auth/me` / `PUT|DELETE /auth/me/llm-key` (never the key itself, like the real API). */
   llmKey: { last4: string; updatedAt: string } | null = null;
@@ -48,6 +72,8 @@ class MockDatabase {
     this.comments.clear();
     this.runs.clear();
     this.runEvents.clear();
+    this.suggestionEvents.clear();
+    this.suggestionListeners.clear();
     this.runArtifacts.clear();
     this.runListeners.clear();
     this.llmKey = null;
@@ -171,6 +197,43 @@ class MockDatabase {
     for (const listener of this.runListeners.get(runId) ?? []) {
       listener(event, name);
     }
+  }
+
+  onSuggestionEvent(suggestionId: string, listener: SuggestionListener): () => void {
+    const listeners = this.suggestionListeners.get(suggestionId) ?? new Set();
+    listeners.add(listener);
+    this.suggestionListeners.set(suggestionId, listeners);
+    return () => listeners.delete(listener);
+  }
+
+  publishSuggestionProgress(
+    suggestionId: string,
+    stage: string,
+    message: string,
+    payload: Record<string, unknown> = {},
+    level = 'info',
+  ): void {
+    const events = this.suggestionEvents.get(suggestionId) ?? [];
+    const event: SuggestionProgress = {
+      seq: events.length + 1,
+      ts: this.now(),
+      stage,
+      level,
+      message,
+      payload,
+    };
+    events.push(event);
+    this.suggestionEvents.set(suggestionId, events);
+    for (const listener of this.suggestionListeners.get(suggestionId) ?? []) listener(event);
+  }
+
+  publishSuggestionTerminal(
+    suggestionId: string,
+    terminal: SuggestionTerminalEvent,
+    data: unknown,
+  ): void {
+    for (const listener of this.suggestionListeners.get(suggestionId) ?? [])
+      listener({ terminal, data });
   }
 
   nextSeq(runId: string): number {

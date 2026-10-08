@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
 import { Copy, Download, ExternalLink, Info, Lock, MoreHorizontal, Sparkles } from 'lucide-react';
@@ -8,9 +8,10 @@ import { toast } from 'sonner';
 import type { EditorView } from '@codemirror/view';
 
 import { auth } from '@/api/queries/auth';
-import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
+import { ApiError } from '@/api/client';
+import { outline as outlineQueries, useUpdateOutlineNodeMutation } from '@/api/queries/outline';
 import { runs as runQueries } from '@/api/queries/runs';
-import type { OutlineNode } from '@/api/types';
+import type { OutlineNode, OutlineNodeUpdate } from '@/api/types';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,12 +40,20 @@ import {
   setFocusedAnchor,
 } from '@/features/editor/lib/cm-anchor-highlights';
 import { normalizeEol } from '@/features/editor/lib/eol';
-import type { Anchor } from '@/features/editor/lib/anchors';
+import { sha256Hex } from '@/lib/content-hash';
+import { problemMessage } from '@/features/editor/margin/errors';
+import { ConfirmDialog } from '@/components/confirm-dialog';
+import { anchorFromUnitRange, type Anchor } from '@/features/editor/lib/anchors';
 import type { MarginCardContext } from '@/features/editor/margin/card-registry';
-import { COPILOT_ACTIONS_ENABLED } from '@/features/editor/margin/flags';
 import { writeGeometry, sourceGeometry } from '@/features/editor/margin/geometry';
 import { useMarginHost } from '@/features/editor/margin/margin-host';
+import type { RewriteBlock } from '@/features/editor/margin/card-registry';
+import { toServerAnchor } from '@/features/editor/lib/server-anchor';
+import { useProjectRuns } from '@/features/runs/hooks/use-project-runs';
 import { MarginPanel } from '@/features/editor/margin/margin-panel';
+import { useCopilot } from '@/features/editor/margin/use-copilot';
+import { useSuggestionStreams } from '@/features/editor/margin/suggestion-progress';
+import { parseReviewSummary } from '@/features/editor/lib/card-payloads';
 import { useMarginStore } from '@/features/editor/margin/margin-store';
 import { SelectionLayer } from '@/features/editor/margin/selection-layer';
 import { parseRagCitations } from '@/features/editor/lib/rag-citation';
@@ -67,8 +76,9 @@ interface ManuscriptSheetProps {
   flatNodes: readonly OutlineNode[];
   outlineOpen: boolean;
   onSelectNode: (nodeId: string) => void;
-  /** Hook point for the header's Copilot button (issue #182 phase 4) — the button stays disabled until it is given. */
-  onOpenCopilot?: () => void;
+  /** Open with the prompt window on Rewrite, with this instruction ("Regenerate again" on a run page). */
+  initialRewrite?: { instruction: string } | null;
+  onInitialRewriteConsumed?: () => void;
 }
 
 /**
@@ -88,7 +98,8 @@ export function ManuscriptSheet({
   flatNodes,
   outlineOpen,
   onSelectNode,
-  onOpenCopilot,
+  initialRewrite = null,
+  onInitialRewriteConsumed,
 }: ManuscriptSheetProps) {
   const view = useEditorView();
   const setView = useEditorStore((state) => state.setView);
@@ -132,19 +143,81 @@ export function ManuscriptSheet({
   });
   const sectionArtifact = findSectionArtifact(lastRunArtifacts?.items, node.cliKey);
 
-  const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
+  const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id, { handlesErrors: true });
+  /** Why the last save failed, when it was not a conflict (the badge says "Error saving", this says why). */
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   // What this editor has sent (and so what coming back from the server is not "someone else's change").
   const sentRef = useRef(new Set<string>());
-  const { status, schedule, flush, cancel, hold, flushEdits } = useDebouncedMutation<string>({
-    onSave: (text) => {
-      // Bounded: only the last few saves matter for recognising our own content coming back.
-      sentRef.current.add(text);
-      if (sentRef.current.size > 8) sentRef.current.delete(sentRef.current.values().next().value!);
-      return updateMutation.mutateAsync(
-        useLatex ? { contentLatex: text } : { contentMarkdown: text },
-      );
+  // The text the draft is based on, as the SERVER holds it: raw (line endings included), its
+  // `contentHash`, and the LF-normalised copy edits are compared against. Moved only when the
+  // baseline itself moves - an adoption, this editor's own successful save, "Keep mine" - never
+  // by whatever the query cache happens to hold when a save runs: a save made on top of text the
+  // user has not seen (an accept that landed meanwhile) must be refused as a conflict, not pass
+  // with the newer text's hash and overwrite it.
+  const baselineRef = useRef(normalizeEol(node[field]));
+  const baseRawRef = useRef(node[field]);
+  const baseHashRef = useRef<string | null>(useLatex ? null : (node.contentHash ?? null));
+  /** Hashes of baselines this editor has moved past, and the newest `updatedAt` it has seen. */
+  const supersededRef = useRef(new Set<string>());
+  const knownUpdatedAtRef = useRef(node.updatedAt);
+  const moveBaseline = useCallback(
+    (raw: string, hash: string | null | undefined, updatedAt?: string) => {
+      const previous = baseHashRef.current;
+      if (previous && previous !== hash) supersededRef.current.add(previous);
+      baselineRef.current = normalizeEol(raw);
+      baseRawRef.current = raw;
+      baseHashRef.current = hash ?? null;
+      if (updatedAt && updatedAt > knownUpdatedAtRef.current) knownUpdatedAtRef.current = updatedAt;
     },
-  });
+    [],
+  );
+
+  const { status, schedule, flush, cancel, hold, flushEdits, whenIdle } =
+    useDebouncedMutation<string>({
+      onSave: async (text) => {
+        // Bounded: only the last few saves matter for recognising our own content coming back.
+        sentRef.current.add(text);
+        if (sentRef.current.size > 8)
+          sentRef.current.delete(sentRef.current.values().next().value!);
+        const body: OutlineNodeUpdate = useLatex
+          ? { contentLatex: text }
+          : { contentMarkdown: text };
+        if (!useLatex) {
+          // Without the hash of the text this draft was based on the server would take the write as
+          // last-write-wins and overwrite an accepted suggestion or another editor's save.
+          const expectedContentHash =
+            baseHashRef.current ?? (await sha256Hex(baseRawRef.current)) ?? undefined;
+          if (expectedContentHash) body.expectedContentHash = expectedContentHash;
+        }
+        try {
+          const saved = await updateMutation.mutateAsync(body);
+          // What this save wrote is the new baseline, with the hash the server gave it.
+          moveBaseline(
+            text,
+            useLatex ? null : (saved.contentHash ?? (await sha256Hex(text))),
+            saved.updatedAt,
+          );
+          setSaveError(null);
+          return saved;
+        } catch (error) {
+          if (error instanceof ApiError && error.problem?.code === 'content_conflict') {
+            // The section changed under this draft: fetch the other version. The effect below turns
+            // it into the "changed elsewhere" notice (Keep mine / Load the other version) - the save
+            // is never retried over it.
+            sentRef.current.delete(text);
+            setSaveError(null);
+            // Cancelled by a save or an accept that starts meanwhile: nothing to report.
+            queryClient
+              .fetchQuery({ ...outlineQueries.node(projectId, node.id), staleTime: 0 })
+              .catch(() => undefined);
+          } else {
+            setSaveError(problemMessage(error));
+          }
+          throw error;
+        }
+      },
+    });
 
   // `EditorPane` mounts this component with `key={node.id}`, so a different
   // node selection remounts it fresh (new `useState` initial value) rather
@@ -154,7 +227,6 @@ export function ManuscriptSheet({
   useEffect(() => {
     flushRef.current = flush;
   }, [flush]);
-  useEffect(() => () => flushRef.current(), []);
 
   // Stable identities (here, `closeSources` and the store's `setSelection`) keep `SectionEditor`'s
   // CodeMirror extensions from being reconfigured on every keystroke or caret move.
@@ -192,11 +264,10 @@ export function ManuscriptSheet({
 
   const citations = useMemo(() => parseRagCitations(node.ragCitations), [node.ragCitations]);
   const effectiveSources = useEffectiveSources(projectId, node.id, flatNodes);
-  const isDirty = isUnsavedStatus(status);
   // Non-leaf nodes (chapters/parts with children) never get LLM-generated content — only leaf
   // sections do (book_builder.py's generate_contents walks leaves only) — so the empty-state
-  // copy and the Copilot's regenerate action must not offer generation for them (issue #77's
-  // 409 guard covers the API side; this covers the UI so the offer isn't made in the first place).
+  // copy and the copilot must not offer generation for them (issue #77's 409 guard covers the API
+  // side; this covers the UI so the offer isn't made in the first place).
   const nodeIsLeaf = isLeaf(node.id, flatNodes);
 
   // ---- server content changed under an open editor (an accepted suggestion, another user) ----------
@@ -204,35 +275,75 @@ export function ManuscriptSheet({
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
-  /** The text the server last had that this editor agrees with: edits are "unsaved" relative to it. */
-  const baselineRef = useRef(serverText);
+  const nodeRef = useRef(node);
+  useEffect(() => {
+    nodeRef.current = node;
+  }, [node]);
+  /** The other version waiting for the user's choice, raw, with its hash (null until known). */
+  const incomingRef = useRef<{ raw: string; hash: string | null } | null>(null);
+
+  /** Set when the person chose to leave and discard: nothing is saved on the way out. */
+  const discardRef = useRef(false);
+  useEffect(
+    () => () => {
+      // Leaving saves what is pending - unless it was discarded on purpose, or the server's text moved
+      // under it (the save would only be refused again).
+      if (!discardRef.current && incomingRef.current === null) flushRef.current();
+    },
+    [],
+  );
 
   const adoptServerContent = useCallback(
-    (text: string) => {
-      const next = normalizeEol(text);
+    (raw: string, hash?: string | null, updatedAt?: string) => {
+      const next = normalizeEol(raw);
       cancel();
-      baselineRef.current = next;
+      moveBaseline(raw, hash, updatedAt);
       sentRef.current.clear();
+      incomingRef.current = null;
       setIncoming(null);
       setDraft(next);
       setResetKey((key) => key + 1);
     },
-    [cancel],
+    [cancel, moveBaseline],
+  );
+
+  /** Shows the "changed elsewhere" notice and holds autosave, at once (not after the next render). */
+  const showIncoming = useCallback(
+    (raw: string, hash: string | null | undefined) => {
+      incomingRef.current = { raw, hash: hash ?? null };
+      setIncoming(normalizeEol(raw));
+      hold(true);
+    },
+    [hold],
   );
 
   useEffect(() => {
+    const current = nodeRef.current;
     if (serverText === baselineRef.current) return;
+    // A fetch that began before this editor's own save or adoption can answer with the text from
+    // before it: never take a version older than what was last adopted or saved as "the server's".
+    if (
+      current.contentHash &&
+      supersededRef.current.has(current.contentHash) &&
+      current.updatedAt <= knownUpdatedAtRef.current
+    ) {
+      return;
+    }
     const unsaved = draftRef.current !== baselineRef.current;
     const ours = sentRef.current.has(serverText) || serverText === draftRef.current;
     if (ours) {
       // Our own save coming back (or the other side reverted to what we have).
-      baselineRef.current = serverText;
+      moveBaseline(current[field], current.contentHash, current.updatedAt);
+      incomingRef.current = null;
       setIncoming(null);
+      // The server holds exactly the draft (a refused save whose other version turned out equal):
+      // nothing is left to save, and a failed-save state would be stale.
+      if (serverText === draftRef.current) cancel();
       return;
     }
-    if (!unsaved) adoptServerContent(serverText);
-    else setIncoming(serverText);
-  }, [serverText, adoptServerContent]);
+    if (!unsaved) adoptServerContent(current[field], current.contentHash, current.updatedAt);
+    else showIncoming(current[field], current.contentHash);
+  }, [serverText, field, adoptServerContent, showIncoming, moveBaseline, cancel]);
 
   // A conflicting change from elsewhere is pending: nothing may be saved until the user has chosen.
   useEffect(() => {
@@ -240,14 +351,20 @@ export function ManuscriptSheet({
     return () => hold(false);
   }, [incoming, hold]);
 
-  /** "Keep mine": the other version is deliberately overwritten by the draft. */
-  const keepMine = useCallback(() => {
-    if (incoming !== null) baselineRef.current = incoming;
+  /** "Keep mine": the other version is deliberately overwritten by the draft, based on its hash. */
+  const keepMine = useCallback(async () => {
+    // Behind this editor's own save, if one is still in flight: its outcome can change what the other
+    // version is (or whether there is one), and moving the baseline under it would make them race.
+    await whenIdle();
+    const other = incomingRef.current;
+    if (!other) return;
+    moveBaseline(other.raw, other.hash);
+    incomingRef.current = null;
     setIncoming(null);
     hold(false);
     schedule(draftRef.current);
     flush();
-  }, [incoming, hold, schedule, flush]);
+  }, [hold, schedule, flush, moveBaseline, whenIdle]);
 
   // ---- margin: comments anchored to ranges of the text (issue #182, phase 2) ------------------
   const marginHost = useMarginHost();
@@ -266,10 +383,26 @@ export function ManuscriptSheet({
   const { revealMargin } = useRightColumn();
 
   // Margin state is per open section (the sheet is keyed by node id).
+  const restoreComposer = useMarginStore((state) => state.restoreComposer);
   useEffect(() => {
     resetMargin();
-    return resetMargin;
-  }, [resetMargin]);
+    // The composer this section was left with (an unsent prompt or comment) comes back with it.
+    restoreComposer(node.id);
+    return () => resetMargin(node.id);
+  }, [resetMargin, restoreComposer, node.id]);
+
+  const reviewSummary = useMemo(
+    () => parseReviewSummary(liveNode.reviewSummary),
+    [liveNode.reviewSummary],
+  );
+
+  // A section reviewed before review rows existed has only the old flattened notes: no summary and no cards.
+  const legacyNotes =
+    !reviewSummary &&
+    liveNode.reviewerNotes?.trim() &&
+    !section.threads.some((thread) => thread.kind === 'review')
+      ? liveNode.reviewerNotes
+      : null;
 
   const geometry = useMemo(() => {
     if (view === 'source') return cmView ? sourceGeometry(cmView) : null;
@@ -336,28 +469,168 @@ export function ManuscriptSheet({
     [],
   );
 
+  /**
+   * The server now holds `raw` (an accepted suggestion, its undo). Adopted at once when the editor
+   * has nothing unsaved; otherwise the draft stays exactly as typed and the "changed elsewhere"
+   * notice offers the choice - set before the caller releases its hold, so nothing can save over it.
+   */
+  const applyServerContent = useCallback(
+    (raw: string, hash?: string | null) => {
+      if (hasUnsavedEdits()) showIncoming(raw, hash);
+      else adoptServerContent(raw, hash);
+    },
+    [hasUnsavedEdits, showIncoming, adoptServerContent],
+  );
+
+  // Holds autosave for a write the server makes to the section (an accept, its undo): the pending
+  // edits are saved first, then nothing is saved until the returned function releases the hold.
+  const holdCounter = useRef(0);
+  const holdSaving = useCallback(async () => {
+    await flushEdits();
+    holdCounter.current += 1;
+    const reason = `copilot:${holdCounter.current}`;
+    hold(true, reason);
+    return () => {
+      hold(false, reason);
+      // Edits typed meanwhile are saved now - unless the server's text moved under them, in which
+      // case the notice owns them and saving waits for the user's choice.
+      if (incomingRef.current === null) flush();
+    };
+  }, [flushEdits, hold, flush]);
+
+  const getDraft = useCallback(() => draftRef.current, []);
+  // The server stores the text as it was written: with CR LF endings the editor's (LF) offsets would
+  // point at the wrong place, so they are left out and the server finds the quote itself.
+  const serverAnchor = useCallback(
+    (anchor: Parameters<typeof toServerAnchor>[0]) =>
+      toServerAnchor(anchor, { crlf: baseRawRef.current.includes('\r') }),
+    [],
+  );
+  const anchorFor = useCallback(
+    (range: { start: number; end: number }) =>
+      anchorFromUnitRange(draftRef.current, range.start, range.end),
+    [],
+  );
+  const copilot = useCopilot({
+    projectId,
+    nodeId: node.id,
+    getText: getDraft,
+    flushEdits,
+    enabled: anchorsEnabled,
+    serverAnchor,
+  });
+  useSuggestionStreams(projectId, node.id, section.threads);
+
+  // "Regenerate again" on a run page lands here: the window opens on Rewrite, once.
+  const rewriteOpened = useRef(false);
+  useEffect(() => {
+    if (!initialRewrite || rewriteOpened.current) return;
+    rewriteOpened.current = true;
+    copilot.openPrompt(null, 'header', {
+      verb: 'rewrite',
+      text: initialRewrite.instruction,
+      explicit: true,
+    });
+    onInitialRewriteConsumed?.();
+  }, [initialRewrite, copilot, onInitialRewriteConsumed]);
+
+  // Why a whole-section Rewrite (a regenerate run) cannot start, found out before anything is sent.
+  const { runningRun, queuedRuns } = useProjectRuns(projectId);
+  const queuedHere = queuedRuns.some(
+    (run) => run.kind === 'regenerate_section' && run.targetNodeId === node.id,
+  );
+  const rewriteBlock = useMemo<RewriteBlock | null>(() => {
+    if (!nodeIsLeaf) {
+      return {
+        reason:
+          'This is a container node — only leaf sections can be rewritten. Select a leaf section below it.',
+        remedy: null,
+      };
+    }
+    if (liveNode.contentLocked) {
+      return {
+        reason: 'This section’s content is locked — unlock it to rewrite it.',
+        remedy: 'unlock',
+      };
+    }
+    if (!node.cliKey) {
+      return {
+        reason: 'This section has no CLI key yet — it appears after the next full run.',
+        remedy: 'start-run',
+      };
+    }
+    if (!lastRunId) {
+      return {
+        reason: 'No successful prior run to resume from — start a full run first.',
+        remedy: 'start-run',
+      };
+    }
+    if (queuedHere) return { reason: 'This section already has a rewrite queued.', remedy: null };
+    if (runningRun) return { reason: 'A run is currently running for this project.', remedy: null };
+    return null;
+  }, [nodeIsLeaf, liveNode.contentLocked, node.cliKey, lastRunId, queuedHere, runningRun]);
+
+  const threadsRef = useRef(section.threads);
+  useEffect(() => {
+    threadsRef.current = section.threads;
+  }, [section.threads]);
+  const knownIds = useCallback(
+    () =>
+      new Set(
+        threadsRef.current.flatMap((thread) => [
+          thread.root.id,
+          ...thread.replies.map((r) => r.id),
+        ]),
+      ),
+    [],
+  );
+
+  const editBlockedReason =
+    incoming !== null
+      ? 'This section was changed elsewhere. Choose Keep mine or Load the other version first.'
+      : null;
+
   const cardContext = useMemo<MarginCardContext>(
     () => ({
       projectId,
       nodeId: node.id,
       currentUserId: me?.id ?? null,
-      copilotActions: COPILOT_ACTIONS_ENABLED,
       restoreEditorFocus,
-      // These two read refs, but only when a card calls them (never while rendering).
-      // eslint-disable-next-line react-hooks/refs
-      applyServerContent: adoptServerContent,
-      // eslint-disable-next-line react-hooks/refs
+      // These read refs, but only when a card calls them (never while rendering).
+      applyServerContent,
       hasUnsavedEdits,
       flushEdits,
+      holdSaving,
+      sectionNumber: node.sectionNumber,
+      serverAnchor,
+      anchorFor,
+      editBlockedReason,
+      revisable: anchorsEnabled,
+      rewriteBlock,
+      knownIds,
+      startRevision: copilot.startRevision,
+      onSendToCopilot: anchorsEnabled ? copilot.sendToCopilot : undefined,
+      onFixWithCopilot: anchorsEnabled ? copilot.fixWithCopilot : undefined,
+      onTryAgain: copilot.tryAgain,
+      onCommentSent: anchorsEnabled ? copilot.commentSent : undefined,
     }),
     [
       projectId,
       node.id,
+      node.sectionNumber,
       me?.id,
       restoreEditorFocus,
-      adoptServerContent,
+      applyServerContent,
       hasUnsavedEdits,
       flushEdits,
+      holdSaving,
+      serverAnchor,
+      anchorFor,
+      editBlockedReason,
+      anchorsEnabled,
+      rewriteBlock,
+      knownIds,
+      copilot,
     ],
   );
 
@@ -376,12 +649,23 @@ export function ManuscriptSheet({
     [revealMargin, focusCard],
   );
 
-  // Blocks in-app navigation (and warns on tab close) while there's an unsaved edit the
-  // 800ms debounce hasn't flushed yet — `flush()` on blur/unmount/Ctrl-S covers the rest.
-  useBlocker({
-    shouldBlockFn: () => isDirty,
-    enableBeforeUnload: true,
+  // Leaving with work the server does not have - typed and not yet saved, a save that failed, an
+  // incoming version the person has not chosen about - asks first, for every way out of the section
+  // (an outline row, Add chapter, a route change) and for closing the tab. "Leave and discard" saves
+  // nothing on the way out.
+  const unsavedWork = useCallback(
+    () =>
+      draftRef.current !== baselineRef.current ||
+      incomingRef.current !== null ||
+      statusRef.current === 'error' ||
+      isUnsavedStatus(statusRef.current),
+    [],
+  );
+  const blocker = useBlocker({
+    shouldBlockFn: unsavedWork,
+    enableBeforeUnload: unsavedWork,
     disabled: readOnly,
+    withResolver: true,
   });
 
   return (
@@ -411,12 +695,17 @@ export function ManuscriptSheet({
           <HeaderIconButton
             label="Copilot"
             tooltip={
-              onOpenCopilot
-                ? 'Prompt the copilot about this section'
-                : 'Coming soon: prompt the copilot here'
+              !nodeIsLeaf
+                ? 'The copilot works on the text of a section; select a leaf section'
+                : !anchorsEnabled
+                  ? 'This section holds LaTeX: the copilot can only rewrite it from its brief'
+                  : 'Prompt the copilot about this section'
             }
-            disabled={!onOpenCopilot}
-            onClick={onOpenCopilot}
+            disabled={!nodeIsLeaf}
+            copilotTrigger
+            onClick={() =>
+              copilot.openPrompt(null, 'header', { verb: anchorsEnabled ? 'revise' : 'rewrite' })
+            }
           >
             <Sparkles />
           </HeaderIconButton>
@@ -481,17 +770,25 @@ export function ManuscriptSheet({
             This section was changed elsewhere (another editor, or an accepted suggestion). Your
             unsaved edits are kept and nothing is saved until you choose.
           </span>
-          <Button type="button" size="xs" variant="outline" onClick={keepMine}>
+          <Button type="button" size="xs" variant="outline" onClick={() => void keepMine()}>
             Keep mine
           </Button>
           <Button
             type="button"
             size="xs"
             variant="outline"
-            onClick={() => adoptServerContent(incoming)}
+            onClick={() =>
+              adoptServerContent(incomingRef.current?.raw ?? incoming, incomingRef.current?.hash)
+            }
           >
             Load the other version
           </Button>
+        </div>
+      ) : null}
+      {saveError !== null && incoming === null ? (
+        <div role="alert" className="border-b bg-destructive/10 px-3 py-2 text-xs text-foreground">
+          Your latest edits could not be saved: {saveError} They are kept here; they are saved again
+          on your next edit or with Ctrl+S.
         </div>
       ) : null}
       <div ref={paneRef} className="relative flex min-h-0 flex-1 flex-col">
@@ -535,7 +832,7 @@ export function ManuscriptSheet({
                 {draft.trim().length === 0 ? (
                   <p className="text-center text-sm text-muted-foreground italic">
                     {nodeIsLeaf
-                      ? 'This section is empty. Switch to Source to write it, or use the Copilot to generate it.'
+                      ? 'This section is empty. Switch to Source to write it, or start a run to draft it.'
                       : 'This is a container node — it only has the outline summary shown in the assembled document. Content is generated per leaf section; select a leaf section below it to write or generate text.'}
                   </p>
                 ) : (
@@ -570,7 +867,10 @@ export function ManuscriptSheet({
           highlights={section.highlights}
           onComment={startComment}
           onFocusThread={focusThreadCard}
-          copilotActions={COPILOT_ACTIONS_ENABLED}
+          onPrompt={
+            anchorsEnabled ? (anchor) => copilot.openPrompt(anchor, 'selection') : undefined
+          }
+          onChip={anchorsEnabled ? copilot.runChip : undefined}
         />
       </div>
 
@@ -587,6 +887,9 @@ export function ManuscriptSheet({
               composerRange={section.composerRange}
               composerQuote={section.composerQuote}
               geometry={geometry}
+              reviewSummary={reviewSummary}
+              reviewerScore={liveNode.reviewerScore ?? null}
+              legacyNotes={legacyNotes}
               anchorNote={
                 anchorsEnabled
                   ? undefined
@@ -625,6 +928,23 @@ export function ManuscriptSheet({
           }}
         />
       ) : null}
+
+      <ConfirmDialog
+        open={blocker.status === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && blocker.status === 'blocked') blocker.reset();
+        }}
+        tone="warning"
+        title="You have edits that are not saved"
+        description="Stay to keep them here (they can still be saved), or leave and discard them."
+        confirmLabel="Leave and discard"
+        cancelLabel="Stay"
+        onConfirm={() => {
+          discardRef.current = true;
+          cancel();
+          blocker.proceed?.();
+        }}
+      />
 
       <EditorStatusBar
         characters={characterCount(draft)}

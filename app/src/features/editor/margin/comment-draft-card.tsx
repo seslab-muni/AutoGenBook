@@ -41,15 +41,21 @@ export function CommentDraftCard({ draft, ctx, top, register, quote }: DraftCard
         label="New comment"
         draftKey={draftKey(ctx.nodeId, 'new')}
         initialValue={stored ?? ''}
+        askCopilot={!!ctx.onCommentSent}
         onCancel={() => {
           closeComposer();
           ctx.restoreEditorFocus();
         }}
         onSubmit={async (text) => {
-          const comment = await create.mutateAsync({ bodyMarkdown: text, anchor: draft.anchor });
+          const comment = await create.mutateAsync({
+            bodyMarkdown: text,
+            anchor: ctx.serverAnchor(draft.anchor),
+          });
           closeComposer();
           focus(comment.id);
           ctx.restoreEditorFocus();
+          // A comment that mentions @copilot is a prompt about its own thread.
+          ctx.onCommentSent?.(comment);
         }}
       />
     </section>

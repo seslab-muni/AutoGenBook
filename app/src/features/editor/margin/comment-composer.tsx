@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useMarginStore } from './margin-store';
 import { problemMessage } from './errors';
+import { mentionsCopilot } from './mentions';
 
 export const MAX_COMMENT_LENGTH = 20000;
 
@@ -19,6 +20,11 @@ interface CommentComposerProps {
    */
   draftKey?: string;
   autoFocus?: boolean;
+  /**
+   * The copilot can be asked from this composer: a text that mentions `@copilot` is a prompt, so the
+   * button says what sending will do ("Comment and ask Copilot") before it starts a model job.
+   */
+  askCopilot?: boolean;
   /**
    * Sends the text. The composer stays open, keeping the text, while this runs and again if it
    * rejects (the server's message is shown); the caller closes it by unmounting it on success.
@@ -39,6 +45,7 @@ export function CommentComposer({
   initialValue = '',
   draftKey,
   autoFocus = true,
+  askCopilot = false,
   onSubmit,
   onCancel,
 }: CommentComposerProps) {
@@ -109,7 +116,7 @@ export function CommentComposer({
         }}
       />
       {error ? (
-        <p id={errorId} role="alert" className="text-xs text-destructive">
+        <p id={errorId} role="alert" className="text-xs text-destructive-text">
           Not sent: {error}
         </p>
       ) : null}
@@ -122,7 +129,11 @@ export function CommentComposer({
             Cancel
           </Button>
           <Button type="button" size="xs" onClick={() => void submit()} disabled={blank || busy}>
-            {busy ? 'Sending…' : submitLabel}
+            {busy
+              ? 'Sending…'
+              : askCopilot && mentionsCopilot(value)
+                ? `${submitLabel} and ask Copilot`
+                : submitLabel}
           </Button>
         </div>
       </div>

@@ -18,10 +18,13 @@ import { cn } from '@/lib/utils';
 import type { MarginCardContext } from './card-registry';
 import { COMPOSER_KINDS } from './composer-registry';
 import type { AnchorMeasure, MarginGeometry } from './geometry';
+import { cardRegionName } from './card-name';
 import { MarginCard } from './margin-card';
+import { ReviewSummaryStrip } from './review-summary-strip';
+import type { ReviewSummary } from '@/features/editor/lib/card-payloads';
 import { extraBottom, layoutMargin, type LayoutItem } from './margin-layout';
 import { DRAFT_ID, useMarginStore, type ComposerDraft } from './margin-store';
-import { isClosed, type MarginFilter, type MarginThread } from './threads';
+import { isThreadClosed, type MarginFilter, type MarginThread } from './threads';
 
 const DEFAULT_CARD_HEIGHT = 120;
 const CARD_GAP = 8;
@@ -47,6 +50,11 @@ interface MarginPanelProps {
   composerQuote: string;
   /** Null while the text pane is not mounted yet. */
   geometry: MarginGeometry | null;
+  /** The section's latest review verdict (`OutlineNode.reviewSummary`); shown with the All and Review filters. */
+  reviewSummary?: ReviewSummary | null | undefined;
+  reviewerScore?: number | null | undefined;
+  /** Notes of a review from before review rows existed (`reviewerNotes`), shown only when there is no summary. */
+  legacyNotes?: string | null | undefined;
   /** Shown under the header when anchored comments are unavailable for this section (LaTeX). */
   anchorNote?: string | undefined;
 }
@@ -110,22 +118,30 @@ export function MarginPanel({
   composerRange,
   composerQuote,
   geometry,
+  reviewSummary = null,
+  reviewerScore = null,
+  legacyNotes = null,
   anchorNote,
 }: MarginPanelProps) {
   const filter = useMarginStore((state) => state.filter);
   const showResolved = useMarginStore((state) => state.showResolved);
   const focusedId = useMarginStore((state) => state.focusedId);
   const focusRequest = useMarginStore((state) => state.focusRequest);
+  const revealRequest = useMarginStore((state) => state.revealRequest);
   const setFilter = useMarginStore((state) => state.setFilter);
   const setShowResolved = useMarginStore((state) => state.setShowResolved);
   const focus = useMarginStore((state) => state.focus);
   const openComposer = useMarginStore((state) => state.openComposer);
 
-  const closedCount = useMemo(() => threads.filter(isClosed).length, [threads]);
+  const showStrip =
+    (reviewSummary !== null || !!legacyNotes) && (filter === 'all' || filter === 'review');
+  const closedCount = useMemo(() => threads.filter(isThreadClosed).length, [threads]);
 
   // ---- measurements -------------------------------------------------------------------
   const [measures, setMeasures] = useState<ReadonlyMap<string, AnchorMeasure>>(new Map());
   const [heights, setHeights] = useState<ReadonlyMap<string, number>>(new Map());
+  /** How far the text pane's top is above the lane's (the verdict header sits above the lane): cards stay clear of it. */
+  const [inset, setInset] = useState(0);
   const pendingHeights = useRef(new Map<string, number>());
   const elements = useRef(new Map<string, HTMLElement>());
   const viewport = useRef<HTMLDivElement>(null);
@@ -173,6 +189,7 @@ export function MarginPanel({
         geometry.scrollEl.getBoundingClientRect().top -
         viewport.current.getBoundingClientRect().top;
       applyTransform();
+      setInset(Math.max(0, Math.round(-laneOffset.current)));
     }
   });
   const commitHeights = useFrameScheduler(() => {
@@ -187,6 +204,15 @@ export function MarginPanel({
     if (!geometry) return undefined;
     return geometry.subscribe(measure);
   }, [geometry, measure]);
+
+  // The header above the lane changes height with the verdict; the lane then starts lower.
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return undefined;
+    const resize = new ResizeObserver(() => measure());
+    resize.observe(element);
+    return () => resize.disconnect();
+  }, [measure]);
 
   // One observer for every card's height.
   const observer = useRef<ResizeObserver | null>(null);
@@ -251,10 +277,25 @@ export function MarginPanel({
       height: heights.get(item.id) ?? DEFAULT_CARD_HEIGHT,
     }));
     return {
-      map: layoutMargin(layoutItems, { gap: CARD_GAP, focusedId }),
+      map: layoutMargin(layoutItems, { gap: CARD_GAP, focusedId, minTop: inset }),
       items: layoutItems,
     };
-  }, [ordered, measures, focusedId, heights]);
+  }, [ordered, measures, focusedId, heights, inset]);
+
+  // Landmarks need distinct names: cards that would read the same ("Comment by Ada on “x”") are numbered.
+  const suffixes = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const item of ordered) {
+      if (!item.thread) continue;
+      const name = cardRegionName(item.thread);
+      groups.set(name, [...(groups.get(name) ?? []), item.id]);
+    }
+    const result = new Map<string, string>();
+    for (const ids of groups.values()) {
+      if (ids.length > 1) ids.forEach((id, i) => result.set(id, ` (${i + 1} of ${ids.length})`));
+    }
+    return result;
+  }, [ordered]);
 
   const extent = useMemo(() => {
     let bottom = 0;
@@ -276,12 +317,13 @@ export function MarginPanel({
     const apply = () =>
       geometry.setExtraBottom(extraBottom(extentRef.current, geometry.contentHeight()));
     apply();
-    const stop = geometry.subscribe(apply);
-    return () => {
-      stop();
-      geometry.setExtraBottom(0);
-    };
+    return geometry.subscribe(apply);
   }, [geometry, extent]);
+  // The extra space is removed only when the geometry itself goes away. Removing it on every
+  // change of `extent` (and reading the height in between) let the browser clamp the scroll
+  // position to the shorter content, so a card that grew under the reader's eyes (a suggestion
+  // turning from progress into a diff) threw the text back to the top.
+  useEffect(() => () => geometry?.setExtraBottom(0), [geometry]);
 
   // ---- scroll: the lane follows the text pane, never the other way round ---------------------
   useEffect(() => {
@@ -345,8 +387,17 @@ export function MarginPanel({
       if (!element || !lane || revealRef.current !== pending) return;
       const box = element.getBoundingClientRect();
       const view = lane.getBoundingClientRect();
-      if (box.bottom > view.bottom - 8) geometry.scrollBy(box.bottom - view.bottom + 24);
-      else if (box.top < view.top + 8) geometry.scrollBy(box.top - view.top - 24);
+      if (box.bottom > view.bottom - 8) {
+        // Never scroll the card's own top out of view (a tall card is shown from its top). The focused
+        // card keeps its own spot in the layout and the others make room around it, so this is
+        // rarely more than a nudge and does not scroll the text away.
+        const delta = Math.min(box.bottom - view.bottom + 24, box.top - view.top - 8);
+        if (delta > 0) geometry.scrollBy(delta);
+        else {
+          revealRef.current = null;
+          return;
+        }
+      } else if (box.top < view.top + 8) geometry.scrollBy(box.top - view.top - 24);
       else {
         revealRef.current = null;
         return;
@@ -377,6 +428,16 @@ export function MarginPanel({
     handledNonce.current = focusRequest.nonce;
     element.focus();
   }, [focusRequest, tops]);
+
+  // A request to bring a card into view without taking keyboard focus (a suggestion just started
+  // from a chip or a review card, which may sit below the fold).
+  const handledReveal = useRef(0);
+  useEffect(() => {
+    if (!revealRequest || revealRequest.nonce === handledReveal.current) return;
+    if (!elements.current.has(revealRequest.id)) return;
+    handledReveal.current = revealRequest.nonce;
+    handleFocusCard(revealRequest.id);
+  }, [revealRequest, tops, handleFocusCard]);
 
   const empty = !loading && !error && visible.length === 0 && !composer;
 
@@ -430,7 +491,16 @@ export function MarginPanel({
         </div>
       </div>
       {anchorNote ? (
-        <p className="border-b px-3 py-2 text-xs text-muted-foreground">{anchorNote}</p>
+        <p className="border-b px-3 py-2 text-xs text-foreground">{anchorNote}</p>
+      ) : null}
+
+      {showStrip ? (
+        <ReviewSummaryStrip
+          summary={reviewSummary}
+          threads={threads}
+          score={reviewerScore}
+          legacyNotes={legacyNotes}
+        />
       ) : null}
 
       <div
@@ -444,18 +514,24 @@ export function MarginPanel({
         onScroll={handleLaneScroll}
       >
         {error ? (
-          <p role="alert" className="p-4 text-sm text-destructive">
+          <p role="alert" className="p-4 text-sm text-destructive-text">
             Couldn&apos;t load the comments.{' '}
-            <Button type="button" variant="link" size="xs" className="h-auto p-0" onClick={onRetry}>
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto p-0 text-foreground"
+              onClick={onRetry}
+            >
               Retry
             </Button>
           </p>
         ) : null}
-        {loading ? <p className="p-4 text-sm text-muted-foreground">Loading comments…</p> : null}
+        {loading ? <p className="p-4 text-sm text-foreground">Loading comments…</p> : null}
         {empty ? (
-          <p className="p-4 text-sm text-muted-foreground">
+          <p className="p-4 text-sm text-foreground">
             {closedCount > 0 && filter === 'all' && !showResolved
-              ? `All ${closedCount} comment ${closedCount === 1 ? 'thread is' : 'threads are'} resolved.`
+              ? `All ${closedCount} ${closedCount === 1 ? 'card is' : 'cards are'} resolved.`
               : 'No comments yet. Select some text and choose Comment, or comment on the whole section.'}
           </p>
         ) : null}
@@ -476,6 +552,8 @@ export function MarginPanel({
                   register={registerCard}
                   top={tops.map.get(DRAFT_ID)}
                   quote={composer.anchor ? composerQuote : null}
+                  threads={threads}
+                  range={composerRange}
                 />
               );
             }
@@ -490,6 +568,7 @@ export function MarginPanel({
                 focused={focusedId === item.id}
                 approximate={measures.get(item.id)?.approximate ?? false}
                 onFocusCard={handleFocusCard}
+                labelSuffix={suffixes.get(item.id) ?? ''}
               />
             );
           })}

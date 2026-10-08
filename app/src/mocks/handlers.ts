@@ -1,8 +1,10 @@
-import { http, HttpResponse, sse } from 'msw';
+import { delay, http, HttpResponse, sse } from 'msw';
 
 import { resolveAnchor } from '@/features/editor/lib/anchors';
-import { claimNextQueued, driveFakeRun } from './fakeRun';
-import { db, stripProjectId, type ProjectRow } from './db';
+import { sha256Hex } from '@/lib/content-hash';
+import { claimNextQueued, driveFakeRun, scheduleFakeRunStep } from './fakeRun';
+import { applyHunksTo, fakeRevise } from './fakeRevise';
+import { db, mockRevisionConfig, stripProjectId, type ProjectRow } from './db';
 import { DEFAULT_MOCK_LLM_MODEL, MOCK_MODELS, MOCK_USER, MOCK_USER_PASSWORD } from './fixtures';
 import { notFound, problemResponse } from './problem';
 import type {
@@ -25,6 +27,7 @@ import type {
   ProjectUpdate,
   ReadyStatus,
   RegenerateRequest,
+  RevisionCreate,
   Run,
   RunEvent,
   RunEventPage,
@@ -33,6 +36,9 @@ import type {
   SourceCreate,
   SourceType,
   SourceUpdate,
+  SuggestionAccept,
+  SuggestionProgress,
+  SuggestionTerminal,
 } from '@/api/types';
 
 function paginate<T>(items: T[], url: URL): Page<T> {
@@ -666,7 +672,12 @@ const sourceHandlers = [
 function reanchorComments(nodeId: string, content: string): void {
   for (const comment of db.comments.values()) {
     if (comment.nodeId !== nodeId || comment.parentId !== null || !comment.anchor) continue;
-    if (comment.kind === 'suggestion' && comment.status !== 'pending') continue;
+    if (
+      comment.kind === 'suggestion' &&
+      comment.status !== 'pending' &&
+      comment.status !== 'running'
+    )
+      continue;
     const resolved = resolveAnchor(content, comment.anchor);
     const orphaned = resolved.start === null;
     const status: Comment['status'] =
@@ -680,11 +691,103 @@ function reanchorComments(nodeId: string, content: string): void {
     const next = { ...comment, anchor: resolved, status, updatedAt: db.now() };
     db.comments.set(comment.id, next);
     for (const reply of db.comments.values()) {
-      if (reply.threadId === comment.id && reply.id !== comment.id) {
+      // A suggestion in the thread keeps its own status (and, like the server, is re-anchored only
+      // by its own rules); the root's status is not written onto it.
+      if (reply.threadId === comment.id && reply.id !== comment.id && reply.kind !== 'suggestion') {
         db.comments.set(reply.id, { ...reply, anchor: resolved, status });
       }
     }
   }
+}
+
+/**
+ * `POST .../regenerate`: queues a `regenerate_section` run for one node. Shared with the copilot's
+ * `Rewrite` verb, which the real API turns into exactly this call.
+ */
+async function startRegenerate(
+  request: Request,
+  projectId: string,
+  nodeId: string,
+  promptModifier: string | undefined,
+): Promise<Response> {
+  const project = db.projects.get(projectId);
+  const node = db.outlineNodes.get(nodeId);
+  if (!project || !node || node.projectId !== projectId) {
+    return notFound('Project or node', new URL(request.url).pathname);
+  }
+  const keyRequired = llmKeyRequiredProblem(request);
+  if (keyRequired) return keyRequired;
+  if (!project.lastRunId || !db.runs.get(project.lastRunId)?.resumable) {
+    return problemResponse(
+      409,
+      'No successful prior run to resume from',
+      new URL(request.url).pathname,
+    );
+  }
+  if (node.status === 'drafting') {
+    return problemResponse(
+      409,
+      `outline node ${node.id} already has a regenerate queued or running; wait for it to finish or cancel it`,
+      new URL(request.url).pathname,
+    );
+  }
+  if (node.contentLocked) {
+    return problemResponse(
+      409,
+      `outline node ${node.id} is content-locked; unlock it first to regenerate it`,
+      new URL(request.url).pathname,
+    );
+  }
+  const admissionBlocker = queueAdmissionBlocker(true, laneRunsFor(projectId));
+  if (admissionBlocker) {
+    return problemResponse(409, admissionBlocker, new URL(request.url).pathname);
+  }
+  const runId = db.nextId();
+  const run: Run = {
+    id: runId,
+    projectId,
+    kind: 'regenerate_section',
+    status: 'queued',
+    options: {
+      outline: 'project',
+      outputFormat: project.outputFormat,
+      allowSubdivision: true,
+      enableWebRag: false,
+      auditBook: false,
+      auditBookMode: 'warn',
+      legacyTex: false,
+      rebuildKb: false,
+      failFastSchema: false,
+      resume: true,
+      exportTexOnly: false,
+      promptModifier: promptModifier ?? null,
+      llmModel:
+        (project.lastRunId && db.runs.get(project.lastRunId)?.options.llmModel) || project.llmModel,
+    },
+    baseRunId: project.lastRunId,
+    targetNodeId: node.id,
+    exitCode: null,
+    error: null,
+    totalTokens: null,
+    totalCostUsd: null,
+    resumable: true,
+    // A `regenerate_section` run is never retryable (issue #124: only `kind === 'full'` is).
+    retryable: false,
+    queuedAt: db.now(),
+    startedAt: null,
+    finishedAt: null,
+    startedById: MOCK_USER.id,
+    startedByName: MOCK_USER.displayName,
+  };
+  db.runs.set(runId, run);
+  db.outlineNodes.set(node.id, { ...node, status: 'drafting' });
+  driveFakeRun(runId);
+  return HttpResponse.json(withQueuePosition(run), { status: 202 });
+}
+
+/** The single-node responses carry `contentHash`; lists and trees do not (as in the API). */
+async function withContentHash<T extends OutlineNode>(node: T): Promise<T> {
+  return { ...node, contentHash: await sha256Hex(node.contentMarkdown) };
 }
 
 const outlineHandlers = [
@@ -780,18 +883,52 @@ const outlineHandlers = [
     return HttpResponse.json(stripProjectId(node), { status: 201 });
   }),
 
-  http.get('*/api/v1/projects/:projectId/outline/:nodeId', ({ params, request }) => {
+  http.get('*/api/v1/projects/:projectId/outline/:nodeId', async ({ params, request }) => {
     const node = db.outlineNodes.get(params.nodeId as string);
     if (!node || node.projectId !== params.projectId)
       return notFound('Outline node', new URL(request.url).pathname);
-    return HttpResponse.json(db.withCommentCounts(stripProjectId(node)));
+    const body = await withContentHash(db.withCommentCounts(stripProjectId(node)));
+    if (mockRevisionConfig.nodeGetDelayMs > 0) await delay(mockRevisionConfig.nodeGetDelayMs);
+    return HttpResponse.json(body);
   }),
 
   http.patch('*/api/v1/projects/:projectId/outline/:nodeId', async ({ params, request }) => {
+    if (mockRevisionConfig.patchDelayMs > 0) await delay(mockRevisionConfig.patchDelayMs);
+    if (mockRevisionConfig.failPatch) {
+      return problemResponse(500, 'Internal Server Error', new URL(request.url).pathname);
+    }
     const node = db.outlineNodes.get(params.nodeId as string);
     if (!node || node.projectId !== params.projectId)
       return notFound('Outline node', new URL(request.url).pathname);
     const body = (await request.json()) as OutlineNodeUpdate & Record<string, unknown>;
+    if (body.contentMarkdown === null) {
+      return problemResponse(
+        422,
+        'contentMarkdown must not be null',
+        new URL(request.url).pathname,
+      );
+    }
+    if (body.contentMarkdown != null && body.expectedContentHash != null) {
+      // Mirrors the API: checked whenever the text is part of the request, even if identical.
+      if (!/^[0-9a-f]{64}$/.test(body.expectedContentHash)) {
+        return problemResponse(
+          422,
+          'expectedContentHash must be 64 lowercase hex characters',
+          new URL(request.url).pathname,
+        );
+      }
+      const stored = await sha256Hex(node.contentMarkdown);
+      if (stored !== body.expectedContentHash) {
+        return problemResponse(
+          409,
+          'The section changed since this edit was based on it',
+          new URL(request.url).pathname,
+          'Reload the section and apply the edit again.',
+          'content_conflict',
+          { currentContentHash: stored },
+        );
+      }
+    }
     const forbidden = ['level', 'sectionNumber', 'cliKey', 'actualWords'].filter(
       (key) => key in body,
     );
@@ -832,9 +969,10 @@ const outlineHandlers = [
           : node.actualWords,
       updatedAt: db.now(),
     };
+    delete (updated as { expectedContentHash?: unknown }).expectedContentHash;
     db.outlineNodes.set(node.id, updated);
     if (body.contentMarkdown != null) reanchorComments(node.id, updated.contentMarkdown);
-    return HttpResponse.json(db.withCommentCounts(stripProjectId(updated)));
+    return HttpResponse.json(await withContentHash(db.withCommentCounts(stripProjectId(updated))));
   }),
 
   http.delete('*/api/v1/projects/:projectId/outline/:nodeId', ({ params, request }) => {
@@ -867,82 +1005,13 @@ const outlineHandlers = [
   http.post(
     '*/api/v1/projects/:projectId/outline/:nodeId/regenerate',
     async ({ params, request }) => {
-      const projectId = params.projectId as string;
-      const project = db.projects.get(projectId);
-      const node = db.outlineNodes.get(params.nodeId as string);
-      if (!project || !node || node.projectId !== projectId) {
-        return notFound('Project or node', new URL(request.url).pathname);
-      }
-      const keyRequired = llmKeyRequiredProblem(request);
-      if (keyRequired) return keyRequired;
-      if (!project.lastRunId || !db.runs.get(project.lastRunId)?.resumable) {
-        return problemResponse(
-          409,
-          'No successful prior run to resume from',
-          new URL(request.url).pathname,
-        );
-      }
-      if (node.status === 'drafting') {
-        return problemResponse(
-          409,
-          `outline node ${node.id} already has a regenerate queued or running; wait for it to finish or cancel it`,
-          new URL(request.url).pathname,
-        );
-      }
-      if (node.contentLocked) {
-        return problemResponse(
-          409,
-          `outline node ${node.id} is content-locked; unlock it first to regenerate it`,
-          new URL(request.url).pathname,
-        );
-      }
-      const admissionBlocker = queueAdmissionBlocker(true, laneRunsFor(projectId));
-      if (admissionBlocker) {
-        return problemResponse(409, admissionBlocker, new URL(request.url).pathname);
-      }
       const body = (await request.json().catch(() => ({}))) as RegenerateRequest;
-      const runId = db.nextId();
-      const run: Run = {
-        id: runId,
-        projectId,
-        kind: 'regenerate_section',
-        status: 'queued',
-        options: {
-          outline: 'project',
-          outputFormat: project.outputFormat,
-          allowSubdivision: true,
-          enableWebRag: false,
-          auditBook: false,
-          auditBookMode: 'warn',
-          legacyTex: false,
-          rebuildKb: false,
-          failFastSchema: false,
-          resume: true,
-          exportTexOnly: false,
-          promptModifier: body.promptModifier ?? null,
-          llmModel:
-            (project.lastRunId && db.runs.get(project.lastRunId)?.options.llmModel) ||
-            project.llmModel,
-        },
-        baseRunId: project.lastRunId,
-        targetNodeId: node.id,
-        exitCode: null,
-        error: null,
-        totalTokens: null,
-        totalCostUsd: null,
-        resumable: true,
-        // A `regenerate_section` run is never retryable (issue #124: only `kind === 'full'` is).
-        retryable: false,
-        queuedAt: db.now(),
-        startedAt: null,
-        finishedAt: null,
-        startedById: MOCK_USER.id,
-        startedByName: MOCK_USER.displayName,
-      };
-      db.runs.set(runId, run);
-      db.outlineNodes.set(node.id, { ...node, status: 'drafting' });
-      driveFakeRun(runId);
-      return HttpResponse.json(withQueuePosition(run), { status: 202 });
+      return startRegenerate(
+        request,
+        params.projectId as string,
+        params.nodeId as string,
+        body.promptModifier ?? undefined,
+      );
     },
   ),
 ];
@@ -1244,8 +1313,19 @@ function threadRows(rows: Comment[], url: URL): Comment[] {
   return out;
 }
 
-function commentPage(rows: Comment[]): Page<Comment> {
-  const items = rows;
+/** The list endpoints leave a suggestion's heavy texts out (the project-wide one always, the node one once it is finished). */
+function listRow(row: Comment, projectWide: boolean): Comment {
+  if (row.kind !== 'suggestion') return row;
+  const finished = ['accepted', 'rejected', 'failed', 'cancelled'].includes(row.status);
+  if (!projectWide && !finished) return row;
+  const { originalMarkdown: _o, replacementMarkdown: _r, ...payload } = row.payload;
+  void _o;
+  void _r;
+  return { ...row, payload };
+}
+
+function commentPage(rows: Comment[], projectWide = false): Page<Comment> {
+  const items = rows.map((row) => listRow(row, projectWide));
   return {
     items,
     total: items.filter((row) => row.parentId === null).length,
@@ -1259,12 +1339,42 @@ function projectNode(projectId: string, nodeId: string) {
   return node && node.projectId === projectId ? node : undefined;
 }
 
+/** `CommentAnchorIn`'s rules, as the server enforces them (a 422 detail, or `null` when the anchor is fine). */
+function anchorProblem(anchor: unknown): string | null {
+  if (anchor === null || anchor === undefined) return null;
+  if (typeof anchor !== 'object') return 'anchor must be an object';
+  const raw = anchor as Record<string, unknown>;
+  const extra = Object.keys(raw).filter(
+    (key) => !['quote', 'prefix', 'suffix', 'start', 'end'].includes(key),
+  );
+  if (extra.length > 0) return `anchor has unknown fields: ${extra.join(', ')}`;
+  if (typeof raw['quote'] !== 'string' || raw['quote'].length < 1) {
+    return 'anchor.quote must not be empty';
+  }
+  const start = raw['start'] ?? null;
+  const end = raw['end'] ?? null;
+  if ((start === null) !== (end === null))
+    return 'anchor start and end must both be set or both null';
+  if (typeof start === 'number' && typeof end === 'number') {
+    if (end - start !== Array.from(raw['quote']).length) {
+      return 'anchor end - start must equal the quote length in code points';
+    }
+  }
+  return null;
+}
+
 const commentHandlers = [
+  http.get('*/api/v1/comments/:commentId', ({ params, request }) => {
+    const comment = db.comments.get(params.commentId as string);
+    if (!comment) return notFound('Comment', new URL(request.url).pathname);
+    return HttpResponse.json(comment);
+  }),
+
   http.get('*/api/v1/projects/:projectId/comments', ({ params, request }) => {
     const projectId = params.projectId as string;
     if (!db.projects.has(projectId)) return notFound('Project', new URL(request.url).pathname);
     const rows = [...db.comments.values()].filter((row) => row.projectId === projectId);
-    return HttpResponse.json(commentPage(threadRows(rows, new URL(request.url))));
+    return HttpResponse.json(commentPage(threadRows(rows, new URL(request.url)), true));
   }),
 
   http.get('*/api/v1/projects/:projectId/outline/:nodeId/comments', ({ params, request }) => {
@@ -1281,6 +1391,8 @@ const commentHandlers = [
       const node = projectNode(params.projectId as string, params.nodeId as string);
       if (!node) return notFound('Outline node', instance);
       const body = (await request.json()) as CommentCreate;
+      const badAnchor = anchorProblem(body.anchor);
+      if (badAnchor) return problemResponse(422, 'Validation Failed', instance, badAnchor);
       if (!body.bodyMarkdown || !body.bodyMarkdown.trim()) {
         return problemResponse(
           422,
@@ -1417,11 +1529,477 @@ const commentHandlers = [
         ? 'orphaned'
         : 'open';
     for (const row of [...db.comments.values()]) {
-      if (row.threadId === comment.id) db.comments.set(row.id, { ...row, status, updatedAt: now });
+      if (row.threadId === comment.id && row.kind !== 'suggestion') {
+        db.comments.set(row.id, { ...row, status, updatedAt: now });
+      }
     }
     return HttpResponse.json(db.comments.get(comment.id));
   }),
 ];
+
+// ---------------------------------------------------------------------------
+// revisions and suggestions (the copilot, issue #182 phase 4)
+// ---------------------------------------------------------------------------
+
+const MAX_INSTRUCTION_CHARS = 4000;
+const MAX_SECTION_CHARS = 60_000;
+const MAX_REVISIONS_PER_USER = 3;
+
+function allParams(
+  params: RevisionCreate['params'],
+): Required<NonNullable<RevisionCreate['params']>> {
+  return {
+    moreProofs: params?.moreProofs ?? false,
+    moreExamples: params?.moreExamples ?? false,
+    moreRigorous: params?.moreRigorous ?? false,
+    shorter: params?.shorter ?? false,
+    longer: params?.longer ?? false,
+    citeSources: params?.citeSources ?? false,
+    fixIssueIds: params?.fixIssueIds ?? [],
+    addressCommentIds: params?.addressCommentIds ?? [],
+  };
+}
+
+function setSuggestion(id: string, patch: (row: Comment) => Comment): Comment | undefined {
+  const row = db.comments.get(id);
+  if (!row) return undefined;
+  const next = patch(row);
+  db.comments.set(id, next);
+  return next;
+}
+
+function terminalEventOf(status: Comment['status']): 'done' | 'failed' | 'cancelled' {
+  return status === 'failed' ? 'failed' : status === 'cancelled' ? 'cancelled' : 'done';
+}
+
+/** Plays a revision's timeline: retrieve -> revise -> diff -> pending (or the failure the instruction asks for). */
+function driveFakeRevision(
+  id: string,
+  original: string,
+  range: { start: number; end: number } | null,
+  request: { instruction: string; params: ReturnType<typeof allParams> },
+): void {
+  const step = mockRevisionConfig.stepMs;
+  const running = () => db.comments.get(id)?.status === 'running';
+  const progress = (stage: string, message: string, payload: Record<string, unknown>) => {
+    if (running()) db.publishSuggestionProgress(id, stage, message, payload);
+  };
+  const later = (callback: () => void, delay: number) =>
+    scheduleFakeRunStep(() => {
+      if (running()) callback();
+    }, delay);
+
+  progress('retrieve', 'Searching the sources of the section', { phase: 'start' });
+  later(() => {
+    progress('retrieve', 'Found 3 relevant passages', { phase: 'done', count: 3 });
+    progress('revise', 'Asking the model to revise the text', { phase: 'start', model: 'mock' });
+  }, step);
+  // "slow" never finishes by itself (cancel it); "fail" ends in a provider timeout.
+  if (/\bslow\b/i.test(request.instruction)) return;
+  if (/\bfail\b/i.test(request.instruction)) {
+    later(() => {
+      const row = setSuggestion(id, (current) => ({
+        ...current,
+        status: 'failed',
+        updatedAt: db.now(),
+        payload: {
+          ...current.payload,
+          finishedAt: db.now(),
+          error: { code: 'llm_timeout', message: 'The language model took too long.' },
+        },
+      }));
+      db.publishSuggestionTerminal(id, 'failed', { status: 'failed', suggestion: row });
+    }, 2 * step);
+    return;
+  }
+  later(() => {
+    progress('revise', 'The model answered', { phase: 'done' });
+    progress('diff', 'Comparing the revision with the original', { phase: 'start' });
+  }, 2 * step);
+  later(() => {
+    const revision = fakeRevise(original, range, request);
+    progress('diff', `${revision.hunks.length} changes`, {
+      phase: 'done',
+      hunks: revision.hunks.length,
+    });
+    const row = setSuggestion(id, (current) => ({
+      ...current,
+      status: 'pending',
+      bodyMarkdown: revision.summary,
+      updatedAt: db.now(),
+      payload: {
+        ...current.payload,
+        originalMarkdown: original,
+        replacementMarkdown: revision.replacement,
+        hunks: revision.hunks,
+        anchor: current.anchor,
+        summary: revision.summary,
+        changesMade: revision.changesMade,
+        warnings: revision.warnings,
+        droppedCitations: revision.droppedCitations,
+        usage: { totalTokens: 1840, costUsd: 0.004 },
+        finishedAt: db.now(),
+      },
+    }));
+    db.publishSuggestionTerminal(id, 'done', { status: 'pending', suggestion: row });
+  }, 3 * step);
+}
+
+const revisionHandlers = [
+  http.post(
+    '*/api/v1/projects/:projectId/outline/:nodeId/revisions',
+    async ({ params, request }) => {
+      const instance = new URL(request.url).pathname;
+      const node = projectNode(params.projectId as string, params.nodeId as string);
+      if (!node) return notFound('Outline node', instance);
+      const body = (await request.json()) as RevisionCreate;
+      const verb = body.verb ?? 'revise';
+      const scope = body.scope ?? 'section';
+      const instruction = body.instruction ?? '';
+      const invalid = (detail: string) =>
+        problemResponse(422, 'Validation Failed', instance, detail);
+
+      if (instruction.length > MAX_INSTRUCTION_CHARS) return invalid('instruction is too long');
+      const badAnchor = anchorProblem(body.anchor);
+      if (badAnchor) return invalid(badAnchor);
+      if (verb === 'rewrite') {
+        const extras =
+          scope === 'range' ||
+          body.anchor ||
+          body.threadId ||
+          Object.values(allParams(body.params)).some((value) =>
+            Array.isArray(value) ? value.length > 0 : value === true,
+          );
+        if (extras) return invalid('only an instruction is allowed with rewrite');
+        const response = await startRegenerate(
+          request,
+          node.projectId,
+          node.id,
+          instruction || undefined,
+        );
+        if (response.status !== 202) return response;
+        const run = (await response.clone().json()) as Run;
+        return HttpResponse.json({ kind: 'run', runId: run.id, run }, { status: 202 });
+      }
+
+      const full = allParams(body.params);
+      if (full.shorter && full.longer) return invalid('shorter and longer cannot both be set');
+      // The server adds the thread's root to one of the lists: 25 in total per list.
+      const threadRow = body.threadId ? db.comments.get(body.threadId) : undefined;
+      const fixCount = full.fixIssueIds.length + (threadRow?.kind === 'review' ? 1 : 0);
+      const addressCount = full.addressCommentIds.length + (threadRow?.kind === 'comment' ? 1 : 0);
+      if (fixCount > 25 || addressCount > 25) return invalid('at most 25 ids per list');
+      if (
+        instruction.trim() === '' &&
+        !body.threadId &&
+        !Object.values(full).some((v) => (Array.isArray(v) ? v.length > 0 : v === true))
+      ) {
+        return invalid('nothing to do: give an instruction or choose an option');
+      }
+      if (scope === 'section' && body.anchor) return invalid('a section revision takes no anchor');
+      const rows = [...db.comments.values()].filter((row) => row.nodeId === node.id);
+      for (const id of full.fixIssueIds) {
+        const row = rows.find((candidate) => candidate.id === id);
+        if (!row || row.kind !== 'review' || row.parentId !== null)
+          return invalid('fixIssueIds must be review cards of this section');
+      }
+      for (const id of full.addressCommentIds) {
+        const row = rows.find((candidate) => candidate.id === id);
+        if (!row || row.kind !== 'comment' || row.parentId !== null)
+          return invalid('addressCommentIds must be comment threads of this section');
+      }
+      const thread = body.threadId ? rows.find((row) => row.id === body.threadId) : undefined;
+      if (body.threadId && (!thread || thread.parentId !== null || thread.kind === 'suggestion')) {
+        return invalid('threadId must be a comment or review thread of this section');
+      }
+      const anchorIn = body.anchor ?? (scope === 'range' ? thread?.anchor : null) ?? null;
+      if (scope === 'range' && !anchorIn) return invalid('a range revision needs an anchor');
+
+      const conflict = (detail: string, code: string, status = 409) =>
+        problemResponse(
+          status,
+          status === 429 ? 'Too Many Requests' : 'Conflict',
+          instance,
+          detail,
+          code,
+        );
+      const keyRequired = llmKeyRequiredProblem(request);
+      if (keyRequired) return keyRequired;
+      if (node.status === 'drafting')
+        return conflict('A run is generating this section.', 'node_generating');
+      if (node.contentMarkdown.trim() === '')
+        return conflict('This section has no text to revise.', 'section_empty');
+      if (scope === 'section' && node.contentMarkdown.length > MAX_SECTION_CHARS)
+        return conflict(
+          'This section is too long to revise at once; select a passage.',
+          'section_too_large',
+        );
+      if (rows.some((row) => row.kind === 'suggestion' && row.status === 'running'))
+        return conflict('A revision of this section is already running.', 'revision_in_progress');
+      if (
+        [...db.comments.values()].filter(
+          (row) =>
+            row.kind === 'suggestion' && row.status === 'running' && row.authorId === MOCK_USER.id,
+        ).length >= MAX_REVISIONS_PER_USER
+      )
+        return conflict('You already have revisions running.', 'too_many_revisions', 429);
+
+      let anchor: Comment['anchor'] = null;
+      let range: { start: number; end: number } | null = null;
+      if (scope === 'range' && anchorIn) {
+        const resolved = resolveAnchor(node.contentMarkdown, anchorIn);
+        if (resolved.start === null || resolved.end === null)
+          return conflict('The selected text no longer matches the section.', 'anchor_orphaned');
+        anchor = resolved;
+        range = { start: resolved.start, end: resolved.end };
+      }
+
+      const now = db.now();
+      const id = db.nextId();
+      const baseContentHash = await sha256Hex(node.contentMarkdown);
+      const row: Comment = {
+        id,
+        projectId: node.projectId,
+        nodeId: node.id,
+        kind: 'suggestion',
+        authorId: MOCK_USER.id,
+        authorName: MOCK_USER.displayName,
+        anchor: thread && scope === 'range' ? thread.anchor : anchor,
+        status: 'running',
+        threadId: thread ? thread.id : id,
+        parentId: thread ? thread.id : null,
+        bodyMarkdown: '',
+        payload: {
+          verb,
+          scope,
+          instruction,
+          params: full,
+          threadId: thread ? thread.id : null,
+          baseContentHash,
+          model: 'mock-model',
+          startedAt: now,
+        },
+        createdAt: now,
+        updatedAt: now,
+        editedAt: null,
+      };
+      db.comments.set(id, row);
+      // A thread's own text is what the copilot is asked to act on when nothing else was said.
+      driveFakeRevision(id, node.contentMarkdown, range, {
+        instruction: instruction || thread?.bodyMarkdown || '',
+        params: full,
+      });
+      return HttpResponse.json({ kind: 'suggestion', suggestion: row }, { status: 202 });
+    },
+  ),
+
+  http.post('*/api/v1/suggestions/:suggestionId/reject', ({ params, request }) => {
+    const instance = new URL(request.url).pathname;
+    const row = db.comments.get(params.suggestionId as string);
+    if (!row || row.kind !== 'suggestion') return notFound('Suggestion', instance);
+    if (row.status !== 'pending')
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'Only a pending suggestion can be rejected.',
+        'not_pending',
+      );
+    const next = setSuggestion(row.id, (current) => ({
+      ...current,
+      status: 'rejected',
+      updatedAt: db.now(),
+      payload: { ...current.payload, rejectedAt: db.now(), rejectedBy: MOCK_USER.id },
+    }));
+    return HttpResponse.json(next);
+  }),
+
+  http.post('*/api/v1/suggestions/:suggestionId/cancel', ({ params, request }) => {
+    const instance = new URL(request.url).pathname;
+    const row = db.comments.get(params.suggestionId as string);
+    if (!row || row.kind !== 'suggestion') return notFound('Suggestion', instance);
+    if (row.authorId !== MOCK_USER.id)
+      return problemResponse(
+        403,
+        'Forbidden',
+        instance,
+        'Only the person who started it can cancel.',
+      );
+    if (row.status === 'cancelled') return HttpResponse.json(row);
+    if (row.status !== 'running')
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'The revision is not running.',
+        'not_running',
+      );
+    const next = setSuggestion(row.id, (current) => ({
+      ...current,
+      status: 'cancelled',
+      updatedAt: db.now(),
+      payload: { ...current.payload, finishedAt: db.now(), cancelledBy: MOCK_USER.id },
+    }));
+    db.publishSuggestionTerminal(row.id, 'cancelled', { status: 'cancelled', suggestion: next });
+    return HttpResponse.json(next);
+  }),
+
+  http.post('*/api/v1/suggestions/:suggestionId/accept', async ({ params, request }) => {
+    if (mockRevisionConfig.acceptDelayMs > 0) await delay(mockRevisionConfig.acceptDelayMs);
+    const instance = new URL(request.url).pathname;
+    const row = db.comments.get(params.suggestionId as string);
+    if (!row || row.kind !== 'suggestion') return notFound('Suggestion', instance);
+    const body = ((await request.json().catch(() => null)) ?? {}) as SuggestionAccept;
+    const node = db.outlineNodes.get(row.nodeId);
+    if (!node) return notFound('Outline node', instance);
+    const payload = row.payload as {
+      originalMarkdown?: string;
+      hunks?: { start: number; end: number; removed: string; added: string }[];
+      scope?: string;
+      threadId?: string | null;
+      params?: { fixIssueIds?: string[]; addressCommentIds?: string[] };
+    };
+    const hunks = payload.hunks ?? [];
+    if (body.hunkIndexes) {
+      const unique = new Set(body.hunkIndexes);
+      if (
+        body.hunkIndexes.length === 0 ||
+        unique.size !== body.hunkIndexes.length ||
+        body.hunkIndexes.some((i) => i < 0 || i >= hunks.length) ||
+        payload.scope === 'range'
+      ) {
+        return problemResponse(422, 'Validation Failed', instance, 'invalid hunkIndexes');
+      }
+    }
+    if (row.status !== 'pending')
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'The suggestion is not pending.',
+        'not_pending',
+      );
+    if (node.status === 'drafting')
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'A run is generating this section.',
+        'node_generating',
+      );
+    // A full run that is queued or running would overwrite an unlocked section.
+    if (!node.contentLocked && laneRunsFor(node.projectId).some((run) => run.kind === 'full')) {
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'A full run is queued or running for this project.',
+        'run_active',
+      );
+    }
+    const stored = await sha256Hex(node.contentMarkdown);
+    if (body.expectedContentHash && body.expectedContentHash !== stored) {
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'The section changed since you last saw it.',
+        'content_conflict',
+        { currentContentHash: stored },
+      );
+    }
+    const chosen = body.hunkIndexes ? body.hunkIndexes.map((i) => hunks[i]!) : hunks;
+    const text = applyHunksTo(payload.originalMarkdown ?? '', chosen, node.contentMarkdown);
+    if (text === null) {
+      return problemResponse(
+        409,
+        'Conflict',
+        instance,
+        'The text changed since this was suggested.',
+        'stale',
+      );
+    }
+    const now = db.now();
+    const updated: OutlineNode & { projectId: string } = {
+      ...node,
+      contentMarkdown: text,
+      actualWords: text.trim().split(/\s+/).filter(Boolean).length,
+      updatedAt: now,
+    };
+    db.outlineNodes.set(node.id, updated);
+    const accepted = setSuggestion(row.id, (current) => ({
+      ...current,
+      status: 'accepted',
+      updatedAt: now,
+      payload: {
+        ...current.payload,
+        acceptedAt: now,
+        acceptedBy: MOCK_USER.id,
+        appliedHunks: body.hunkIndexes ?? null,
+      },
+    }));
+    // Only an accept of everything settles the thread and the issues it was asked to address.
+    if (!body.hunkIndexes) {
+      const settle = new Set<string>([
+        ...(payload.threadId ? [payload.threadId] : []),
+        ...(payload.params?.fixIssueIds ?? []),
+        ...(payload.params?.addressCommentIds ?? []),
+      ]);
+      for (const other of [...db.comments.values()]) {
+        if (settle.has(other.threadId) && other.kind !== 'suggestion') {
+          db.comments.set(other.id, { ...other, status: 'resolved', updatedAt: now });
+        }
+      }
+    }
+    reanchorComments(node.id, text);
+    return HttpResponse.json({
+      suggestion: accepted,
+      node: await withContentHash(db.withCommentCounts(stripProjectId(updated))),
+    });
+  }),
+];
+
+const suggestionStreamHandler = sse<{
+  progress: SuggestionProgress;
+  done: SuggestionTerminal;
+  failed: SuggestionTerminal;
+  cancelled: SuggestionTerminal;
+}>('*/api/v1/suggestions/:suggestionId/events/stream', ({ params, client, request }) => {
+  const id = params.suggestionId as string;
+  const row = db.comments.get(id);
+  if (!row || row.kind !== 'suggestion') {
+    client.error();
+    return;
+  }
+  const last = Number(request.headers.get('last-event-id') ?? 0);
+  const events = db.suggestionEvents.get(id) ?? [];
+  for (const event of events) {
+    if (event.seq > last) client.send({ id: String(event.seq), event: 'progress', data: event });
+  }
+  if (row.status !== 'running') {
+    client.send({
+      id: String(events.length + 1),
+      event: terminalEventOf(row.status),
+      data: { status: row.status, suggestion: row },
+    });
+    client.close();
+    return;
+  }
+  const stop = db.onSuggestionEvent(id, (event) => {
+    if ('terminal' in event) {
+      client.send({
+        id: String((db.suggestionEvents.get(id)?.length ?? 0) + 1),
+        event: event.terminal,
+        data: event.data as SuggestionTerminal,
+      });
+      client.close();
+      stop();
+    } else {
+      client.send({ id: String(event.seq), event: 'progress', data: event });
+    }
+  });
+  request.signal.addEventListener('abort', stop);
+});
 
 const streamHandler = sse<Record<'log' | 'stage' | 'section' | 'done', RunEvent>>(
   '*/api/v1/runs/:runId/events/stream',
@@ -1458,8 +2036,10 @@ export const handlers = [
   ...sourceHandlers,
   ...outlineHandlers,
   ...commentHandlers,
+  ...revisionHandlers,
   ...runHandlers,
   streamHandler,
+  suggestionStreamHandler,
 ];
 
 export type { Problem };

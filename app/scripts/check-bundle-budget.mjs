@@ -30,6 +30,26 @@ function sumLeafGzip(node, nodeParts) {
   return (node.children ?? []).reduce((total, child) => total + sumLeafGzip(child, nodeParts), 0);
 }
 
+/** Every module the visualizer reports, across all chunks, as its full path (parent names joined). */
+function moduleNames(node, parents = [], out = []) {
+  const here = [...parents, node.name ?? ''];
+  if (node.uid !== undefined) out.push(here.join('/'));
+  for (const child of node.children ?? []) moduleNames(child, here, out);
+  return out;
+}
+
+/**
+ * Modules that must not be in the bundle: the editor's setup is a trimmed copy
+ * (`src/features/editor/lib/editor-setup.ts`, aliased over `@uiw/codemirror-extensions-basic-setup` in
+ * `vite.config.ts`) so the completion popup and the lint keymap stay out. If the alias stops applying
+ * (a rename upstream, a config change), those modules come back silently; this makes it loud.
+ */
+const FORBIDDEN_MODULES = [
+  'codemirror-extensions-basic-setup',
+  '@codemirror+lint',
+  '@codemirror/lint',
+];
+
 function formatKb(bytes) {
   return `${(bytes / 1024).toFixed(1)} kB`;
 }
@@ -80,6 +100,14 @@ async function main() {
   console.log(`Total:       ${formatKb(totalBytes)} (budget ${formatKb(TOTAL_BUDGET_BYTES)})`);
 
   const failures = [];
+  const names = moduleNames(stats.tree);
+  for (const forbidden of FORBIDDEN_MODULES) {
+    if (names.some((name) => name.includes(forbidden))) {
+      failures.push(
+        `the bundle contains ${forbidden}: the trimmed editor setup is not being used (see FORBIDDEN_MODULES)`,
+      );
+    }
+  }
   if (mainChunk.gzipBytes > MAIN_CHUNK_BUDGET_BYTES) {
     failures.push(
       `entry chunk ${formatKb(mainChunk.gzipBytes)} exceeds budget ${formatKb(MAIN_CHUNK_BUDGET_BYTES)}`,

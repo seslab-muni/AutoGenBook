@@ -11,17 +11,14 @@ const LONG = { timeout: 10000 };
 const ROUTE = '/p/book-consensus-quantum-2026?node=sec-1-1';
 
 describe('Studio editor header and status bar (routed, MSW-backed)', () => {
-  it('renders the lock, Write/Source, Chapter options and a disabled Copilot button', async () => {
+  it('renders the lock, Write/Source, Chapter options and the Copilot button', async () => {
     renderRouterApp(ROUTE);
 
     expect(await screen.findByRole('button', { name: 'Lock content' }, LONG)).toBeEnabled();
     expect(screen.getByRole('radio', { name: 'Write', checked: true })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Source', checked: false })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Chapter options' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Copilot' })).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    );
+    expect(screen.getByRole('button', { name: 'Copilot' })).not.toHaveAttribute('aria-disabled');
   }, 15000);
 
   it('opens Chapter options as a popover from the header chip', async () => {
