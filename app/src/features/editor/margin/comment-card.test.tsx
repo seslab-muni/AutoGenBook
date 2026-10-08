@@ -20,6 +20,7 @@ const CTX: MarginCardContext = {
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
   flushEdits: () => Promise.resolve(),
+  holdSaving: () => Promise.resolve(() => {}),
 };
 
 /** Seeds the mock API with a thread (so the real mutations have rows to act on) and renders its card. */
@@ -234,6 +235,19 @@ describe('comment card', () => {
     expect(db.comments.has('reply-0')).toBe(false);
   });
 
+  it('hands a reply that mentions @copilot to the context, and one that does not, still', async () => {
+    const user = userEvent.setup();
+    const onCommentSent = vi.fn();
+    renderCard({ ctx: { onCommentSent } });
+    await user.click(screen.getByRole('button', { name: 'Reply' }));
+    await user.type(screen.getByRole('textbox', { name: 'Reply' }), '@copilot please check');
+    await user.click(screen.getAllByRole('button', { name: 'Reply' }).at(-1)!);
+    await waitFor(() => expect(onCommentSent).toHaveBeenCalledTimes(1));
+    expect(onCommentSent).toHaveBeenCalledWith(
+      expect.objectContaining({ bodyMarkdown: '@copilot please check', parentId: 'root-1' }),
+    );
+  });
+
   it("offers no edit or delete on someone else's message", () => {
     renderCard({ ownRoot: false });
     expect(screen.queryByRole('button', { name: /^Edit comment/ })).not.toBeInTheDocument();
@@ -252,16 +266,6 @@ describe('comment card', () => {
     renderCard({ ctx: { copilotActions: true, onSendToCopilot } });
     await user.click(screen.getByRole('button', { name: 'Send to Copilot' }));
     expect(onSendToCopilot).toHaveBeenCalledWith(expect.objectContaining({ id: 'root-1' }));
-  });
-
-  it('renders suggestion and review cards read-only instead of dropping them', () => {
-    renderCard({
-      root: { kind: 'review', bodyMarkdown: 'Missing a proof.', authorId: null, authorName: null },
-    });
-    const card = screen.getByRole('region', { name: /^Review on/ });
-    expect(within(card).getByText('Missing a proof.')).toBeInTheDocument();
-    expect(within(card).getByText('open')).toBeInTheDocument();
-    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('keeps the relative time ticking without a re-render from outside', async () => {

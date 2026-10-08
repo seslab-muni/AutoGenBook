@@ -1,9 +1,11 @@
 import type { ComponentType } from 'react';
 import { Bot, ClipboardCheck, MessageSquare, type LucideIcon } from 'lucide-react';
 
-import type { CommentKind } from '@/api/types';
+import type { Comment, CommentKind, RevisionCreate, StartedRevision } from '@/api/types';
 import { CommentCardBody } from './comment-card-body';
 import { ReadOnlyCardBody } from './read-only-card-body';
+import { ReviewCardBody, ReviewStatus } from './review-card';
+import { SuggestionBody, SuggestionDiffQuote, SuggestionStatus } from './suggestion-card';
 import type { MarginThread } from './threads';
 
 /** What every card part can use besides its thread. */
@@ -35,6 +37,27 @@ export interface MarginCardContext {
    * *and* this is supplied, so flipping the flag can never ship a dead button.
    */
   onSendToCopilot?: ((thread: MarginThread) => void) | undefined;
+  /** `Fix with Copilot` on a review card: the same, with the card's issue as the thing to fix. */
+  onFixWithCopilot?: ((thread: MarginThread) => void) | undefined;
+  /** `Try again` on a suggestion: reopens the prompt window with what it was asked. */
+  onTryAgain?: ((suggestion: Comment, thread: MarginThread) => void) | undefined;
+  /** A comment or reply was just saved: one that mentions `@copilot` is a prompt about its thread. */
+  onCommentSent?: ((comment: Comment) => void) | undefined;
+  /**
+   * Starts a revision: flushes the pending edits first (the server revises the saved text), then
+   * posts. Rejects with the API's error, so a caller shows the reason where it asked.
+   */
+  startRevision?:
+    | ((request: RevisionCreate, options?: { moveFocus?: boolean }) => Promise<StartedRevision>)
+    | undefined;
+  /**
+   * Saves what is pending, then holds autosave until the returned function is called: the window an
+   * accept (or its undo) writes the section in, so no autosave of the old draft can land over it.
+   * Rejects, holding nothing, if the pending edits cannot be saved.
+   */
+  holdSaving: () => Promise<() => void>;
+  /** The section's number (`2.1`), for the prompt window's scope pill. */
+  sectionNumber?: string | undefined;
 }
 
 export interface MarginCardPartProps {
@@ -66,16 +89,27 @@ export interface MarginCardKind {
 
 /**
  * One entry per `kind` of margin row. `MarginCard` is the shared frame (position, focus, header,
- * quote); the `Status`, `Quote` and `Body` slots are what differ. Phase 3 replaces `review`
- * (severity/type pills in `Status`, required fix in `Body`, Fix with Copilot / Dismiss), phase 4
- * replaces `suggestion` (progress states in `Status`, the diff in `Quote`, Accept / Reject /
- * Try again in `Body`): swap the entry here, nothing else changes. Until then those kinds render
- * read-only rather than disappearing.
+ * quote); the `Status`, `Quote` and `Body` slots are what differ: a review card puts its severity
+ * and type pills in `Status` and the issue (required fix, replacement chips) in `Body`; a
+ * suggestion card puts its working / ready / failed state in `Status`, the diff in `Quote` and
+ * Accept / Reject / Try again in `Body`. `ReadOnlyCardBody` is the fallback for a kind this
+ * client does not know yet.
  */
 export const MARGIN_CARD_KINDS: Record<CommentKind, MarginCardKind> = {
   comment: { label: 'Comment', icon: MessageSquare, Body: CommentCardBody },
-  suggestion: { label: 'Suggestion', icon: Bot, Body: ReadOnlyCardBody },
-  review: { label: 'Review', icon: ClipboardCheck, Body: ReadOnlyCardBody },
+  suggestion: {
+    label: 'Suggestion',
+    icon: Bot,
+    Status: SuggestionStatus,
+    Quote: SuggestionDiffQuote,
+    Body: SuggestionBody,
+  },
+  review: {
+    label: 'Review',
+    icon: ClipboardCheck,
+    Status: ReviewStatus,
+    Body: ReviewCardBody,
+  },
 };
 
 export function cardKind(kind: string): MarginCardKind {

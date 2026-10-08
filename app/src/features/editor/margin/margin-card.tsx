@@ -1,8 +1,9 @@
 import { memo, useCallback } from 'react';
 
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { cardKind, type MarginCardContext, type MarginCardPartProps } from './card-registry';
+import { cardKind, type MarginCardContext } from './card-registry';
+import { reviewPayload, reviewTypeLabel } from '@/features/editor/lib/card-payloads';
+import { DefaultQuote, DefaultStatus } from './default-parts';
 import type { MarginThread } from './threads';
 
 interface MarginCardProps {
@@ -20,48 +21,20 @@ interface MarginCardProps {
 
 /** Short label for the card region, read by screen readers: "Comment by Ada on “quote”". */
 function describeCard(thread: MarginThread, label: string): string {
+  if (thread.kind === 'review') {
+    // Reviewer cards have no author; what tells them apart is the issue itself.
+    const payload = reviewPayload(thread.root);
+    const text = thread.root.bodyMarkdown;
+    const gist = text.length > 50 ? `${text.slice(0, 50)}…` : text;
+    return `Review issue, ${payload.severity} ${reviewTypeLabel(payload.type)}: ${gist}`;
+  }
   const author = thread.root.authorName;
   const head = `${label}${author ? ` by ${author}` : ''}`;
   if (thread.sectionLevel) return `${head} on the whole section`;
-  const quote = thread.quote.length > 60 ? `${thread.quote.slice(0, 60)}…` : thread.quote;
+  // By code point: a UTF-16 slice could cut an astral character in half.
+  const points = Array.from(thread.quote);
+  const quote = points.length > 60 ? `${points.slice(0, 60).join('')}…` : thread.quote;
   return `${head}${thread.orphaned ? ' (orphaned)' : ''} on “${quote}”`;
-}
-
-/** Default header status: where the card points and whether it is finished with. */
-function DefaultStatus({ thread, approximate }: MarginCardPartProps) {
-  return (
-    <>
-      {thread.orphaned ? <Badge variant="outline">Orphaned</Badge> : null}
-      {thread.sectionLevel ? <Badge variant="outline">Whole section</Badge> : null}
-      {approximate && !thread.orphaned ? (
-        <Badge variant="outline">Not shown in this view</Badge>
-      ) : null}
-      {thread.status === 'resolved' ? <Badge variant="secondary">Resolved</Badge> : null}
-    </>
-  );
-}
-
-/** Default quote area: the quoted text, struck through when orphaned. */
-function DefaultQuote({ thread }: MarginCardPartProps) {
-  return (
-    <>
-      {!thread.sectionLevel && thread.quote ? (
-        <blockquote
-          className={cn(
-            'mb-2 line-clamp-3 border-l-2 pl-2 text-xs text-muted-foreground italic',
-            thread.orphaned && 'line-through decoration-muted-foreground/60',
-          )}
-        >
-          {thread.quote}
-        </blockquote>
-      ) : null}
-      {thread.orphaned ? (
-        <p className="mb-2 text-[11px] text-muted-foreground">
-          The text this refers to is gone from the section.
-        </p>
-      ) : null}
-    </>
-  );
 }
 
 /**

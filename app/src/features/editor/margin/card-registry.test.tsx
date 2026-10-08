@@ -16,15 +16,16 @@ const CTX: MarginCardContext = {
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
   flushEdits: () => Promise.resolve(),
+  holdSaving: () => Promise.resolve(() => {}),
 };
 
 const original = { ...MARGIN_CARD_KINDS };
 afterEach(() => Object.assign(MARGIN_CARD_KINDS, original));
 
-function renderKind(kind: 'suggestion' | 'review') {
+function renderKind(kind: string) {
   const root = makeComment({
     id: 'x',
-    kind,
+    kind: kind as 'suggestion',
     authorId: null,
     authorName: null,
     bodyMarkdown: 'body text',
@@ -59,9 +60,9 @@ describe('card registry slots', () => {
     expect(within(card).queryByText('Whole section')).not.toBeInTheDocument();
   });
 
-  it('renders kinds that have no entry yet read-only, with the default status', () => {
-    renderKind('review');
-    const card = screen.getByRole('region', { name: /^Review/ });
+  it('renders a kind this client does not know read-only, with the default status', () => {
+    renderKind('mystery');
+    const card = screen.getByRole('region', { name: /^Note/ });
     expect(within(card).getByText('body text')).toBeInTheDocument();
     expect(within(card).getByText('Whole section')).toBeInTheDocument();
   });

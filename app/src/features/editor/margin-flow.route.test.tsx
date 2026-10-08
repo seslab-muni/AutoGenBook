@@ -24,7 +24,7 @@ function editorView(): EditorView {
 
 beforeEach(() => {
   useEditorStore.setState({ view: 'source' });
-  useUiStore.setState({ rightPane: 'margin', copilotOpen: true, rightOverlayOpen: false });
+  useUiStore.setState({ marginOpen: true, rightOverlayOpen: false });
   useMarginStore.getState().reset();
 });
 
@@ -37,7 +37,7 @@ describe('Margin workspace (routed, MSW-backed) — comments in the Source view'
     expect(await screen.findByRole('complementary', { name: 'Margin' }, LONG)).toBeInTheDocument();
     expect(screen.getByText(/No comments yet/)).toBeInTheDocument();
 
-    // A selection in the editor shows the floating bar, which carries only `Comment` for now.
+    // A selection in the editor shows the floating bar: Comment, then the copilot's Prompt… and chips.
     const doc = editorView().state.doc.toString();
     act(() => editorView().dispatch({ selection: { anchor: 2, head: 14 } }));
     const bar = await screen.findByRole('toolbar', { name: 'Selection actions' });
@@ -45,7 +45,7 @@ describe('Margin workspace (routed, MSW-backed) — comments in the Source view'
       within(bar)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual(['Comment']);
+    ).toEqual(['Comment', 'Prompt…', 'Add proof', 'More rigorous', 'Shorter', 'Cite']);
 
     await user.click(within(bar).getByRole('button', { name: 'Comment' }));
     const composer = await screen.findByRole('textbox', { name: 'New comment' });

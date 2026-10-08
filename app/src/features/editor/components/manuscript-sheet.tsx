@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useBlocker } from '@tanstack/react-router';
 import { useTheme } from 'next-themes';
 import { Copy, Download, ExternalLink, Info, Lock, MoreHorizontal, Sparkles } from 'lucide-react';
@@ -8,9 +8,14 @@ import { toast } from 'sonner';
 import type { EditorView } from '@codemirror/view';
 
 import { auth } from '@/api/queries/auth';
-import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
+import { ApiError } from '@/api/client';
+import {
+  baseContentHash,
+  outline as outlineQueries,
+  useUpdateOutlineNodeMutation,
+} from '@/api/queries/outline';
 import { runs as runQueries } from '@/api/queries/runs';
-import type { OutlineNode } from '@/api/types';
+import type { OutlineNode, OutlineNodeUpdate } from '@/api/types';
 import { PaneToolbar } from '@/components/layout/pane-toolbar';
 import { Button } from '@/components/ui/button';
 import {
@@ -45,6 +50,9 @@ import { COPILOT_ACTIONS_ENABLED } from '@/features/editor/margin/flags';
 import { writeGeometry, sourceGeometry } from '@/features/editor/margin/geometry';
 import { useMarginHost } from '@/features/editor/margin/margin-host';
 import { MarginPanel } from '@/features/editor/margin/margin-panel';
+import { useCopilot } from '@/features/editor/margin/use-copilot';
+import { useSuggestionStreams } from '@/features/editor/margin/suggestion-progress';
+import { parseReviewSummary } from '@/features/editor/lib/card-payloads';
 import { useMarginStore } from '@/features/editor/margin/margin-store';
 import { SelectionLayer } from '@/features/editor/margin/selection-layer';
 import { parseRagCitations } from '@/features/editor/lib/rag-citation';
@@ -67,8 +75,6 @@ interface ManuscriptSheetProps {
   flatNodes: readonly OutlineNode[];
   outlineOpen: boolean;
   onSelectNode: (nodeId: string) => void;
-  /** Hook point for the header's Copilot button (issue #182 phase 4) — the button stays disabled until it is given. */
-  onOpenCopilot?: () => void;
 }
 
 /**
@@ -88,7 +94,6 @@ export function ManuscriptSheet({
   flatNodes,
   outlineOpen,
   onSelectNode,
-  onOpenCopilot,
 }: ManuscriptSheetProps) {
   const view = useEditorView();
   const setView = useEditorStore((state) => state.setView);
@@ -133,16 +138,33 @@ export function ManuscriptSheet({
   const sectionArtifact = findSectionArtifact(lastRunArtifacts?.items, node.cliKey);
 
   const updateMutation = useUpdateOutlineNodeMutation(projectId, node.id);
+  const queryClient = useQueryClient();
   // What this editor has sent (and so what coming back from the server is not "someone else's change").
   const sentRef = useRef(new Set<string>());
   const { status, schedule, flush, cancel, hold, flushEdits } = useDebouncedMutation<string>({
-    onSave: (text) => {
+    onSave: async (text) => {
       // Bounded: only the last few saves matter for recognising our own content coming back.
       sentRef.current.add(text);
       if (sentRef.current.size > 8) sentRef.current.delete(sentRef.current.values().next().value!);
-      return updateMutation.mutateAsync(
-        useLatex ? { contentLatex: text } : { contentMarkdown: text },
-      );
+      const body: OutlineNodeUpdate = useLatex ? { contentLatex: text } : { contentMarkdown: text };
+      if (!useLatex) {
+        // Without the hash of the text this draft was based on the server would take the write as
+        // last-write-wins and overwrite an accepted suggestion or another editor's save.
+        const expectedContentHash = await baseContentHash(queryClient, projectId, node.id);
+        if (expectedContentHash) body.expectedContentHash = expectedContentHash;
+      }
+      try {
+        return await updateMutation.mutateAsync(body);
+      } catch (error) {
+        if (error instanceof ApiError && error.problem?.code === 'content_conflict') {
+          // The section changed under this draft: fetch the other version. The effect below turns
+          // it into the "changed elsewhere" notice (Keep mine / Load the other version) - the save
+          // is never retried over it.
+          sentRef.current.delete(text);
+          void queryClient.fetchQuery({ ...outlineQueries.node(projectId, node.id), staleTime: 0 });
+        }
+        throw error;
+      }
     },
   });
 
@@ -228,11 +250,14 @@ export function ManuscriptSheet({
       // Our own save coming back (or the other side reverted to what we have).
       baselineRef.current = serverText;
       setIncoming(null);
+      // The server holds exactly the draft (a refused save whose other version turned out equal):
+      // nothing is left to save, and a failed-save state would be stale.
+      if (serverText === draftRef.current) cancel();
       return;
     }
     if (!unsaved) adoptServerContent(serverText);
     else setIncoming(serverText);
-  }, [serverText, adoptServerContent]);
+  }, [serverText, adoptServerContent, cancel]);
 
   // A conflicting change from elsewhere is pending: nothing may be saved until the user has chosen.
   useEffect(() => {
@@ -270,6 +295,11 @@ export function ManuscriptSheet({
     resetMargin();
     return resetMargin;
   }, [resetMargin]);
+
+  const reviewSummary = useMemo(
+    () => parseReviewSummary(liveNode.reviewSummary),
+    [liveNode.reviewSummary],
+  );
 
   const geometry = useMemo(() => {
     if (view === 'source') return cmView ? sourceGeometry(cmView) : null;
@@ -336,6 +366,31 @@ export function ManuscriptSheet({
     [],
   );
 
+  // Holds autosave for a write the server makes to the section (an accept, its undo): the pending
+  // edits are saved first, then nothing is saved until the returned function releases the hold.
+  const holdCounter = useRef(0);
+  const holdSaving = useCallback(async () => {
+    await flushEdits();
+    holdCounter.current += 1;
+    const reason = `copilot:${holdCounter.current}`;
+    hold(true, reason);
+    return () => {
+      hold(false, reason);
+      // Anything typed meanwhile is saved now (an adopted text has already dropped it).
+      flush();
+    };
+  }, [flushEdits, hold, flush]);
+
+  const getDraft = useCallback(() => draftRef.current, []);
+  const copilot = useCopilot({
+    projectId,
+    nodeId: node.id,
+    getText: getDraft,
+    flushEdits,
+    enabled: anchorsEnabled,
+  });
+  useSuggestionStreams(projectId, node.id, section.threads);
+
   const cardContext = useMemo<MarginCardContext>(
     () => ({
       projectId,
@@ -349,15 +404,27 @@ export function ManuscriptSheet({
       // eslint-disable-next-line react-hooks/refs
       hasUnsavedEdits,
       flushEdits,
+      // eslint-disable-next-line react-hooks/refs
+      holdSaving,
+      sectionNumber: node.sectionNumber,
+      startRevision: anchorsEnabled ? copilot.startRevision : undefined,
+      onSendToCopilot: anchorsEnabled ? copilot.sendToCopilot : undefined,
+      onFixWithCopilot: anchorsEnabled ? copilot.fixWithCopilot : undefined,
+      onTryAgain: anchorsEnabled ? copilot.tryAgain : undefined,
+      onCommentSent: anchorsEnabled ? copilot.commentSent : undefined,
     }),
     [
       projectId,
       node.id,
+      node.sectionNumber,
       me?.id,
       restoreEditorFocus,
       adoptServerContent,
       hasUnsavedEdits,
       flushEdits,
+      holdSaving,
+      anchorsEnabled,
+      copilot,
     ],
   );
 
@@ -411,12 +478,15 @@ export function ManuscriptSheet({
           <HeaderIconButton
             label="Copilot"
             tooltip={
-              onOpenCopilot
-                ? 'Prompt the copilot about this section'
-                : 'Coming soon: prompt the copilot here'
+              !anchorsEnabled
+                ? 'The copilot works on Markdown sections; this one holds LaTeX'
+                : !nodeIsLeaf
+                  ? 'The copilot revises the text of a section; select a leaf section'
+                  : 'Prompt the copilot about this section'
             }
-            disabled={!onOpenCopilot}
-            onClick={onOpenCopilot}
+            disabled={!anchorsEnabled || !nodeIsLeaf}
+            copilotTrigger
+            onClick={() => copilot.openPrompt(null, 'header')}
           >
             <Sparkles />
           </HeaderIconButton>
@@ -535,7 +605,7 @@ export function ManuscriptSheet({
                 {draft.trim().length === 0 ? (
                   <p className="text-center text-sm text-muted-foreground italic">
                     {nodeIsLeaf
-                      ? 'This section is empty. Switch to Source to write it, or use the Copilot to generate it.'
+                      ? 'This section is empty. Switch to Source to write it, or start a run to draft it.'
                       : 'This is a container node — it only has the outline summary shown in the assembled document. Content is generated per leaf section; select a leaf section below it to write or generate text.'}
                   </p>
                 ) : (
@@ -571,6 +641,8 @@ export function ManuscriptSheet({
           onComment={startComment}
           onFocusThread={focusThreadCard}
           copilotActions={COPILOT_ACTIONS_ENABLED}
+          onPrompt={(anchor) => copilot.openPrompt(anchor, 'selection')}
+          onChip={copilot.runChip}
         />
       </div>
 
@@ -587,6 +659,8 @@ export function ManuscriptSheet({
               composerRange={section.composerRange}
               composerQuote={section.composerQuote}
               geometry={geometry}
+              reviewSummary={reviewSummary}
+              reviewerScore={liveNode.reviewerScore ?? null}
               anchorNote={
                 anchorsEnabled
                   ? undefined

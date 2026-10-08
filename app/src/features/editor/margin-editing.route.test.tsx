@@ -59,7 +59,7 @@ async function open() {
 
 beforeEach(() => {
   useEditorStore.setState({ view: 'source' });
-  useUiStore.setState({ rightPane: 'margin', copilotOpen: true, rightOverlayOpen: false });
+  useUiStore.setState({ marginOpen: true, rightOverlayOpen: false });
   useMarginStore.getState().reset();
   useMarginStore.setState({ drafts: {} });
 });
@@ -268,7 +268,7 @@ describe('narrow screens: the margin is a managed side sheet', () => {
   it('opens on Comment without changing the saved wide-screen preference, keeps the selection visible by making room, and closes on Escape from the editor', async () => {
     const user = userEvent.setup();
     setViewportWidth(1024);
-    useUiStore.setState({ copilotOpen: false });
+    useUiStore.setState({ marginOpen: false });
     seed(TEXT, 'theorem statement');
     renderRouterApp(NODE_URL);
     await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull(), LONG);
@@ -278,7 +278,7 @@ describe('narrow screens: the margin is a managed side sheet', () => {
     act(() => view.dispatch({ selection: { anchor: 0, head: 11 } }));
     await user.click(await screen.findByRole('button', { name: 'Comment' }));
     expect(await screen.findByRole('complementary', { name: 'Margin' }, LONG)).toBeInTheDocument();
-    expect(useUiStore.getState().copilotOpen).toBe(false);
+    expect(useUiStore.getState().marginOpen).toBe(false);
     const editorColumn = document.querySelector('.cm-editor')!.closest('[style*="padding-right"]');
     expect(editorColumn).not.toBeNull();
 
@@ -431,7 +431,7 @@ describe('unsent composer text survives the composer unmounting', () => {
     );
   }, 30000);
 
-  it('switching the right pane to Copilot and back keeps a half-written reply', async () => {
+  it('closing the right pane and opening it again keeps a half-written reply', async () => {
     const user = userEvent.setup();
     seed(TEXT, 'theorem statement');
     renderRouterApp(NODE_URL);
@@ -439,8 +439,9 @@ describe('unsent composer text survives the composer unmounting', () => {
     const card = await screen.findByRole('region', { name: /^Comment by Ada/ }, LONG);
     await user.click(within(card).getByRole('button', { name: 'Reply' }));
     await user.type(within(card).getByRole('textbox', { name: 'Reply' }), 'draft reply');
-    await user.click(screen.getByRole('radio', { name: 'Copilot' }));
-    await user.click(await screen.findByRole('radio', { name: 'Margin' }));
+    await user.click(screen.getByRole('button', { name: 'Close right pane' }));
+    expect(screen.queryByRole('region', { name: /^Comment by Ada/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Show right pane' }));
     const back = await screen.findByRole('region', { name: /^Comment by Ada/ }, LONG);
     expect(within(back).getByRole('textbox', { name: 'Reply' })).toHaveValue('draft reply');
   }, 30000);

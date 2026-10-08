@@ -8,7 +8,7 @@ import {
   compareThreads,
   filterThreads,
   groupThreads,
-  isClosed,
+  isThreadClosed,
   type MarginThread,
 } from '@/features/editor/margin/threads';
 import type { AnchorInput, TextRange } from '@/features/editor/lib/anchors';
@@ -127,7 +127,7 @@ export function useSectionComments(
         ? [
             {
               id: thread.id,
-              kind: isClosed(thread) ? 'resolved' : thread.kind,
+              kind: isThreadClosed(thread) ? 'resolved' : thread.kind,
               start: thread.range.start,
               end: thread.range.end,
               hidden: !visibleIds.has(thread.id),

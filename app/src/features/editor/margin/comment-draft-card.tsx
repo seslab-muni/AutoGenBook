@@ -50,6 +50,8 @@ export function CommentDraftCard({ draft, ctx, top, register, quote }: DraftCard
           closeComposer();
           focus(comment.id);
           ctx.restoreEditorFocus();
+          // A comment that mentions @copilot is a prompt about its own thread.
+          ctx.onCommentSent?.(comment);
         }}
       />
     </section>

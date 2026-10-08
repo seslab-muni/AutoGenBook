@@ -6,6 +6,8 @@ interface HeaderIconButtonProps {
   tooltip: string;
   disabled?: boolean;
   pressed?: boolean | undefined;
+  /** Marks the button the prompt window returns keyboard focus to when it closes. */
+  copilotTrigger?: boolean | undefined;
   onClick?: (() => void) | undefined;
   children: React.ReactNode;
 }
@@ -20,6 +22,7 @@ export function HeaderIconButton({
   tooltip,
   disabled = false,
   pressed,
+  copilotTrigger,
   onClick,
   children,
 }: HeaderIconButtonProps) {
@@ -33,6 +36,7 @@ export function HeaderIconButton({
           aria-label={label}
           aria-pressed={pressed}
           aria-disabled={disabled || undefined}
+          data-copilot-trigger={copilotTrigger || undefined}
           className={disabled ? 'cursor-not-allowed opacity-50' : undefined}
           onClick={disabled ? undefined : onClick}
         >

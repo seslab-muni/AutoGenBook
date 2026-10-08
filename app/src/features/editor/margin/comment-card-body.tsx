@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { CheckCheck, Pencil, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
+import { CheckCheck, Pencil, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import type { Comment } from '@/api/types';
@@ -18,6 +18,7 @@ import { CommentComposer } from './comment-composer';
 import { CommentMarkdown } from './comment-markdown';
 import { problemMessage } from './errors';
 import { draftKey, useMarginStore } from './margin-store';
+import { SuggestionBlock } from './suggestion-card';
 
 function isPending(comment: Comment): boolean {
   return comment.id.startsWith('optimistic-');
@@ -118,7 +119,18 @@ function Message({
  * Reopen, and Edit / Delete on the user's own messages. Composers stay open with their text until
  * the server accepts it. `Send to Copilot` waits for phase 4 (`ctx.copilotActions`).
  */
-export function CommentCardBody({ thread, ctx }: MarginCardPartProps) {
+export function CommentCardBody({
+  thread,
+  ctx,
+  variant = 'comment',
+}: MarginCardPartProps & {
+  /**
+   * `review`: the root row is a reviewer issue shown by the card's own details above this (not a
+   * message), the actions are Fix with Copilot / Dismiss, and nobody can edit or delete the root.
+   */
+  variant?: 'comment' | 'review';
+}) {
+  const review = variant === 'review';
   const replyKey = draftKey(ctx.nodeId, `reply:${thread.id}`);
   const storedReply = useMarginStore((state) => state.drafts[replyKey]);
   const [replying, setReplying] = useState(
@@ -139,7 +151,10 @@ export function CommentCardBody({ thread, ctx }: MarginCardPartProps) {
   const resolve = useResolveCommentMutation(ctx.projectId, ctx.nodeId);
   const remove = useDeleteCommentMutation(ctx.projectId, ctx.nodeId);
   const resolved = thread.status === 'resolved';
-  const messages = [thread.root, ...thread.replies];
+  // Suggestions that arrived in this thread (`@copilot`, Send to Copilot) render as their own blocks.
+  const replies = thread.replies.filter((reply) => reply.kind !== 'suggestion');
+  const suggestions = thread.replies.filter((reply) => reply.kind === 'suggestion');
+  const messages = review ? replies : [thread.root, ...replies];
   const rootPending = isPending(thread.root);
 
   function failed(action: string) {
@@ -158,20 +173,25 @@ export function CommentCardBody({ thread, ctx }: MarginCardPartProps) {
 
   return (
     <div ref={bodyRef} className="flex flex-col gap-2">
-      <ul className="flex flex-col gap-3" aria-label="Messages">
-        {messages.map((message) => (
-          <Message
-            key={message.id}
-            comment={message}
-            own={ctx.currentUserId !== null && message.authorId === ctx.currentUserId}
-            ctx={ctx}
-            onDelete={(target) => {
-              deleteTrigger.current = document.activeElement as HTMLElement | null;
-              requestDelete(target);
-            }}
-          />
-        ))}
-      </ul>
+      {messages.length > 0 ? (
+        <ul className="flex flex-col gap-3" aria-label="Messages">
+          {messages.map((message) => (
+            <Message
+              key={message.id}
+              comment={message}
+              own={ctx.currentUserId !== null && message.authorId === ctx.currentUserId}
+              ctx={ctx}
+              onDelete={(target) => {
+                deleteTrigger.current = document.activeElement as HTMLElement | null;
+                requestDelete(target);
+              }}
+            />
+          ))}
+        </ul>
+      ) : null}
+      {suggestions.map((suggestion) => (
+        <SuggestionBlock key={suggestion.id} suggestion={suggestion} thread={thread} ctx={ctx} />
+      ))}
 
       {replying ? (
         <CommentComposer
@@ -185,9 +205,14 @@ export function CommentCardBody({ thread, ctx }: MarginCardPartProps) {
             focusLater('reply');
           }}
           onSubmit={async (text) => {
-            await create.mutateAsync({ bodyMarkdown: text, parentId: thread.root.id });
+            const reply = await create.mutateAsync({
+              bodyMarkdown: text,
+              parentId: thread.root.id,
+            });
             setReplying(false);
             focusLater('reply');
+            // A reply that mentions @copilot is a prompt about this thread.
+            ctx.onCommentSent?.(reply);
           }}
         />
       ) : (
@@ -202,6 +227,17 @@ export function CommentCardBody({ thread, ctx }: MarginCardPartProps) {
           >
             Reply
           </Button>
+          {review && ctx.copilotActions && ctx.onFixWithCopilot && !resolved ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={() => ctx.onFixWithCopilot?.(thread)}
+            >
+              <Sparkles />
+              Fix with Copilot
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"
@@ -210,16 +246,26 @@ export function CommentCardBody({ thread, ctx }: MarginCardPartProps) {
             onClick={() => {
               resolve.mutate(
                 { commentId: thread.root.id, resolved: !resolved },
-                { onError: failed(resolved ? 'reopen the thread' : 'resolve the thread') },
+                {
+                  onError: failed(
+                    resolved
+                      ? review
+                        ? 'restore the issue'
+                        : 'reopen the thread'
+                      : review
+                        ? 'dismiss the issue'
+                        : 'resolve the thread',
+                  ),
+                },
               );
               // Resolving hides the card unless resolved threads are shown: the focus goes with it.
               if (!resolved && !useMarginStore.getState().showResolved) ctx.restoreEditorFocus();
             }}
           >
-            {resolved ? <RotateCcw /> : <CheckCheck />}
-            {resolved ? 'Reopen' : 'Resolve'}
+            {resolved ? <RotateCcw /> : review ? <X /> : <CheckCheck />}
+            {resolved ? 'Reopen' : review ? 'Dismiss' : 'Resolve'}
           </Button>
-          {ctx.copilotActions && ctx.onSendToCopilot ? (
+          {!review && ctx.copilotActions && ctx.onSendToCopilot ? (
             <Button
               type="button"
               variant="outline"

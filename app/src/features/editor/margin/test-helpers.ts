@@ -1,4 +1,7 @@
+import { vi } from 'vitest';
+
 import type { Comment } from '@/api/types';
+import type { MarginCardContext } from './card-registry';
 import type { MarginThread } from './threads';
 
 let counter = 0;
@@ -50,4 +53,77 @@ export function makeThread(
     sectionLevel,
     quote: options.quote ?? root.anchor?.quote ?? '',
   };
+}
+
+/** A card context for tests: inert callbacks, overridable. */
+export function makeContext(overrides: Partial<MarginCardContext> = {}): MarginCardContext {
+  return {
+    projectId: 'book-reinforcement-learning',
+    nodeId: 'rl-sec-1-1',
+    currentUserId: 'user-mock-1',
+    copilotActions: true,
+    restoreEditorFocus: vi.fn(),
+    applyServerContent: vi.fn(),
+    hasUnsavedEdits: () => false,
+    flushEdits: () => Promise.resolve(),
+    holdSaving: () => Promise.resolve(() => {}),
+    sectionNumber: '1.1',
+    ...overrides,
+  };
+}
+
+/** A reviewer issue row (`kind=review`) as the graph import writes it. */
+export function makeReview(
+  overrides: Partial<Comment> = {},
+  payload: Record<string, unknown> = {},
+): Comment {
+  return makeComment({
+    kind: 'review',
+    authorId: null,
+    authorName: null,
+    bodyMarkdown: 'Termination is stated but never argued for.',
+    anchor: { quote: 'the quoted words', prefix: '', suffix: '', start: 4, end: 20 },
+    payload: {
+      issueKey: 'k1',
+      type: 'coverage',
+      severity: 'major',
+      requiredFix: 'Add a short argument.',
+      replaceFrom: '',
+      replaceTo: '',
+      quote: 'the quoted words',
+      okToKeep: false,
+      source: 'reviewer',
+      runId: null,
+      outdated: false,
+      ...payload,
+    },
+    ...overrides,
+  });
+}
+
+/** A suggestion row as the revision service writes it. */
+export function makeSuggestion(
+  overrides: Partial<Comment> = {},
+  payload: Record<string, unknown> = {},
+): Comment {
+  return makeComment({
+    kind: 'suggestion',
+    authorId: 'user-mock-1',
+    authorName: 'Ada Researcher',
+    bodyMarkdown: '',
+    anchor: null,
+    status: 'running',
+    payload: {
+      verb: 'revise',
+      scope: 'section',
+      instruction: 'Add a short proof.',
+      params: {},
+      threadId: null,
+      baseContentHash: 'a'.repeat(64),
+      model: 'm',
+      startedAt: new Date(Date.now() - 12_000).toISOString(),
+      ...payload,
+    },
+    ...overrides,
+  });
 }

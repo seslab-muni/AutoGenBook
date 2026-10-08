@@ -19,9 +19,11 @@ import type { MarginCardContext } from './card-registry';
 import { COMPOSER_KINDS } from './composer-registry';
 import type { AnchorMeasure, MarginGeometry } from './geometry';
 import { MarginCard } from './margin-card';
+import { ReviewSummaryStrip, STRIP_ID } from './review-summary-strip';
+import type { ReviewSummary } from '@/features/editor/lib/card-payloads';
 import { extraBottom, layoutMargin, type LayoutItem } from './margin-layout';
 import { DRAFT_ID, useMarginStore, type ComposerDraft } from './margin-store';
-import { isClosed, type MarginFilter, type MarginThread } from './threads';
+import { isThreadClosed, type MarginFilter, type MarginThread } from './threads';
 
 const DEFAULT_CARD_HEIGHT = 120;
 const CARD_GAP = 8;
@@ -47,6 +49,9 @@ interface MarginPanelProps {
   composerQuote: string;
   /** Null while the text pane is not mounted yet. */
   geometry: MarginGeometry | null;
+  /** The section's latest review verdict (`OutlineNode.reviewSummary`); shown with the All and Review filters. */
+  reviewSummary?: ReviewSummary | null | undefined;
+  reviewerScore?: number | null | undefined;
   /** Shown under the header when anchored comments are unavailable for this section (LaTeX). */
   anchorNote?: string | undefined;
 }
@@ -110,18 +115,22 @@ export function MarginPanel({
   composerRange,
   composerQuote,
   geometry,
+  reviewSummary = null,
+  reviewerScore = null,
   anchorNote,
 }: MarginPanelProps) {
   const filter = useMarginStore((state) => state.filter);
   const showResolved = useMarginStore((state) => state.showResolved);
   const focusedId = useMarginStore((state) => state.focusedId);
   const focusRequest = useMarginStore((state) => state.focusRequest);
+  const revealRequest = useMarginStore((state) => state.revealRequest);
   const setFilter = useMarginStore((state) => state.setFilter);
   const setShowResolved = useMarginStore((state) => state.setShowResolved);
   const focus = useMarginStore((state) => state.focus);
   const openComposer = useMarginStore((state) => state.openComposer);
 
-  const closedCount = useMemo(() => threads.filter(isClosed).length, [threads]);
+  const showStrip = reviewSummary !== null && (filter === 'all' || filter === 'review');
+  const closedCount = useMemo(() => threads.filter(isThreadClosed).length, [threads]);
 
   // ---- measurements -------------------------------------------------------------------
   const [measures, setMeasures] = useState<ReadonlyMap<string, AnchorMeasure>>(new Map());
@@ -225,7 +234,15 @@ export function MarginPanel({
 
   // ---- layout -------------------------------------------------------------------------
   const ordered = useMemo(() => {
-    const items: { id: string; draft: boolean; thread?: MarginThread; placed: boolean }[] = [];
+    const items: {
+      id: string;
+      draft: boolean;
+      strip?: boolean;
+      thread?: MarginThread;
+      placed: boolean;
+    }[] = [];
+    // The review verdict leads the pinned cards, at the top of the text column.
+    if (showStrip) items.push({ id: STRIP_ID, draft: false, strip: true, placed: false });
     if (composer && composer.anchor === null) {
       items.push({ id: DRAFT_ID, draft: true, placed: false });
     }
@@ -242,7 +259,7 @@ export function MarginPanel({
       items.push({ id: DRAFT_ID, draft: true, placed: measures.has(DRAFT_ID) });
     }
     return items;
-  }, [visible, composer, measures]);
+  }, [visible, composer, measures, showStrip]);
 
   const tops = useMemo(() => {
     const layoutItems: LayoutItem[] = ordered.map((item) => ({
@@ -276,12 +293,13 @@ export function MarginPanel({
     const apply = () =>
       geometry.setExtraBottom(extraBottom(extentRef.current, geometry.contentHeight()));
     apply();
-    const stop = geometry.subscribe(apply);
-    return () => {
-      stop();
-      geometry.setExtraBottom(0);
-    };
+    return geometry.subscribe(apply);
   }, [geometry, extent]);
+  // The extra space is removed only when the geometry itself goes away. Removing it on every
+  // change of `extent` (and reading the height in between) let the browser clamp the scroll
+  // position to the shorter content, so a card that grew under the reader's eyes (a suggestion
+  // turning from progress into a diff) threw the text back to the top.
+  useEffect(() => () => geometry?.setExtraBottom(0), [geometry]);
 
   // ---- scroll: the lane follows the text pane, never the other way round ---------------------
   useEffect(() => {
@@ -378,7 +396,17 @@ export function MarginPanel({
     element.focus();
   }, [focusRequest, tops]);
 
-  const empty = !loading && !error && visible.length === 0 && !composer;
+  // A request to bring a card into view without taking keyboard focus (a suggestion just started
+  // from a chip or a review card, which may sit below the fold).
+  const handledReveal = useRef(0);
+  useEffect(() => {
+    if (!revealRequest || revealRequest.nonce === handledReveal.current) return;
+    if (!elements.current.has(revealRequest.id)) return;
+    handledReveal.current = revealRequest.nonce;
+    handleFocusCard(revealRequest.id);
+  }, [revealRequest, tops, handleFocusCard]);
+
+  const empty = !loading && !error && visible.length === 0 && !composer && !showStrip;
 
   return (
     <aside aria-label="Margin" className="flex h-full min-h-0 flex-col bg-muted">
@@ -455,7 +483,7 @@ export function MarginPanel({
         {empty ? (
           <p className="p-4 text-sm text-muted-foreground">
             {closedCount > 0 && filter === 'all' && !showResolved
-              ? `All ${closedCount} comment ${closedCount === 1 ? 'thread is' : 'threads are'} resolved.`
+              ? `All ${closedCount} ${closedCount === 1 ? 'card is' : 'cards are'} resolved.`
               : 'No comments yet. Select some text and choose Comment, or comment on the whole section.'}
           </p>
         ) : null}
@@ -476,6 +504,20 @@ export function MarginPanel({
                   register={registerCard}
                   top={tops.map.get(DRAFT_ID)}
                   quote={composer.anchor ? composerQuote : null}
+                  threads={threads}
+                  range={composerRange}
+                />
+              );
+            }
+            if (item.strip && reviewSummary) {
+              return (
+                <ReviewSummaryStrip
+                  key={STRIP_ID}
+                  summary={reviewSummary}
+                  threads={threads}
+                  score={reviewerScore}
+                  register={registerCard}
+                  top={tops.map.get(STRIP_ID)}
                 />
               );
             }

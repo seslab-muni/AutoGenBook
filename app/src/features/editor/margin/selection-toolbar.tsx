@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 
 /** Shown on the buttons and wired in `ManuscriptSheet`. */
 export const COMMENT_SHORTCUT = 'Ctrl+Alt+M';
+export const PROMPT_SHORTCUT = 'Ctrl+Alt+P';
 
 const QUICK_CHIPS = ['Add proof', 'More rigorous', 'Shorter', 'Cite'] as const;
 
@@ -79,6 +80,8 @@ export function SelectionToolbar({
           variant="ghost"
           size="xs"
           className="text-background hover:bg-background/15 hover:text-background"
+          aria-keyshortcuts="Control+Alt+P"
+          title={`Prompt the copilot about the selection (${PROMPT_SHORTCUT})`}
           onClick={onPrompt}
         >
           <Sparkles />

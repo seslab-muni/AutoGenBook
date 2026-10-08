@@ -34,10 +34,10 @@ interface SelectionLayerProps {
   /** Focus the card of the highlight the caret is in. */
   onFocusThread: (id: string) => void;
   copilotActions: boolean;
-  /** `Prompt…` (phase 4): with the flag on and this supplied, the toolbar shows it. */
-  onPrompt?: (() => void) | undefined;
-  /** A quick chip (`Add proof`, ...; phase 4): likewise. */
-  onChip?: ((chip: string) => void) | undefined;
+  /** `Prompt…`: with the flag on and this supplied, the toolbar shows it. Gets the selected range. */
+  onPrompt?: ((anchor: Anchor) => void) | undefined;
+  /** A quick chip (`Add proof`, ...): likewise; sends at once for the selected range. */
+  onChip?: ((chip: string, anchor: Anchor) => void) | undefined;
 }
 
 /**
@@ -70,6 +70,10 @@ export function SelectionLayer({
   useEffect(() => {
     textRef.current = text;
   }, [text]);
+  const copilotRef = useRef(copilotActions);
+  useEffect(() => {
+    copilotRef.current = copilotActions;
+  }, [copilotActions]);
 
   // The selection as a trimmed code-point range of the draft, or null when there is nothing worth commenting on.
   const range = useMemo(() => {
@@ -148,23 +152,45 @@ export function SelectionLayer({
     };
   }, [visible, selection, view, cmView, geometry, paneRef]);
 
-  function startComment() {
-    if (!range) return;
+  /** The selection as an anchor, or `null` (with a message) when it is too long to act on. */
+  function selectedAnchor(verb: string): Anchor | null {
+    if (!range) return null;
     const current = textRef.current;
     const index = new CodePointIndex(current);
     const from = index.toCp(range.units[0]);
     const to = index.toCp(range.units[1]);
     if (to - from > 20000) {
-      toast.error('Select a shorter passage to comment on (at most 20,000 characters).');
-      return;
+      toast.error(`Select a shorter passage to ${verb} (at most 20,000 characters).`);
+      return null;
     }
+    return makeAnchor(current, from, to);
+  }
+
+  function startComment() {
+    const anchor = selectedAnchor('comment on');
+    if (!anchor) return;
     setDismissedKey(selectionKey);
-    onComment(makeAnchor(current, from, to));
+    onComment(anchor);
+  }
+
+  function startPrompt() {
+    const anchor = selectedAnchor('revise');
+    if (!anchor || !onPrompt) return;
+    setDismissedKey(selectionKey);
+    onPrompt(anchor);
+  }
+
+  function sendChip(chip: string) {
+    const anchor = selectedAnchor('revise');
+    if (!anchor || !onChip) return;
+    setDismissedKey(selectionKey);
+    onChip(chip, anchor);
   }
 
   // The latest handlers behind a ref: the pane listener is attached once.
   const handlersRef = useRef({
     startComment,
+    startPrompt: onPrompt ? startPrompt : undefined,
     onFocusThread,
     highlights,
     selection,
@@ -175,6 +201,7 @@ export function SelectionLayer({
   useEffect(() => {
     handlersRef.current = {
       startComment,
+      startPrompt: onPrompt ? startPrompt : undefined,
       onFocusThread,
       highlights,
       selection,
@@ -211,6 +238,16 @@ export function SelectionLayer({
         toast.message(
           'Select the text to comment on, or put the caret inside a highlight to jump to its card.',
         );
+      } else if (
+        event.code === 'KeyP' &&
+        event.altKey &&
+        (event.ctrlKey || event.metaKey) &&
+        h.startPrompt &&
+        copilotRef.current
+      ) {
+        event.preventDefault();
+        if (h.selection && h.selection.from !== h.selection.to) h.startPrompt();
+        else toast.message('Select the text to prompt the copilot about.');
       } else if (event.key === 'Escape' && h.visible && !event.defaultPrevented) {
         setDismissedKey(h.selectionKey);
       }
@@ -227,8 +264,8 @@ export function SelectionLayer({
       containerHeight={paneSize.height}
       onComment={startComment}
       copilotActions={copilotActions}
-      onPrompt={onPrompt}
-      onChip={onChip}
+      onPrompt={onPrompt ? startPrompt : undefined}
+      onChip={onChip ? sendChip : undefined}
     />
   );
 }

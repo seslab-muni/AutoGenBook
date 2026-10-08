@@ -20,6 +20,7 @@ const CTX: MarginCardContext = {
   applyServerContent: vi.fn(),
   hasUnsavedEdits: () => false,
   flushEdits: () => Promise.resolve(),
+  holdSaving: () => Promise.resolve(() => {}),
 };
 
 function geometry(y: Record<string, number>): MarginGeometry {
@@ -183,5 +184,53 @@ describe('MarginPanel', () => {
     await user.keyboard('{Escape}');
     expect(useMarginStore.getState().composer).toBeNull();
     expect(CTX.restoreEditorFocus).toHaveBeenCalled();
+  });
+
+  describe('review summary strip', () => {
+    const summary = {
+      okToKeep: false,
+      issueCount: 1,
+      suggestedEdits: ['Add a proof.'],
+      retrievalQueries: [],
+      reviewedAt: null,
+    };
+
+    it('leads the pinned cards with the review verdict and pushes them down', async () => {
+      useMarginStore.getState().setFilter('all');
+      renderPanel([anchored('a', 'First', 10)], { a: 20 }, { reviewSummary: summary });
+      const strip = await screen.findByRole('region', { name: 'Review summary' });
+      expect(strip).toHaveAttribute('data-thread-id', 'review-summary');
+      // It is laid out like a card: at the top of the text column, with the anchored card pushed below it.
+      await waitFor(() => {
+        const byId = Object.fromEntries(tops().map((t) => [t.id, t.top]));
+        expect(byId['review-summary']).toBe(0);
+        expect(byId['a']).toBeGreaterThan(0);
+      });
+    });
+
+    it('shows with All and Review, not with Comments or Suggestions', async () => {
+      for (const [filter, shown] of [
+        ['all', true],
+        ['review', true],
+        ['comment', false],
+        ['suggestion', false],
+      ] as const) {
+        useMarginStore.getState().setFilter(filter);
+        const view = renderPanel(
+          [anchored('a', 'First', 10)],
+          { a: 20 },
+          { reviewSummary: summary },
+        );
+        await waitFor(() =>
+          expect(!!screen.queryByRole('region', { name: 'Review summary' })).toBe(shown),
+        );
+        view.unmount();
+      }
+    });
+
+    it('shows nothing for a section that was never reviewed', () => {
+      renderPanel([], {}, { reviewSummary: null });
+      expect(screen.queryByRole('region', { name: 'Review summary' })).not.toBeInTheDocument();
+    });
   });
 });

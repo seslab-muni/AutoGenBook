@@ -15,7 +15,7 @@ const NODE_URL = '/p/book-reinforcement-learning?node=rl-sec-1-1';
 
 beforeEach(() => {
   useEditorStore.setState({ view: 'write' });
-  useUiStore.setState({ rightPane: 'margin', copilotOpen: true, rightOverlayOpen: false });
+  useUiStore.setState({ marginOpen: true, rightOverlayOpen: false });
   useMarginStore.getState().reset();
 });
 

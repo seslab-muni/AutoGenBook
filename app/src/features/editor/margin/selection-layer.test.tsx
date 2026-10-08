@@ -12,12 +12,18 @@ function Harness({
   onComment = vi.fn(),
   onFocusThread = vi.fn(),
   highlights = [],
+  copilotActions = false,
+  onPrompt,
+  onChip,
 }: {
   text: string;
   enabled?: boolean;
   onComment?: (a: unknown) => void;
   onFocusThread?: (id: string) => void;
   highlights?: { id: string; kind: string; start: number; end: number; hidden: boolean }[];
+  copilotActions?: boolean;
+  onPrompt?: (a: unknown) => void;
+  onChip?: (chip: string, a: unknown) => void;
 }) {
   const pane = useRef<HTMLDivElement>(null);
   return (
@@ -33,7 +39,9 @@ function Harness({
         highlights={highlights}
         onComment={onComment}
         onFocusThread={onFocusThread}
-        copilotActions={false}
+        copilotActions={copilotActions}
+        onPrompt={onPrompt}
+        onChip={onChip}
       />
     </div>
   );
@@ -88,5 +96,64 @@ describe('SelectionLayer', () => {
     await user.keyboard('{Control>}{Alt>}m{/Alt}{/Control}');
     expect(onFocusThread).toHaveBeenCalledWith('thread-1');
     expect(onComment).not.toHaveBeenCalled();
+  });
+
+  describe('copilot entry points', () => {
+    it('Prompt… and a chip hand over the selection as an anchor, trimmed, and dismiss the bar', async () => {
+      const user = userEvent.setup();
+      const onPrompt = vi.fn();
+      const onChip = vi.fn();
+      render(
+        <Harness text="  hello 𝒫 world  " copilotActions onPrompt={onPrompt} onChip={onChip} />,
+      );
+      select(0, 17);
+      await user.click(await screen.findByRole('button', { name: 'Prompt…' }));
+      // Code points: the quote and its offsets count 𝒫 once.
+      expect(onPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ quote: 'hello 𝒫 world', start: 2, end: 15 }),
+      );
+      expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+
+      select(0, 16);
+      await user.click(await screen.findByRole('button', { name: 'Add proof' }));
+      expect(onChip).toHaveBeenCalledWith(
+        'Add proof',
+        expect.objectContaining({ quote: 'hello 𝒫 world' }),
+      );
+    });
+
+    it('Ctrl+Alt+P prompts about the selection, and says what to do without one', async () => {
+      const user = userEvent.setup();
+      const onPrompt = vi.fn();
+      render(<Harness text="hello world" copilotActions onPrompt={onPrompt} />);
+      select(3, 3);
+      screen.getByTestId('pane').focus();
+      await user.keyboard('{Control>}{Alt>}p{/Alt}{/Control}');
+      expect(onPrompt).not.toHaveBeenCalled();
+      select(0, 5);
+      await screen.findByRole('toolbar');
+      await user.keyboard('{Control>}{Alt>}p{/Alt}{/Control}');
+      expect(onPrompt).toHaveBeenCalledWith(expect.objectContaining({ quote: 'hello' }));
+    });
+
+    it('does nothing for Ctrl+Alt+P when the copilot is off', async () => {
+      const user = userEvent.setup();
+      const onPrompt = vi.fn();
+      render(<Harness text="hello world" copilotActions={false} onPrompt={onPrompt} />);
+      select(0, 5);
+      await screen.findByRole('toolbar');
+      screen.getByTestId('pane').focus();
+      await user.keyboard('{Control>}{Alt>}p{/Alt}{/Control}');
+      expect(onPrompt).not.toHaveBeenCalled();
+    });
+
+    it('refuses to prompt about a passage that is too long', async () => {
+      const user = userEvent.setup();
+      const onPrompt = vi.fn();
+      render(<Harness text={'x'.repeat(20_001)} copilotActions onPrompt={onPrompt} />);
+      select(0, 20_001);
+      await user.click(await screen.findByRole('button', { name: 'Prompt…' }));
+      expect(onPrompt).not.toHaveBeenCalled();
+    });
   });
 });
