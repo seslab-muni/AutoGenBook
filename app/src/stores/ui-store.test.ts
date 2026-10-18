@@ -5,6 +5,7 @@ import {
   MAX_OUTLINE_WIDTH,
   MIN_OUTLINE_WIDTH,
   useUiStore,
+  DEFAULT_MARGIN_WIDTH,
 } from './ui-store';
 
 function resetStore() {
@@ -63,6 +64,7 @@ describe('useUiStore', () => {
       outlineOpen: false,
       marginOpen: true,
       outlineWidth: DEFAULT_OUTLINE_WIDTH,
+      marginWidth: DEFAULT_MARGIN_WIDTH,
     });
   });
 

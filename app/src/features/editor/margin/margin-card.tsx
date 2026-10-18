@@ -16,7 +16,8 @@ interface MarginCardProps {
   focused: boolean;
   /** The anchor has no rendered highlight in the current view. */
   approximate?: boolean;
-  onFocusCard: (id: string) => void;
+  /** `'card'`: the card itself was clicked or tabbed to; `'control'`: a button, field or link inside it. */
+  onFocusCard: (id: string, source: 'card' | 'control') => void;
   /** Told apart from cards with the same name: " (2 of 3)". */
   labelSuffix?: string;
 }
@@ -27,6 +28,16 @@ interface MarginCardProps {
  * `MARGIN_CARD_KINDS`. A focusable region: Tab reaches it, and focusing anything inside it focuses
  * the card (and so its highlight).
  */
+const CONTROL_SELECTOR =
+  'button, a[href], input, textarea, select, summary, [role="button"], [role="menuitem"], [role="textbox"], [contenteditable="true"]';
+
+/** Whether `target` is (inside) a control of the card, rather than the card's own surface. */
+function isControl(target: EventTarget, card: HTMLElement): boolean {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest(CONTROL_SELECTOR);
+  return control !== null && control !== card && card.contains(control);
+}
+
 function MarginCardInner({
   thread,
   ctx,
@@ -59,8 +70,12 @@ function MarginCardInner({
       data-focused={focused || undefined}
       aria-label={`${cardRegionName(thread)}${labelSuffix}`}
       tabIndex={0}
-      onFocus={() => onFocusCard(thread.id)}
-      onClick={() => onFocusCard(thread.id)}
+      onFocus={(event) =>
+        onFocusCard(thread.id, event.target === event.currentTarget ? 'card' : 'control')
+      }
+      onClick={(event) =>
+        onFocusCard(thread.id, isControl(event.target, event.currentTarget) ? 'control' : 'card')
+      }
       className={cn(
         '@container absolute inset-x-3 rounded-lg border bg-card p-3 text-card-foreground shadow-xs outline-none',
         'transition-[top,box-shadow] duration-150 motion-reduce:transition-none',
@@ -69,7 +84,9 @@ function MarginCardInner({
         closed && 'bg-card/70',
         top === undefined && 'invisible',
       )}
-      style={{ top: top ?? 0 }}
+      // The focused card is kept in place on screen (the text is scrolled instead), so its `top`
+      // must not animate: the slide would be the very jump that is avoided.
+      style={{ top: top ?? 0, ...(focused ? { transitionProperty: 'box-shadow' } : {}) }}
     >
       <header className="mb-2 flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 text-xs font-semibold">

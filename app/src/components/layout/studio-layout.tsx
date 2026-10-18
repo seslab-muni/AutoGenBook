@@ -7,9 +7,13 @@ import { usePaneResize } from '@/components/layout/use-pane-resize';
 import { useRightColumn } from '@/components/layout/use-right-pane';
 import { cn } from '@/lib/utils';
 import {
+  DEFAULT_MARGIN_WIDTH,
   DEFAULT_OUTLINE_WIDTH,
+  MAX_MARGIN_WIDTH,
   MAX_OUTLINE_WIDTH,
+  MIN_MARGIN_WIDTH,
   MIN_OUTLINE_WIDTH,
+  useMarginWidth,
   useOutlineOpen,
   useOutlineWidth,
   useUiStore,
@@ -21,8 +25,9 @@ interface StudioLayoutProps {
   /** Centre pane — always mounted, expands to fill closed side panes. */
   editorPane: ReactNode;
   /**
-   * Right pane (the margin workspace, 376px) — fully unmounted while collapsed. Below 1280px it
-   * floats over the editor's right edge instead of squeezing it.
+   * Right pane (the margin workspace, 376px by default, resizable `MIN_MARGIN_WIDTH`–`MAX_MARGIN_WIDTH`
+   * by the handle on its left edge) — fully unmounted while collapsed. Below 1280px it floats over
+   * the editor's right edge at the default width instead of squeezing it.
    */
   marginPane: ReactNode;
 }
@@ -34,15 +39,17 @@ interface StudioLayoutProps {
  * in the centre pane's toolbar. Only pane bodies scroll — this container
  * never does.
  */
-/** Width of the right column / side sheet. */
-const PANEL_WIDTH = 376;
+/** Width of the side sheet (the right column below 1280px, which is not resizable). */
+const PANEL_WIDTH = DEFAULT_MARGIN_WIDTH;
 
 export function StudioLayout({ outlinePane, editorPane, marginPane }: StudioLayoutProps) {
   const outlineOpen = useOutlineOpen();
   const { wide, open: marginOpen, toggle: toggleRight, close: closeRight } = useRightColumn();
   const outlineWidth = useOutlineWidth();
+  const marginWidth = useMarginWidth();
   const toggleOutline = useUiStore((state) => state.toggleOutline);
   const setOutlineWidth = useUiStore((state) => state.setOutlineWidth);
+  const setMarginWidth = useUiStore((state) => state.setMarginWidth);
   const overlay = !wide && marginOpen;
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -86,6 +93,14 @@ export function StudioLayout({ outlinePane, editorPane, marginPane }: StudioLayo
     max: MAX_OUTLINE_WIDTH,
     defaultWidth: DEFAULT_OUTLINE_WIDTH,
     onWidthChange: setOutlineWidth,
+  });
+  const { handleProps: rightHandleProps } = usePaneResize({
+    width: marginWidth,
+    min: MIN_MARGIN_WIDTH,
+    max: MAX_MARGIN_WIDTH,
+    defaultWidth: DEFAULT_MARGIN_WIDTH,
+    onWidthChange: setMarginWidth,
+    direction: 'left',
   });
 
   return (
@@ -154,11 +169,24 @@ export function StudioLayout({ outlinePane, editorPane, marginPane }: StudioLayo
         <div
           ref={panelRef}
           className={cn(
-            'flex shrink-0 flex-col overflow-hidden border-l bg-background',
-            wide ? 'w-[376px]' : 'absolute inset-y-0 right-0 z-20 w-[376px] shadow-2xl',
+            'flex shrink-0 overflow-hidden border-l bg-background',
+            wide
+              ? marginWidth === DEFAULT_MARGIN_WIDTH && 'w-[376px]'
+              : 'absolute inset-y-0 right-0 z-20 w-[376px] shadow-2xl',
           )}
+          style={wide && marginWidth !== DEFAULT_MARGIN_WIDTH ? { width: marginWidth } : undefined}
         >
-          {marginPane}
+          {wide ? (
+            <div
+              {...rightHandleProps}
+              aria-label="Resize right pane"
+              className={cn(
+                'w-1 shrink-0 cursor-col-resize touch-none bg-transparent',
+                'hover:bg-ring/50 focus-visible:bg-ring focus-visible:outline-none',
+              )}
+            />
+          ) : null}
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{marginPane}</div>
         </div>
       ) : null}
     </div>

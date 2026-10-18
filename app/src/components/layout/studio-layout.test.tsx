@@ -21,17 +21,47 @@ function renderLayout() {
   );
 }
 
+/** The right column's own element (the pane content sits in a wrapper beside the resize handle). */
+const column = () => screen.getByText(/right column/).closest<HTMLElement>('.border-l')!;
+
 beforeEach(() => {
-  useUiStore.setState({ outlineOpen: true, marginOpen: true, rightOverlayOpen: false });
+  useUiStore.setState({
+    outlineOpen: true,
+    marginOpen: true,
+    rightOverlayOpen: false,
+    marginWidth: 376,
+  });
 });
 
 describe('StudioLayout right column', () => {
   it('sits beside the editor at 1280px and wider', () => {
     setViewportWidth(1280);
     renderLayout();
-    const column = screen.getByText(/right column/).parentElement!;
-    expect(column.className).toContain('w-[376px]');
-    expect(column.className).not.toContain('absolute');
+    expect(column().className).toContain('w-[376px]');
+    expect(column().className).not.toContain('absolute');
+  });
+
+  it('is resized by the handle on its left edge, within bounds, and remembers the width', async () => {
+    const user = userEvent.setup();
+    setViewportWidth(1440);
+    renderLayout();
+    const handle = screen.getByRole('separator', { name: 'Resize right pane' });
+    expect(handle).toHaveAttribute('aria-valuenow', '376');
+    handle.focus();
+    // The handle is on the left edge: Left widens the pane, Right narrows it.
+    await user.keyboard('{ArrowLeft}');
+    expect(useUiStore.getState().marginWidth).toBe(392);
+    expect(column()).toHaveStyle({ width: '392px' });
+    expect(column().className).not.toContain('w-[376px]');
+    await user.keyboard('{End}');
+    expect(useUiStore.getState().marginWidth).toBe(640);
+    await user.keyboard('{Home}');
+    expect(useUiStore.getState().marginWidth).toBe(300);
+    // Back to the default: the responsive class again, no inline width.
+    await user.dblClick(handle);
+    expect(useUiStore.getState().marginWidth).toBe(376);
+    expect(column().className).toContain('w-[376px]');
+    expect(column().style.width).toBe('');
   });
 
   it('floats over the editor below 1280px, stays closed until asked for, and leaves the wide-screen preference alone', async () => {
@@ -42,8 +72,9 @@ describe('StudioLayout right column', () => {
     expect(screen.queryByText(/right column/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Show right pane' }));
-    const column = screen.getByText(/right column/).parentElement!;
-    expect(column.className).toContain('absolute');
+    expect(column().className).toContain('absolute');
+    // The side sheet is not resizable: no handle, the default width.
+    expect(screen.queryByRole('separator', { name: 'Resize right pane' })).toBeNull();
     expect(useUiStore.getState().marginOpen).toBe(false);
     // The editor makes room for the side sheet instead of being covered by it.
     expect(screen.getByRole('button', { name: 'in the editor' }).closest('[style]')).toHaveStyle({

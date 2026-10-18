@@ -270,6 +270,13 @@ export function MarginPanel({
     return items;
   }, [visible, composer, measures]);
 
+  /**
+   * The card the layout keeps at its own y (the others make room around it). It is the focused card
+   * when that card was focused deliberately (a click on the card, a highlight's focus request, a
+   * reveal); a click on a control inside a card (Reply, Fix with Copilot, Accept) focuses the card
+   * without snapping it, so nothing moves under the pointer.
+   */
+  const [snapId, setSnapId] = useState<string | null>(null);
   const tops = useMemo(() => {
     const layoutItems: LayoutItem[] = ordered.map((item) => ({
       id: item.id,
@@ -277,10 +284,10 @@ export function MarginPanel({
       height: heights.get(item.id) ?? DEFAULT_CARD_HEIGHT,
     }));
     return {
-      map: layoutMargin(layoutItems, { gap: CARD_GAP, focusedId, minTop: inset }),
+      map: layoutMargin(layoutItems, { gap: CARD_GAP, focusedId: snapId, minTop: inset }),
       items: layoutItems,
     };
-  }, [ordered, measures, focusedId, heights, inset]);
+  }, [ordered, measures, snapId, heights, inset]);
 
   // Landmarks need distinct names: cards that would read the same ("Comment by Ada on “x”") are numbered.
   const suffixes = useMemo(() => {
@@ -408,15 +415,57 @@ export function MarginPanel({
     return () => cancelAnimationFrame(frame);
   }, [tops, extent, geometry, revealVersion]);
 
-  const handleFocusCard = useCallback(
+  /** The panel asked for a card to be brought to its text: snap it there and scroll it into view. */
+  const revealCard = useCallback(
     (id: string) => {
       focus(id);
+      setSnapId(id);
       revealRef.current = { id, attempts: 0 };
       setRevealVersion((version) => version + 1);
       const thread = threadsRef.current.find((candidate) => candidate.id === id);
       if (thread?.range) geometry?.reveal(id, thread.range.start);
     },
     [focus, geometry],
+  );
+
+  /** Set while the panel itself moves keyboard focus into a card: that focus is not a person's. */
+  const programmaticFocus = useRef(false);
+
+  /**
+   * A person focused a card. A click on the card itself (or Tab onto it) snaps it to its text the
+   * way a reveal does, but keeps it where it is on screen: the text pane is scrolled by exactly the
+   * displacement the snap would cause, so the text comes level with the card and nothing moves under
+   * the pointer. A click on a control inside a card only focuses it: no snap, no scroll.
+   */
+  // Read through refs: the handler is a prop of every (memoised) card, so it must not change with
+  // the layout, which changes on every keystroke.
+  const layoutRef = useRef({ tops, inset, snapId });
+  useLayoutEffect(() => {
+    layoutRef.current = { tops, inset, snapId };
+  }, [tops, inset, snapId]);
+  const handleFocusCard = useCallback(
+    (id: string, source: 'card' | 'control') => {
+      if (programmaticFocus.current) {
+        revealCard(id);
+        return;
+      }
+      const layout = layoutRef.current;
+      if (source === 'card' && id !== layout.snapId) {
+        const current = layout.tops.map.get(id);
+        const landing = layoutMargin(layout.tops.items, {
+          gap: CARD_GAP,
+          focusedId: id,
+          minTop: layout.inset,
+        }).get(id);
+        if (geometry && current !== undefined && landing !== undefined && landing !== current) {
+          geometry.scrollBy(landing - current);
+          applyTransform();
+        }
+        setSnapId(id);
+      }
+      focus(id);
+    },
+    [focus, geometry, revealCard, applyTransform],
   );
 
   // A request to move keyboard focus into a card (a highlight's shortcut).
@@ -426,18 +475,32 @@ export function MarginPanel({
     const element = elements.current.get(focusRequest.id);
     if (!element) return;
     handledNonce.current = focusRequest.nonce;
-    element.focus();
+    programmaticFocus.current = true;
+    try {
+      element.focus();
+    } finally {
+      programmaticFocus.current = false;
+    }
   }, [focusRequest, tops]);
 
   // A request to bring a card into view without taking keyboard focus (a suggestion just started
-  // from a chip or a review card, which may sit below the fold).
+  // from a chip or a review card, which may sit below the fold). The card the person is working in
+  // (focused: they pressed Fix with Copilot or Send to Copilot in it, or mentioned @copilot in its
+  // composer) and a card already in view are left where they are - they are being looked at, and
+  // snapping or scrolling them would only be a jump.
   const handledReveal = useRef(0);
   useEffect(() => {
     if (!revealRequest || revealRequest.nonce === handledReveal.current) return;
-    if (!elements.current.has(revealRequest.id)) return;
+    const element = elements.current.get(revealRequest.id);
+    const lane = viewport.current;
+    if (!element || !lane) return;
     handledReveal.current = revealRequest.nonce;
-    handleFocusCard(revealRequest.id);
-  }, [revealRequest, tops, handleFocusCard]);
+    if (revealRequest.id === focusedId) return;
+    const box = element.getBoundingClientRect();
+    const view = lane.getBoundingClientRect();
+    if (box.top >= view.top - 1 && box.bottom <= view.bottom + 1) focus(revealRequest.id);
+    else revealCard(revealRequest.id);
+  }, [revealRequest, tops, focusedId, focus, revealCard]);
 
   const empty = !loading && !error && visible.length === 0 && !composer;
 

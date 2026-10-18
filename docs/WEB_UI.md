@@ -93,7 +93,9 @@ review summary strip, when a run produced one) and the `Locked` badge (now the p
 header's lock button). The save status moved to the header.
 
 **Margin workspace: anchors, comments and highlights (issue #182, phase 2).**
-Human comments live in the margin, a 376px `bg-muted` column that replaces the
+Human comments live in the margin, a `bg-muted` column (376px by default; on wide screens a
+handle on its left edge resizes it between 300 and 640px, remembered in `useUiStore.marginWidth`;
+the narrow-screen side sheet keeps the default) that replaces the
 old right pane's role.
 
 *Right column.* `features/editor/margin/right-pane.tsx` is the close button and the slot
@@ -245,8 +247,13 @@ Copilot button, which prompts about the whole section, works in both views).
 Review*, *Show resolved (n)* (resolved threads hidden by default), *Comment on the
 whole section*. Each card sits at the y of its anchor's first line (`geometry.ts`:
 painted ranges in Write, `coordsAtPos` in Source), stacked top-down by the pure
-`margin-layout.ts` (`layoutMargin`; the focused card keeps its y and the cards above
-it are pushed up). Section-level and orphaned cards are pinned at the top of the text
+`margin-layout.ts` (`layoutMargin`; the *snapped* card keeps its y and the cards above
+it are pushed up). A card is snapped when it was focused deliberately: a click on the card
+itself or Tab onto it, a highlight's focus request, a reveal. The click keeps the card where
+it is on screen - the text pane is scrolled by exactly the displacement the snap causes, so the
+text comes level with the card and nothing moves under the pointer (the focused card's `top`
+does not animate for the same reason). A click on a control inside a card (Reply, Fix with
+Copilot, Accept…) only focuses it: no snap, no scroll. Section-level and orphaned cards are pinned at the top of the text
 column (they scroll away with the text); an anchor that resolves but has no rendered
 highlight in the current view is placed by the nearest positioned block and labelled
 *Not shown in this view*. The card lane never scrolls by itself: it is translated by
@@ -258,8 +265,9 @@ animation frame (anchors far from the viewport keep their last measure until scr
 so CodeMirror's height revisions do not re-lay out 150 cards on every wheel step). The extra
 scroll space is a spacer *inside* the Write view's scroll content (CodeMirror: bottom padding of
 its content) and is recomputed whenever the geometry reports the content height changed; a
-focused card the layout pushed out of sight is scrolled into view; a touch drag over the lane
-scrolls the text pane. Composers (new comment, reply, edit) stay open with their text until
+card revealed by the panel (a suggestion started from a chip, the prompt window opening) is
+scrolled into view only when it is not already in view, and a snapped card the layout pushed
+out of sight is scrolled into view; a touch drag over the lane scrolls the text pane. Composers (new comment, reply, edit) stay open with their text until
 the server accepts it (the new comment is written into the cache from the POST response before
 it closes, so nothing disappears until the refetch), show the server's message on failure and
 ignore a second submit; unsent text lives in `useMarginStore.drafts` (keyed `node:new`,

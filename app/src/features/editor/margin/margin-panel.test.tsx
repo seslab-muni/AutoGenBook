@@ -112,6 +112,57 @@ describe('MarginPanel', () => {
     });
   });
 
+  describe('focus', () => {
+    // a at 200 and b at 210 overlap: b is stacked below a (200 + 120 + 8 = 328). Focusing b snaps it
+    // to 210 and pushes a up to 82, which fits above `minTop`, so the snapped layout is used.
+    const displaced = () => {
+      const g = geometry({ a: 200, b: 210 });
+      renderPanel([anchored('a', 'First', 10), anchored('b', 'Second', 20)], {}, { geometry: g });
+      return g;
+    };
+    const card = (id: string) =>
+      document.querySelector<HTMLElement>(`section[data-thread-id="${id}"]`)!;
+    const topOf = (id: string) => parseFloat(card(id).style.top);
+
+    it('a click on a control inside a displaced card moves neither the card nor the text', async () => {
+      const user = userEvent.setup();
+      const g = displaced();
+      await waitFor(() => expect(topOf('b')).toBe(328));
+      await user.click(within(card('b')).getByRole('button', { name: 'Reply' }));
+      expect(useMarginStore.getState().focusedId).toBe('b');
+      expect(topOf('b')).toBe(328);
+      expect(topOf('a')).toBe(200);
+      expect(g.scrollEl.scrollTop).toBe(0);
+      expect(g.reveal).not.toHaveBeenCalled();
+    });
+
+    it('a click on the card itself snaps it to its text but keeps it in place: the text pane scrolls by the displacement', async () => {
+      const user = userEvent.setup();
+      const g = displaced();
+      await waitFor(() => expect(topOf('b')).toBe(328));
+      await user.click(card('b'));
+      expect(useMarginStore.getState().focusedId).toBe('b');
+      await waitFor(() => expect(topOf('b')).toBe(210));
+      expect(topOf('a')).toBe(82);
+      expect(g.scrollEl.scrollTop).toBe(210 - 328);
+      // A control inside the (now snapped) card changes nothing further.
+      await user.click(within(card('b')).getByRole('button', { name: 'Reply' }));
+      expect(topOf('b')).toBe(210);
+      expect(g.scrollEl.scrollTop).toBe(210 - 328);
+    });
+
+    it('a reveal request for a card already in view leaves it where it is', async () => {
+      const g = displaced();
+      await waitFor(() => expect(topOf('b')).toBe(328));
+      // jsdom lays nothing out: every box is 0×0 at the origin, i.e. "in view".
+      useMarginStore.getState().revealCard('b');
+      await waitFor(() => expect(useMarginStore.getState().focusedId).toBe('b'));
+      expect(topOf('b')).toBe(328);
+      expect(g.scrollEl.scrollTop).toBe(0);
+      expect(g.reveal).not.toHaveBeenCalled();
+    });
+  });
+
   it('pins section-level and orphaned cards at the top, ahead of anchored ones', async () => {
     const section = makeThread(makeComment({ id: 's', bodyMarkdown: 'About everything' }));
     const orphan = makeThread(
