@@ -973,6 +973,508 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/comments:
+    get:
+      tags:
+      - comments
+      summary: List Project Comments
+      description: 'Whole threads; `kind`/`status` select thread roots and `limit`/`offset`/
+
+        `total` count roots (each root''s replies come along).'
+      operationId: comments-list_project_comments
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentKind'
+          - type: 'null'
+          title: Kind
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentStatus'
+          - type: 'null'
+          title: Status
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 1
+          default: 1000
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_Comment_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/comments/{comment_id}:
+    get:
+      tags:
+      - comments
+      summary: Get Comment
+      description: 'One card, full payload (a suggestion''s `originalMarkdown` /
+
+        `replacementMarkdown` included - the project-wide list leaves them out).'
+      operationId: comments-get_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Comment Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - comments
+      summary: Update Comment
+      operationId: comments-update_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Comment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - comments
+      summary: Delete Comment
+      operationId: comments-delete_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Comment Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/outline/{node_id}/comments:
+    get:
+      tags:
+      - comments
+      summary: List Node Comments
+      description: Whole threads of the node, not paged (`total` counts thread roots).
+      operationId: comments-list_node_comments
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      - name: kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentKind'
+          - type: 'null'
+          title: Kind
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CommentStatus'
+          - type: 'null'
+          title: Status
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_Comment_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - comments
+      summary: Create Node Comment
+      operationId: comments-create_node_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/comments/{comment_id}/resolve:
+    post:
+      tags:
+      - comments
+      summary: Resolve Comment
+      description: 'Resolve a thread (`{}` or `{"resolved": true}`) or reopen it
+
+        (`{"resolved": false}`). Only a thread''s root can be resolved.'
+      operationId: comments-resolve_comment
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Comment Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/CommentResolve'
+              - type: 'null'
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/projects/{project_id}/outline/{node_id}/revisions:
+    post:
+      tags:
+      - revisions
+      summary: Create Revision
+      description: 'Start a copilot revision of a section (or a selected range of
+        it).
+
+
+        `verb: "revise"` -> 202 `{kind: "suggestion", suggestion}` with the new
+
+        `running` suggestion card; follow it with `GET /suggestions/{id}/events/stream`
+
+        (or the node''s comment list). `verb: "rewrite"` -> 202 `{kind: "run", runId,
+
+        run}`: it is a regenerate run, with the regenerate endpoint''s 409s.'
+      operationId: revisions-create_revision
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Project Id
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevisionCreate'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/SuggestionStarted'
+                - $ref: '#/components/schemas/RunStarted'
+                discriminator:
+                  propertyName: kind
+                  mapping:
+                    suggestion: '#/components/schemas/SuggestionStarted'
+                    run: '#/components/schemas/RunStarted'
+                title: Response Revisions-Create Revision
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/suggestions/{suggestion_id}/accept:
+    post:
+      tags:
+      - revisions
+      summary: Accept Suggestion
+      description: 'Apply a `pending` suggestion to the section (409 `stale` when
+        the text
+
+        changed so that it no longer applies cleanly, 409 `not_pending`,
+
+        `node_generating`, `run_active`). Settles the thread / issues it addressed
+
+        and re-anchors the section''s other cards, all in one transaction.'
+      operationId: revisions-accept_suggestion
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Suggestion Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/SuggestionAccept'
+              - type: 'null'
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuggestionAccepted'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/suggestions/{suggestion_id}/reject:
+    post:
+      tags:
+      - revisions
+      summary: Reject Suggestion
+      operationId: revisions-reject_suggestion
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Suggestion Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/suggestions/{suggestion_id}/cancel:
+    post:
+      tags:
+      - revisions
+      summary: Cancel Suggestion
+      description: 'Cancel a `running` revision (author only). Idempotent for an already
+
+        `cancelled` one.'
+      operationId: revisions-cancel_suggestion
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Suggestion Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/suggestions/{suggestion_id}/events/stream:
+    get:
+      tags:
+      - revisions
+      summary: Stream Suggestion Events
+      description: 'Server-sent events of a revision: `progress` events (the engine''s
+
+        `retrieve` / `revise` / `diff` stages), then one terminal `done`
+
+        (the suggestion is `pending`; also sent for an already accepted/rejected one),
+
+        `failed` or `cancelled` event whose data carries the final suggestion.
+
+        Same framing as the run-event stream: event `id` = `seq` (resume with
+
+        `Last-Event-ID`), periodic keep-alive pings, the stream ends after the
+
+        terminal event.'
+      operationId: revisions-stream_suggestion_events
+      security:
+      - cookieAuth: []
+      parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Suggestion Id
+      responses:
+        '200':
+          description: '`text/event-stream`. `event: progress` messages carry a `SuggestionProgress`;
+            the last message is `event: done|failed|cancelled` carrying a `SuggestionTerminal`.'
+          content:
+            application/json:
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/SuggestionProgress'
+                - $ref: '#/components/schemas/SuggestionTerminal'
+                title: Response 200 Revisions-Stream Suggestion Events
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/projects/{project_id}/runs:
     post:
       tags:
@@ -1535,6 +2037,236 @@ components:
       - n_pages
       - needsSubdivision
       title: BookStructureNode
+    Comment:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        projectId:
+          type: string
+          format: uuid
+          title: Projectid
+        nodeId:
+          type: string
+          format: uuid
+          title: Nodeid
+        kind:
+          $ref: '#/components/schemas/CommentKind'
+        authorId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Authorid
+        authorName:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorname
+        anchor:
+          anyOf:
+          - $ref: '#/components/schemas/CommentAnchorOut'
+          - type: 'null'
+        status:
+          $ref: '#/components/schemas/CommentStatus'
+        threadId:
+          type: string
+          format: uuid
+          title: Threadid
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+        bodyMarkdown:
+          type: string
+          title: Bodymarkdown
+        payload:
+          additionalProperties: true
+          type: object
+          title: Payload
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+        updatedAt:
+          type: string
+          format: date-time
+          title: Updatedat
+        editedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Editedat
+      type: object
+      required:
+      - id
+      - projectId
+      - nodeId
+      - kind
+      - authorId
+      - anchor
+      - status
+      - threadId
+      - parentId
+      - bodyMarkdown
+      - payload
+      - createdAt
+      - updatedAt
+      title: Comment
+    CommentAnchorIn:
+      properties:
+        quote:
+          type: string
+          maxLength: 20000
+          minLength: 1
+          title: Quote
+        prefix:
+          type: string
+          maxLength: 32
+          title: Prefix
+          default: ''
+        suffix:
+          type: string
+          maxLength: 32
+          title: Suffix
+          default: ''
+        start:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Start
+        end:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: End
+      additionalProperties: false
+      type: object
+      required:
+      - quote
+      title: CommentAnchorIn
+      description: 'Request anchor: a W3C text-quote selector over the node''s
+
+        `contentMarkdown`. `start`/`end` are Unicode code-point offsets (not UTF-16
+
+        units), `end` exclusive; both null = unknown/orphaned. The server
+
+        re-resolves it (`api.application.comment_anchors.resolve_anchor`) and
+
+        refreshes `prefix`/`suffix` from the content.'
+    CommentAnchorOut:
+      properties:
+        quote:
+          type: string
+          title: Quote
+          default: ''
+        prefix:
+          type: string
+          title: Prefix
+          default: ''
+        suffix:
+          type: string
+          title: Suffix
+          default: ''
+        start:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Start
+        end:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: End
+      type: object
+      title: CommentAnchorOut
+      description: 'Response anchor. Deliberately unable to fail: stored anchors (e.g.
+        from
+
+        a fuzzy re-anchor, which rewrites `quote` to the text actually matched, or
+
+        the reviewer import) always serialise. None of the request rules apply;
+
+        a missing/wrong-typed `quote`/`prefix`/`suffix` becomes `""` and bad or
+
+        partial `start`/`end` degrade to null (orphaned).'
+    CommentCreate:
+      properties:
+        bodyMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+          title: Bodymarkdown
+        anchor:
+          anyOf:
+          - $ref: '#/components/schemas/CommentAnchorIn'
+          - type: 'null'
+        parentId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parentid
+      additionalProperties: false
+      type: object
+      required:
+      - bodyMarkdown
+      title: CommentCreate
+    CommentKind:
+      type: string
+      enum:
+      - comment
+      - suggestion
+      - review
+      title: CommentKind
+    CommentResolve:
+      properties:
+        resolved:
+          type: boolean
+          title: Resolved
+          default: true
+      additionalProperties: false
+      type: object
+      title: CommentResolve
+    CommentStatus:
+      type: string
+      enum:
+      - open
+      - resolved
+      - orphaned
+      - running
+      - pending
+      - accepted
+      - rejected
+      - failed
+      - cancelled
+      title: CommentStatus
+      description: 'Comment and review rows: `open | resolved | orphaned`. Suggestion
+        rows:
+
+        `running` (job in flight, cancellable), `pending` (finished, awaiting
+
+        accept/reject), `accepted`, `rejected`, `failed`, `cancelled`. A DB CHECK
+
+        (`ck_node_comments_kind_status`) enforces the pairing.'
+    CommentUpdate:
+      properties:
+        bodyMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+          title: Bodymarkdown
+      additionalProperties: false
+      type: object
+      required:
+      - bodyMarkdown
+      title: CommentUpdate
     ExportRequestIn:
       properties:
         format:
@@ -1765,6 +2497,12 @@ components:
           - type: string
           - type: 'null'
           title: Reviewernotes
+        reviewSummary:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Reviewsummary
         structureLocked:
           type: boolean
           title: Structurelocked
@@ -1779,6 +2517,19 @@ components:
             format: uuid
           type: array
           title: Sourceids
+        openCommentCount:
+          type: integer
+          title: Opencommentcount
+          default: 0
+        pendingSuggestionCount:
+          type: integer
+          title: Pendingsuggestioncount
+          default: 0
+        contentHash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Contenthash
         createdAt:
           type: string
           format: date-time
@@ -1954,6 +2705,12 @@ components:
           - type: string
           - type: 'null'
           title: Reviewernotes
+        reviewSummary:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Reviewsummary
         structureLocked:
           type: boolean
           title: Structurelocked
@@ -1968,6 +2725,19 @@ components:
             format: uuid
           type: array
           title: Sourceids
+        openCommentCount:
+          type: integer
+          title: Opencommentcount
+          default: 0
+        pendingSuggestionCount:
+          type: integer
+          title: Pendingsuggestioncount
+          default: 0
+        contentHash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Contenthash
         createdAt:
           type: string
           format: date-time
@@ -2064,6 +2834,12 @@ components:
           - type: string
           - type: 'null'
           title: Contentmarkdown
+        expectedContentHash:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Expectedcontenthash
         contentLatex:
           anyOf:
           - type: string
@@ -2160,6 +2936,29 @@ components:
       - latex
       - pdf
       title: OutputFormat
+    Page_Comment_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Comment'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      title: Page[Comment]
     Page_File_:
       properties:
         items:
@@ -2665,6 +3464,99 @@ components:
       type: object
       title: RegenerateRequestIn
       description: Request body of `POST /projects/{id}/outline/{nodeId}/regenerate`.
+    RevisionCreate:
+      properties:
+        verb:
+          type: string
+          enum:
+          - revise
+          - rewrite
+          title: Verb
+          default: revise
+        scope:
+          type: string
+          enum:
+          - section
+          - range
+          title: Scope
+          default: section
+        anchor:
+          anyOf:
+          - $ref: '#/components/schemas/CommentAnchorIn'
+          - type: 'null'
+        instruction:
+          type: string
+          maxLength: 20000
+          title: Instruction
+          default: ''
+        params:
+          $ref: '#/components/schemas/RevisionParams'
+        threadId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Threadid
+      additionalProperties: false
+      type: object
+      title: RevisionCreate
+      description: '`POST /projects/{id}/outline/{nodeId}/revisions`.
+
+
+        `verb: "revise"` starts an in-process copilot job and answers with the
+
+        `running` suggestion. `verb: "rewrite"` starts a regenerate run of the
+
+        section (instruction = its prompt modifier; no scope/anchor/params/threadId)
+
+        and answers with the run.'
+    RevisionParams:
+      properties:
+        moreProofs:
+          type: boolean
+          title: Moreproofs
+          default: false
+        moreExamples:
+          type: boolean
+          title: Moreexamples
+          default: false
+        moreRigorous:
+          type: boolean
+          title: Morerigorous
+          default: false
+        shorter:
+          type: boolean
+          title: Shorter
+          default: false
+        longer:
+          type: boolean
+          title: Longer
+          default: false
+        citeSources:
+          type: boolean
+          title: Citesources
+          default: false
+        fixIssueIds:
+          items:
+            type: string
+            format: uuid
+          type: array
+          maxItems: 25
+          title: Fixissueids
+        addressCommentIds:
+          items:
+            type: string
+            format: uuid
+          type: array
+          maxItems: 25
+          title: Addresscommentids
+      additionalProperties: false
+      type: object
+      title: RevisionParams
+      description: 'The copilot''s parameter chips. `fixIssueIds` are `kind=review`
+        card ids,
+
+        `addressCommentIds` are comment-thread root ids, both of this section.'
     Run:
       properties:
         id:
@@ -3053,6 +3945,24 @@ components:
       - exportTexOnly
       - llmModel
       title: RunOptionsOut
+    RunStarted:
+      properties:
+        kind:
+          type: string
+          const: run
+          title: Kind
+          default: run
+        runId:
+          type: string
+          format: uuid
+          title: Runid
+        run:
+          $ref: '#/components/schemas/Run'
+      type: object
+      required:
+      - runId
+      - run
+      title: RunStarted
     RunStatus:
       type: string
       enum:
@@ -3242,6 +4152,97 @@ components:
           title: Description
       type: object
       title: SourceUpdate
+    SuggestionAccept:
+      properties:
+        hunkIndexes:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+            maxItems: 10000
+          - type: 'null'
+          title: Hunkindexes
+        expectedContentHash:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Expectedcontenthash
+      additionalProperties: false
+      type: object
+      title: SuggestionAccept
+      description: Optional body of `POST /suggestions/{id}/accept`.
+    SuggestionAccepted:
+      properties:
+        suggestion:
+          $ref: '#/components/schemas/Comment'
+        node:
+          $ref: '#/components/schemas/OutlineNode'
+      type: object
+      required:
+      - suggestion
+      - node
+      title: SuggestionAccepted
+      description: The accepted suggestion and the node as it is now.
+    SuggestionProgress:
+      properties:
+        seq:
+          type: integer
+          title: Seq
+        ts:
+          type: string
+          title: Ts
+        stage:
+          type: string
+          title: Stage
+        level:
+          type: string
+          title: Level
+        message:
+          type: string
+          title: Message
+        payload:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Payload
+      type: object
+      required:
+      - seq
+      - ts
+      - stage
+      - level
+      - message
+      title: SuggestionProgress
+      description: '`data` of a `progress` event of `GET /suggestions/{id}/events/stream`.'
+    SuggestionStarted:
+      properties:
+        kind:
+          type: string
+          const: suggestion
+          title: Kind
+          default: suggestion
+        suggestion:
+          $ref: '#/components/schemas/Comment'
+      type: object
+      required:
+      - suggestion
+      title: SuggestionStarted
+    SuggestionTerminal:
+      properties:
+        status:
+          type: string
+          title: Status
+        suggestion:
+          anyOf:
+          - $ref: '#/components/schemas/Comment'
+          - type: 'null'
+      type: object
+      required:
+      - status
+      title: SuggestionTerminal
+      description: '`data` of the terminal `done` / `failed` / `cancelled` event.'
     TargetAudience:
       type: string
       enum:

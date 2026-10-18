@@ -30,7 +30,7 @@ export function SectionJumpSelect({ flat, selectedNodeId, onSelectNode }: Sectio
     <Select {...(selectedNodeId ? { value: selectedNodeId } : {})} onValueChange={onSelectNode}>
       <SelectTrigger
         size="sm"
-        className="max-w-[220px] sm:max-w-[320px]"
+        className="max-w-[220px] min-w-0 shrink sm:max-w-[320px]"
         aria-label="Jump to section"
       >
         <SelectValue placeholder="Jump to section…" />

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 
 from api.domain.models import MathLevel, NodeStatus, SourceScope
 from api.presentation.schemas.common import BaseSchema, NonBlankStr
@@ -43,6 +43,11 @@ class OutlineNode(BaseSchema):
     rag_citations: list[dict] = Field(default_factory=list)
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
+    # Issue #182: the section's latest reviewer verdict, written by the graph
+    # import: `{okToKeep, issueCount, suggestedEdits[], retrievalQueries[],
+    # runId, reviewedAt}`; null = never reviewed. Read-only. The individual
+    # issues are `kind=review` comments.
+    review_summary: dict | None = None
     structure_locked: bool
     # Issue #113: keep this leaf's `contentMarkdown` as-is across full runs
     # (it is still used as context for the sections generated after it).
@@ -53,6 +58,15 @@ class OutlineNode(BaseSchema):
     # `sourceIds` is non-empty only when `sourceScope` is `selected`.
     source_scope: SourceScope
     source_ids: list[uuid.UUID]
+    # Issue #182 outline badges. `openCommentCount`: root comment threads not
+    # yet resolved (open or orphaned); `pendingSuggestionCount`: suggestion rows
+    # that are `running` or `pending`. Soft-deleted rows are not counted.
+    open_comment_count: int = 0
+    pending_suggestion_count: int = 0
+    # sha256 hex of the UTF-8 `contentMarkdown` (the same hash as a suggestion's
+    # `baseContentHash`). Only on the single-node responses (GET/PATCH node,
+    # accept); null in lists and trees. Send it back as `expectedContentHash`.
+    content_hash: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -94,6 +108,9 @@ class OutlineNodeUpdate(BaseSchema):
     math_level: MathLevel | None = None
     sub_prompt: str | None = None
     content_markdown: str | None = None
+    # Optimistic precondition for a `contentMarkdown` write: the `contentHash`
+    # of the text this edit was based on; 409 `content_conflict` on mismatch.
+    expected_content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     content_latex: str | None = None
     reviewer_score: float | None = None
     reviewer_notes: str | None = None
@@ -107,6 +124,15 @@ class OutlineNodeUpdate(BaseSchema):
     # this project (422 otherwise). `sourceIds` alone keeps the scope.
     source_scope: SourceScope | None = None
     source_ids: list[uuid.UUID] | None = None
+
+
+    @field_validator("content_markdown")
+    @classmethod
+    def _content_markdown_not_null(cls, value: str | None) -> str | None:
+        # The column is NOT NULL: clear a section with "" (an explicit null used to be a 500).
+        if value is None:
+            raise ValueError("must be a string (send \"\" to clear the section)")
+        return value
 
 
 class OutlineTreeReplaceNode(BaseSchema):

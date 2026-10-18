@@ -175,7 +175,7 @@ export function SourcesDialog({ projectId, createXhr }: SourcesDialogProps) {
 
   const { data, isPending } = useQuery({ ...sourcesQueries.list(projectId), enabled: open });
   const citationCounts = useSourceCitationCounts(projectId);
-  // No params: shares the route loader's `outline.flat` cache entry, like `CopilotPanel`.
+  // No params: shares the route loader's `outline.flat` cache entry.
   const { data: outlineData } = useQuery({ ...outlineQueries.flat(projectId), enabled: open });
   const flatOutline = useMemo(() => outlineData?.items ?? [], [outlineData]);
   const usedInBySource = useMemo(() => nodesBySource(flatOutline), [flatOutline]);

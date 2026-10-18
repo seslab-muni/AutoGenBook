@@ -64,8 +64,27 @@ test.describe('accessibility', () => {
     await expect(page.getByRole('dialog')).toBeHidden();
     await expectNoSeriousViolations(page, 'studio');
 
+    // A selected section, so axe also sees the editor header, the margin and its empty state (the
+    // margin is where comments, review issues and the copilot's suggestions live).
+    await page.getByRole('button', { name: 'Add chapter' }).click();
+    const titleField = page.getByRole('textbox', { name: /^Rename "Untitled chapter"/ }).last();
+    await titleField.dblclick();
+    const input = page.getByRole('textbox', { name: /^Rename "Untitled chapter"/ }).last();
+    await input.fill('Chapter 1: Accessibility');
+    await input.press('Enter');
+    await expect(page.getByRole('complementary', { name: 'Margin' })).toBeVisible();
+    await expectNoSeriousViolations(page, 'studio with a section and its margin');
+    // ...and the prompt window, the one new surface that opens from the header.
+    await page.getByRole('button', { name: 'Copilot', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Prompt the copilot' })).toBeVisible();
+    await expectNoSeriousViolations(page, 'studio with the prompt window open');
+    await page.keyboard.press('Escape');
+
     const dialogs: Array<{ label: string; open: () => Promise<void> }> = [
-      { label: 'Sources dialog', open: () => page.getByRole('button', { name: /Sources/ }).click() },
+      {
+        label: 'Sources dialog',
+        open: () => page.getByRole('button', { name: /^Sources(\s+\d+)?$/ }).click(),
+      },
       { label: 'Export dialog', open: () => page.getByRole('button', { name: /Export/ }).click() },
       {
         label: 'Project settings dialog',

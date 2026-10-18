@@ -11,7 +11,7 @@ interface CitationsPanelProps {
 }
 
 /**
- * The Copilot drawer's Citations tab: the selected node's `ragCitations`,
+ * The sources drawer's Citations list: the selected node's `ragCitations`,
  * sorted by `relevanceScore` (highest first) — real node data, no fetch of
  * its own (the node is already loaded for the editor pane).
  */

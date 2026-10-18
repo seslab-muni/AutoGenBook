@@ -2,8 +2,13 @@
  "issues": [
   {
    "description": "Section 4 should give one more example.",
+   "end": 96,
+   "quote": "Fake generated content for Results (4), part 1: consequences yet in careful how assumptions want",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
   }
  ],

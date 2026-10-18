@@ -9,7 +9,6 @@ import {
   Lock,
   LockOpen,
   Plus,
-  Settings2,
   Split,
   Trash2,
 } from 'lucide-react';
@@ -20,6 +19,7 @@ import { useUpdateOutlineNodeMutation } from '@/api/queries/outline';
 import type { OutlineNode } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
 import { StatusBadge } from '@/components/status-badge';
+import { NodeCountBadges } from '@/features/outline/components/node-count-badges';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -43,7 +43,6 @@ export interface OutlineRowActions {
   onToggleCollapse: (nodeId: string) => void;
   onAddChild: (parentId: string) => void;
   onDelete: (node: OutlineNode) => void;
-  onOpenProperties: (nodeId: string) => void;
   onKeyNavigate: (nodeId: string, key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Delete') => void;
 }
 
@@ -66,7 +65,7 @@ interface OutlineRowProps {
    * True while the project has a queued/running run — the backend rejects every structural
    * write (create/delete/move) with 409 for as long as that's true (`OutlineService.
    * _reject_if_run_active`, issue #74), so add/delete/move/indent/outdent are disabled here to
-   * match. Rename, lock toggle, and Properties stay enabled since the backend still allows them.
+   * match. Rename and the lock toggle stay enabled since the backend still allows them.
    */
   structuralEditsDisabled: boolean;
   actions: OutlineRowActions;
@@ -305,7 +304,7 @@ function OutlineRowComponent({
               <FileText className="size-3.5 shrink-0 text-muted-foreground" />
             )}
 
-            <span className="shrink-0 font-mono text-[11px] font-semibold text-muted-foreground">
+            <span className="shrink-0 font-mono text-[11px] font-semibold text-foreground/70">
               {highlightQuery
                 ? highlightMatch(node.sectionNumber, highlightQuery)
                 : node.sectionNumber}
@@ -335,6 +334,8 @@ function OutlineRowComponent({
             )}
 
             <SourceScopePill node={node} flat={flat} />
+
+            <NodeCountBadges node={node} />
 
             {node.contentLocked ? (
               <span
@@ -418,17 +419,6 @@ function OutlineRowComponent({
               </button>
               <button
                 type="button"
-                title="Properties"
-                className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  actions.onOpenProperties(node.id);
-                }}
-              >
-                <Settings2 className="size-3.5" />
-              </button>
-              <button
-                type="button"
                 title={structuralEditsDisabled ? STRUCTURE_LOCKED_MESSAGE : 'Delete'}
                 disabled={structuralEditsDisabled}
                 className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40"
@@ -463,9 +453,6 @@ function OutlineRowComponent({
               Add sub-section
             </ContextMenuItem>
           ) : null}
-          <ContextMenuItem onSelect={() => actions.onOpenProperties(node.id)}>
-            Properties
-          </ContextMenuItem>
           <ContextMenuItem
             disabled={Boolean(contentLockDisabledMessage)}
             title={contentLockDisabledMessage}

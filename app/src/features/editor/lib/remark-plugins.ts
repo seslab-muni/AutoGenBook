@@ -1,6 +1,8 @@
 import { toString as mdastToString } from 'mdast-util-to-string';
-import type { Blockquote, PhrasingContent, Root, Text } from 'mdast';
+import type { Blockquote, Paragraph, PhrasingContent, Root, Text } from 'mdast';
 import { visit } from 'unist-util-visit';
+
+import { alignValueToSource } from './source-map';
 
 /**
  * Remark plugin: turns pandoc-style `[@key]` / `[@key1; @key2]` citation
@@ -17,15 +19,38 @@ import { visit } from 'unist-util-visit';
  */
 const CITE_PATTERN = /\[@([^\]]+)\]|\\cite\{([^}]+)\}/g;
 
-function splitKeys(raw: string): string[] {
+export function splitKeys(raw: string): string[] {
   return raw
     .split(/[,;]/)
     .map((part) => part.replace(/^@/, '').trim())
     .filter(Boolean);
 }
 
+/** One citation token in a text: its extent and the keys it lists (`[@a; @b]` is one token, two keys). */
+export interface CitationMatch {
+  index: number;
+  length: number;
+  keys: string[];
+}
+
+/** Every `[@key]` / `\cite{key}` token in `value`, as `remarkCitations` reads them. */
+export function findCitations(value: string): CitationMatch[] {
+  const out: CitationMatch[] = [];
+  const pattern = new RegExp(CITE_PATTERN.source, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    out.push({
+      index: match.index,
+      length: match[0].length,
+      keys: splitKeys(match[1] ?? match[2] ?? ''),
+    });
+  }
+  return out;
+}
+
 export function remarkCitations() {
-  return (tree: Root) => {
+  return (tree: Root, file: { value?: unknown }) => {
+    const source = typeof file.value === 'string' ? file.value : '';
     visit(tree, 'text', (node: Text, index, parent) => {
       if (!parent || index === undefined) return;
       const value = node.value;
@@ -33,28 +58,64 @@ export function remarkCitations() {
       if (!CITE_PATTERN.test(value)) return;
       CITE_PATTERN.lastIndex = 0;
 
+      // Source offsets of each piece, by aligning the text with its source slice (escapes,
+      // entities and block-quote prefixes make them differ); pieces stay unpositioned only when
+      // the alignment fails, and are then skipped by highlights and selection mapping.
+      const origin = node.position?.start.offset;
+      const endOffset = node.position?.end.offset;
+      const map =
+        origin != null && endOffset != null && source
+          ? alignValueToSource(value, source.slice(origin, endOffset))
+          : null;
+      const placed = <T extends PhrasingContent>(piece: T, from: number, to: number): T => {
+        if (!map || origin == null || !node.position || to <= from) return piece;
+        const { start, end } = node.position;
+        const startOffset = origin + map[from]!;
+        const endOfPiece = origin + map[to - 1]! + 1;
+        return {
+          ...piece,
+          position: {
+            start: { line: start.line, column: start.column, offset: startOffset },
+            end: { line: end.line, column: end.column, offset: endOfPiece },
+          },
+        };
+      };
       const replacement: PhrasingContent[] = [];
       let lastEnd = 0;
       let match: RegExpExecArray | null;
       while ((match = CITE_PATTERN.exec(value)) !== null) {
         if (match.index > lastEnd) {
-          replacement.push({ type: 'text', value: value.slice(lastEnd, match.index) });
+          replacement.push(
+            placed(
+              { type: 'text', value: value.slice(lastEnd, match.index) },
+              lastEnd,
+              match.index,
+            ),
+          );
         }
         const keys = splitKeys(match[1] ?? match[2] ?? '');
         for (const key of keys) {
-          replacement.push({
-            type: 'text',
-            value: `@${key}`,
-            data: {
-              hName: 'span',
-              hProperties: { citekey: key },
-            },
-          } as unknown as PhrasingContent);
+          replacement.push(
+            placed(
+              {
+                type: 'text',
+                value: `@${key}`,
+                data: {
+                  hName: 'span',
+                  hProperties: { citekey: key },
+                },
+              } as unknown as PhrasingContent,
+              match.index,
+              match.index + match[0].length,
+            ),
+          );
         }
         lastEnd = match.index + match[0].length;
       }
       if (lastEnd < value.length) {
-        replacement.push({ type: 'text', value: value.slice(lastEnd) });
+        replacement.push(
+          placed({ type: 'text', value: value.slice(lastEnd) }, lastEnd, value.length),
+        );
       }
 
       const siblings = parent.children as PhrasingContent[];
@@ -78,17 +139,22 @@ const CALLOUT_PATTERN = new RegExp(`^(${CALLOUT_KEYWORDS.join('|')})\\b`);
  * override can render it as a `<Callout>` card instead — no new tag name,
  * for the same `Components`-typing reason as `remarkCitations`.
  */
+export function calloutOf(node: Blockquote): { kind: CalloutKind; label: string } | null {
+  const firstParagraph = node.children[0];
+  if (!firstParagraph || firstParagraph.type !== 'paragraph') return null;
+  const firstChild = firstParagraph.children[0];
+  if (!firstChild || firstChild.type !== 'strong') return null;
+  const label = mdastToString(firstChild).trim();
+  const kindMatch = CALLOUT_PATTERN.exec(label);
+  return kindMatch ? { kind: kindMatch[1] as CalloutKind, label } : null;
+}
+
 export function remarkCallouts() {
   return (tree: Root) => {
     visit(tree, 'blockquote', (node: Blockquote) => {
-      const firstParagraph = node.children[0];
-      if (!firstParagraph || firstParagraph.type !== 'paragraph') return;
-      const firstChild = firstParagraph.children[0];
-      if (!firstChild || firstChild.type !== 'strong') return;
-
-      const label = mdastToString(firstChild).trim();
-      const kindMatch = CALLOUT_PATTERN.exec(label);
-      if (!kindMatch) return;
+      const callout = calloutOf(node);
+      if (!callout) return;
+      const firstParagraph = node.children[0] as Paragraph;
 
       // Drop the leading `**Theorem 1.1**` (and any immediately-following
       // punctuation like `:`/`—`) from the visible body — it's shown as the
@@ -101,7 +167,7 @@ export function remarkCallouts() {
       firstParagraph.children = rest;
 
       (node as Blockquote & { data?: Record<string, unknown> }).data = {
-        hProperties: { calloutkind: kindMatch[1], calloutlabel: label },
+        hProperties: { calloutkind: callout.kind, calloutlabel: callout.label },
       };
     });
   };

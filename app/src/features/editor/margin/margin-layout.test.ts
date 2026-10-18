@@ -1,0 +1,97 @@
+import { describe, expect, it } from 'vitest';
+
+import { extraBottom, layoutMargin, type LayoutItem } from './margin-layout';
+
+const item = (id: string, y: number, height = 100): LayoutItem => ({ id, y, height });
+
+describe('layoutMargin', () => {
+  it('leaves well-separated cards at their anchors', () => {
+    const tops = layoutMargin([item('a', 0), item('b', 300), item('c', 700)]);
+    expect([...tops.values()]).toEqual([0, 300, 700]);
+  });
+
+  it('pushes overlapping cards down, cascading', () => {
+    const tops = layoutMargin([item('a', 50), item('b', 60), item('c', 70)], { gap: 8 });
+    expect(tops.get('a')).toBe(50);
+    expect(tops.get('b')).toBe(158);
+    expect(tops.get('c')).toBe(266);
+  });
+
+  it('sorts by y regardless of input order and breaks ties by input order', () => {
+    const tops = layoutMargin([item('late', 500), item('x', 100), item('y', 100)], { gap: 0 });
+    expect(tops.get('x')).toBe(100);
+    expect(tops.get('y')).toBe(200);
+    expect(tops.get('late')).toBe(500);
+  });
+
+  it('lets the focused card win a tie on y, so the others stack below it', () => {
+    const tops = layoutMargin([item('x', 0), item('y', 0), item('z', 0)], {
+      gap: 0,
+      focusedId: 'z',
+    });
+    expect(tops.get('z')).toBe(0);
+    expect(tops.get('x')).toBe(100);
+    expect(tops.get('y')).toBe(200);
+  });
+
+  it('never leaves overlaps for any mix of positions', () => {
+    const items = Array.from({ length: 120 }, (_, i) =>
+      item(`c${i}`, (i * 37) % 900, 40 + (i % 5) * 30),
+    );
+    const tops = layoutMargin(items, { gap: 6 });
+    const placed = [...items].sort((a, b) => tops.get(a.id)! - tops.get(b.id)!);
+    for (let i = 1; i < placed.length; i += 1) {
+      expect(tops.get(placed[i]!.id)!).toBeGreaterThanOrEqual(
+        tops.get(placed[i - 1]!.id)! + placed[i - 1]!.height + 6,
+      );
+    }
+  });
+
+  it('respects minTop', () => {
+    const tops = layoutMargin([item('a', 0), item('b', 10)], { minTop: 40, gap: 0 });
+    expect(tops.get('a')).toBe(40);
+    expect(tops.get('b')).toBe(140);
+  });
+
+  it('keeps a focused card on its anchor and pushes the earlier ones up', () => {
+    const items = [item('a', 400), item('b', 410), item('c', 420)];
+    const plain = layoutMargin(items, { gap: 8 });
+    expect(plain.get('c')).toBe(400 + 2 * 108);
+    const tops = layoutMargin(items, { gap: 8, focusedId: 'c' });
+    expect(tops.get('c')).toBe(420);
+    expect(tops.get('b')).toBe(420 - 8 - 100);
+    expect(tops.get('a')).toBe(tops.get('b')! - 8 - 100);
+  });
+
+  it('falls back to the plain layout when pushing up would cross the top', () => {
+    const items = [item('a', 0), item('b', 10)];
+    const tops = layoutMargin(items, { gap: 8, focusedId: 'b' });
+    expect(tops.get('a')).toBe(0);
+    expect(tops.get('b')).toBe(108);
+  });
+
+  it('pushes cards after the focused one down', () => {
+    const tops = layoutMargin([item('a', 0, 40), item('b', 50), item('c', 60)], {
+      gap: 8,
+      focusedId: 'b',
+    });
+    expect(tops.get('b')).toBe(50);
+    expect(tops.get('c')).toBe(158);
+  });
+});
+
+describe('extraBottom', () => {
+  it('is zero while the cards fit inside the text, and the shortfall once they stack past its end', () => {
+    expect(extraBottom(900, 1200)).toBe(0);
+    expect(extraBottom(1200, 1200)).toBe(0);
+    expect(extraBottom(1500.2, 1200)).toBe(301);
+  });
+
+  it('follows a content height that is revised later (CodeMirror re-measuring unrendered lines)', () => {
+    // First estimate: 12000 tall, cards end at 12400 -> 400 extra. The editor then measures 12405.
+    expect(extraBottom(12400, 12000)).toBe(400);
+    expect(extraBottom(12400, 12405)).toBe(0);
+    // ...and the other way: the content shrank to 11800.
+    expect(extraBottom(12400, 11800)).toBe(600);
+  });
+});

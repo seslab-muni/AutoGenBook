@@ -2,8 +2,13 @@
  "issues": [
   {
    "description": "Section 3 should give one more example.",
+   "end": 96,
+   "quote": "Fake generated content for Method (3), part 1: the approach concept practice for accessible this",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
   }
  ],

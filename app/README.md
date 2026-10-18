@@ -65,6 +65,11 @@ Copy `.env.example` to `.env` to override the defaults:
 - `VITE_USE_MOCKS` — set to `1` to run `pnpm dev` entirely against the in-browser
   MSW mock API (`src/mocks/`) instead of a real backend; unset/`0` uses
   `VITE_API_PROXY_TARGET`.
+- `VITE_WRITE_EDITING` — the one switch for the editable Write view (`#182`). On unless
+  set to `0`, `false` or `off` (a build-time variable, read only in
+  `src/features/editor/lib/write-editing.ts`). When off, the Write view is exactly the
+  read-only renderer and the `markdown-editor` chunk is never requested. The Docker build takes it as
+  `--build-arg VITE_WRITE_EDITING=0`.
 
 ## Folder layout
 
@@ -88,6 +93,48 @@ e2e/            # Playwright e2e/a11y suite — see "End-to-end tests" below, no
 scripts/        # standalone Node scripts (currently just check-bundle-budget.mjs), not part of src/
 ```
 
+The editor pane (`src/features/editor`) puts a section's controls in its header
+and status bar (issue #182): the content-lock button, a Write/Source toggle group
+(`stores/editor-store.ts`), a Chapter options popover for the section's
+generation brief and source scope (`chapter-options-popover.tsx`, which replaced
+the old outline-row Properties sheet), a Copilot button (opens the prompt window at section
+scope), and a status bar with character/word
+counts, an `N sources` drawer (sources and citations) and the caret/selection
+position (`stores/editor-selection-store.ts`, code-point offsets). The right column is the
+margin workspace: `features/editor/lib/anchors.ts` (text-quote anchors),
+`features/editor/margin/` (cards and their registry, layout, selection layer, the narrow-screen
+side sheet), highlights in both views (CSS Custom Highlight API in Write, a CodeMirror field in
+Source) and outline-row badges for open comments and pending suggestions. It carries three kinds of
+card: human **comments** (anchored, threaded, `@copilot` mentions), the reviewer's **issues** as
+review cards with a section verdict strip (`review-card.tsx`, `review-summary-strip.tsx`) and the
+copilot's **suggestions** (`prompt-window.tsx` for the prompt, `suggestion-card.tsx` and
+`suggestion-diff.tsx` for the running / diff / failed states; `use-copilot.ts` for the entry points,
+`use-suggestion-actions.ts` for accept, reject, cancel and undo, `suggestion-progress.ts` for the
+event streams). The earlier right-pane tabs (Copilot, Review) and the Margin | Copilot switch are
+gone: the Review tab became the review cards, the Copilot tab the prompt window, and the run
+event log lives on the run page (the drawer's stage timeline was dropped). The Write view is a
+ProseMirror editor over the section's Markdown (`features/editor/wysiwyg/`, loaded as its own chunk
+when a view is first made editable; `components/write-body.tsx` swaps it in for the read-only text):
+a source model (`source-model.ts`, `parse.ts`, `serialize.ts`, `patch.ts`, `equivalence.ts`) keeps
+untouched Markdown byte for byte and writes only the blocks an edit changed, verified by reading them
+back; math, citations, tables, callouts and anything unknown are atoms that open in Source
+(`node-views.ts`); `controller.ts` ties the editor to the draft, the anchors, highlights and the
+selection store. The design, the guarantee and its exact limits, the shortcuts, the bundle decision
+and the numbers are in `docs/WEB_UI.md` ("The editable Write view"). Pure parts are unit-tested
+(`*.test.ts` there, with seeded random documents in `test-docs.ts`); the routed flows
+(`features/editor/write-editing-*.route.test.tsx`) each have a file of their own, like the other routed
+studio tests, and drive the editor through `editorInternals()` (`wysiwyg/dom-test-utils.ts`). `src/test/viewport.ts`
+runs a test at a given screen width;
+`pnpm test` covers them with unit tests, MSW-backed component tests and routed flow
+tests (`margin-flow`, `margin-write`, `margin-editing`, `copilot-flow`, `copilot-races` and `copilot-saves` `.route.test.tsx`).
+`VITE_USE_MOCKS=1 pnpm dev` shows all of it with no backend: the mock revise
+(`src/mocks/fakeRevise.ts`) answers with a diff after a few simulated progress events (an instruction
+containing "slow" never finishes, so it can be cancelled; one containing "fail" fails with a
+timeout), and the finished project has a few review cards (`seedReviewDemo`). In the browser
+`window.__mockConfig` (`acceptDelayMs`, `patchDelayMs`, `nodeGetDelayMs`, `failPatch`) slows the mock accept and save
+down or makes saves fail, to watch the races the copilot's writes have to survive. See
+`docs/WEB_UI.md` for the behaviour.
+
 Routes stay thin: a route module owns params/search-param parsing, loader
 wiring, and rendering a feature's top-level component — the actual UI and data
 logic live under `src/features/<name>`.
@@ -97,8 +144,9 @@ Cross-cutting outline rules live next to the feature, not in components:
 `source-scope.ts` (per-node KB scoping, issue #138) and `content-lock.ts`
 (content locks, issue #113 — a locked leaf is kept as-is by full runs and used
 as context for the rest; the helper decides when a node may be locked, and the
-outline row, properties sheet, Copilot panel and start-run dialog all read the
-same wording from it). The row's hover group and context menu toggle the lock,
+outline row, editor header and start-run dialog all read the
+same wording from it). The row's hover group and context menu toggle the lock
+(as does the editor header's lock button),
 the pane's toolbar offers "Unlock all" (with a confirm) once anything is locked,
 and the start-run dialog shows an "N of M sections are locked" banner with an
 "Unlock all and regenerate everything" shortcut.
@@ -248,9 +296,12 @@ several minutes on top of the `app`/`python` jobs.
 (`pnpm check:bundle-budget`, also a CI step right after `pnpm build`) reads it
 plus `dist/.vite/manifest.json` (for finding the eagerly-loaded entry chunk)
 and fails if that entry chunk exceeds 300 kB gzipped or the whole JS+CSS
-bundle exceeds 1 MB gzipped — override either via `BUNDLE_MAIN_CHUNK_BUDGET_KB`
+bundle exceeds 1152 kB gzipped (it was 1 MB until the editable Write view added its
+lazily loaded editor chunk, see `docs/WEB_UI.md`) — override either via `BUNDLE_MAIN_CHUNK_BUDGET_KB`
 / `BUNDLE_TOTAL_BUDGET_KB` env vars if a deliberate size increase needs a
-higher ceiling.
+higher ceiling. The editor's CodeMirror setup is a trimmed copy of `basicSetup`
+(`src/features/editor/lib/editor-setup.ts`, aliased in `vite.config.ts`) without the autocompletion
+popup and the lint keymap, which saved 22 kB gzipped of the budget; see `docs/WEB_UI.md`.
 
 ## Error reporting
 

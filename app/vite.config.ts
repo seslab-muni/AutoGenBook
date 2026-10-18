@@ -34,6 +34,14 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
+      // `@uiw/react-codemirror` imports its basic setup statically, which keeps the completion
+      // popup and the lint keymap (22 kB gzipped) in the bundle even though the app never uses
+      // them. This swaps in the same setup without those two (build, dev and tests alike);
+      // `scripts/check-bundle-budget.mjs` fails if they come back. See the file's own comment.
+      '@uiw/codemirror-extensions-basic-setup': path.resolve(
+        import.meta.dirname,
+        './src/features/editor/lib/editor-setup.ts',
+      ),
     },
   },
   build: {
@@ -53,6 +61,9 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/msw-polyfills.ts', './src/test/setup.ts'],
     css: true,
+    // Run `@uiw/react-codemirror` through Vite like the app build does, so the `basicSetup` alias above
+    // applies in tests too (a dependency left external would use the upstream setup).
+    server: { deps: { inline: ['@uiw/react-codemirror'] } },
     exclude: ['node_modules', 'dist', 'e2e'],
     // Above Vitest's own 5000ms default so a busy CI runner has room to actually honor the
     // `asyncUtilTimeout` bump in `src/test/setup.ts` (a test with a couple of sequential async

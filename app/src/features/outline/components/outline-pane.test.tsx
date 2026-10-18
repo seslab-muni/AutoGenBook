@@ -18,7 +18,7 @@ import { OutlinePane } from './outline-pane';
 import { STRUCTURE_LOCKED_MESSAGE } from './outline-row';
 
 // `useProjectRuns` (mounted by `OutlinePane`) keeps a live SSE subscription open for any active run
-// via `useRunStream` — mocked the same way as `copilot-panel.test.tsx`/`start-run-dialog.test.tsx`.
+// via `useRunStream` — mocked the same way as `start-run-dialog.test.tsx`.
 vi.mock('@/api/sse', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/sse')>();
   return { ...actual, subscribeRunEvents: vi.fn() };
@@ -109,10 +109,7 @@ describe('OutlinePane structural-edit gating (issue #74)', () => {
     expect(screen.getByRole('menuitem', { name: 'Indent' })).toHaveAttribute('data-disabled', '');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('data-disabled', '');
 
-    // Rename/lock/properties stay enabled — the backend still allows non-structural edits.
-    expect(screen.getByRole('menuitem', { name: 'Properties' })).not.toHaveAttribute(
-      'data-disabled',
-    );
+    // Rename/lock stay enabled — the backend still allows non-structural edits.
     expect(screen.getByRole('menuitem', { name: /lock structure/i })).not.toHaveAttribute(
       'data-disabled',
     );

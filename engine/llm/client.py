@@ -20,6 +20,7 @@ checks) goes through `self.http`, whose transport can be injected
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 import time
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ from engine.llm.retry import THROTTLE_STATUS, backoff_seconds, is_transient, ret
 from engine.llm.structured import Level, extract_json, json_schema_for, looks_unrelated_to_format, names_response_format, schema_instructions
 from engine.llm.usage import UsageEntry, UsageLedger
 
+PROBE_FAILURE_TTL_S = 5.0
 T = TypeVar("T")
 _BARE_JSON_RE = re.compile(r"(?:```(?:json)?\s*)?\{.*\}(?:\s*```)?", re.DOTALL)
 M = TypeVar("M", bound=BaseModel)
@@ -99,9 +101,24 @@ class LLMClient:
         self._levels: dict[str, Level] = {}
         self._settled: set[str] = set()
         self._probe_locks: dict[str, asyncio.Lock] = {}
+        # model -> (when, error) of a probe that failed for a reason unrelated to the response format
+        self._probe_failures: dict[str, tuple[float, BaseException]] = {}
         self._no_temperature: set[str] = set()
         self._no_stream_options: set[str] = set()
         self._no_reasoning_effort: set[str] = set()
+
+    _shared = False
+
+    def fork(self, ledger: UsageLedger, sink: EventSink, settings: LLMSettings | None = None) -> "LLMClient":
+        """A view of this client with its own usage ledger, event sink and
+        (optionally) settings, sharing the HTTP client, limiter and the
+        per-model structured-output capabilities, so one probe per model serves
+        every caller. `aclose()` on the view closes nothing."""
+        clone = copy.copy(self)
+        clone.ledger, clone.sink, clone._shared = ledger, sink, True
+        if settings is not None:
+            clone.settings = settings
+        return clone
 
     # ------------------------------------------------------------ plumbing
     def _on_limit_change(self, old: int, new: int, reason: str) -> None:
@@ -333,6 +350,14 @@ class LLMClient:
             probing = model not in self._settled
             if not probing:
                 lock.release()
+            else:
+                failed = self._probe_failures.get(model)
+                if failed is not None and time.monotonic() - failed[0] < PROBE_FAILURE_TTL_S:
+                    # The call that held the probe just failed for a reason that is not about the
+                    # format (dead endpoint, bad key): share its failure instead of queueing a
+                    # full timeout per waiter.
+                    lock.release()
+                    raise failed[1]
         try:
             level = self.level_for(model)
             while True:
@@ -367,6 +392,11 @@ class LLMClient:
                 self.sink.emit("info", f"Model {model}: structured output via {level.label}", level="warning")
             if probing:
                 self._settled.add(model)
+                self._probe_failures.pop(model, None)
+        except (openai.AuthenticationError, openai.PermissionDeniedError, openai.APIConnectionError, openai.InternalServerError) as exc:
+            if probing:  # endpoint-wide failures only: a call-specific 400 says nothing about the next caller
+                self._probe_failures[model] = (time.monotonic(), exc)
+            raise
         finally:
             if probing and lock.locked():
                 lock.release()
@@ -524,6 +554,8 @@ class LLMClient:
                                 usage_of=lambda _data: (0, 0, 0, cost["value"]))
 
     async def aclose(self) -> None:
+        if self._shared:
+            return
         for client in self._clients.values():
             try:
                 await client.close()

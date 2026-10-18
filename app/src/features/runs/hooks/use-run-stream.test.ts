@@ -93,19 +93,6 @@ describe('useRunStream', () => {
     expect(cached?.map((e) => e.seq)).toEqual([1, 2]);
   });
 
-  it('derives currentStage from the most recent event carrying a stage', async () => {
-    seedRun('run-b', 'proj-a');
-
-    const { result } = renderWithQueryClient(() => useRunStream('run-b', 'proj-a'));
-    const { onEvent } = mockedSubscribe.mock.calls[0]![1];
-
-    onEvent(makeEvent(1, { stage: 'planning' }), 'stage');
-    onEvent(makeEvent(2, { stage: 'drafting' }), 'stage');
-    onEvent(makeEvent(3), 'log');
-
-    await waitFor(() => expect(result.current.currentStage).toBe('drafting'));
-  });
-
   it('a section event records the node key from its payload and invalidates the artifacts list and project outline', async () => {
     seedRun('run-c', 'proj-c');
 

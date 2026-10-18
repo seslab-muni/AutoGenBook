@@ -1,7 +1,9 @@
+import { CodePointIndex, makeAnchor } from '@/features/editor/lib/anchors';
 import { db, type ProjectRow } from './db';
 import type {
   AudienceLevel,
   AuthUser,
+  Comment,
   FileDto,
   MathLevel,
   NodeStatus,
@@ -781,7 +783,9 @@ const REINFORCEMENT_LEARNING: SeedProject = {
           mathLevel: 'formal_proof',
           contentMarkdown:
             '### 1.1 Policy Iteration & Monotonic Improvement\n\n' +
-            'Given policy $\\pi_k$, policy improvement yields $\\pi_{k+1}(s) = \\arg\\max_a q_{\\pi_k}(s, a)$.',
+            'Given policy $\\pi_k$, policy improvement yields $\\pi_{k+1}(s) = \\arg\\max_a q_{\\pi_k}(s, a)$.\n\n' +
+            'The policy improvement theorem guarantees that $v_{\\pi_{k+1}}(s) \\ge v_{\\pi_k}(s)$ for every state $s$. Consider a deterministic policy on a finite MDP: each improvement step either strictly increases the value of some state, or the policy is already optimal.\n\n' +
+            'Because a finite MDP has only finitely many deterministic policies, policy iteration terminates after finitely many improvement steps. We write 𝒫 for the set of such policies.',
           contentLatex: '\\section{Policy Iteration}\nGiven policy $\\pi_k$...',
           ragCitations: [],
         },
@@ -938,6 +942,143 @@ const GEOMETRIC_DEEP_LEARNING: SeedProject = {
 };
 
 export const SEED_PROJECTS = [CONSENSUS_QUANTUM, REINFORCEMENT_LEARNING, GEOMETRIC_DEEP_LEARNING];
+
+/** One reviewer issue as `graph_import` would write it: a `kind=review` row with its anchor and payload. */
+function seedReviewCard(
+  node: OutlineNode,
+  issue: {
+    type: string;
+    severity: 'major' | 'minor';
+    description: string;
+    requiredFix: string;
+    quote?: string;
+    replaceFrom?: string;
+    replaceTo?: string;
+    source?: 'reviewer' | 'consistency' | 'citation';
+  },
+  runId: string | null,
+): void {
+  const id = db.nextId();
+  let anchor: Comment['anchor'] = null;
+  if (issue.quote) {
+    const from = node.contentMarkdown.indexOf(issue.quote);
+    if (from !== -1) {
+      const index = new CodePointIndex(node.contentMarkdown);
+      anchor = makeAnchor(
+        node.contentMarkdown,
+        index.toCp(from),
+        index.toCp(from + issue.quote.length),
+      );
+    }
+  }
+  db.comments.set(id, {
+    id,
+    projectId: (node as OutlineNode & { projectId: string }).projectId,
+    nodeId: node.id,
+    kind: 'review',
+    authorId: null,
+    authorName: null,
+    anchor,
+    status: issue.quote && !anchor ? 'orphaned' : 'open',
+    threadId: id,
+    parentId: null,
+    bodyMarkdown: issue.description,
+    payload: {
+      issueKey: id.slice(0, 32),
+      type: issue.type,
+      severity: issue.severity,
+      requiredFix: issue.requiredFix,
+      replaceFrom: issue.replaceFrom ?? '',
+      replaceTo: issue.replaceTo ?? '',
+      quote: issue.quote ?? '',
+      okToKeep: false,
+      source: issue.source ?? 'reviewer',
+      runId,
+      outdated: false,
+    },
+    createdAt: '2026-08-16T09:30:00Z',
+    updatedAt: '2026-08-16T09:30:00Z',
+    editedAt: null,
+  });
+}
+
+/**
+ * Reviewer output for the finished project: four issue cards on one section, a clean verdict on
+ * another. Not part of `seedDatabase` (many suites use those sections and count their cards): the
+ * mock-mode dev server and the tests that look at review cards add it.
+ */
+export function seedReviewDemo(): void {
+  const runId = `${CONSENSUS_QUANTUM.id}-run-1`;
+  const reviewed = db.outlineNodes.get('sec-1-1');
+  if (reviewed) {
+    const issues = [
+      {
+        type: 'coverage',
+        severity: 'major' as const,
+        description: 'Termination is stated but never argued for.',
+        requiredFix:
+          'Add a short argument for why every correct process decides under partial synchrony.',
+        quote: 'Every correct process eventually decides on some value',
+      },
+      {
+        type: 'terminology',
+        severity: 'minor' as const,
+        description: 'The glossary says processes “output” a value; “decide” is used here.',
+        requiredFix: 'Use “output” consistently.',
+        quote: 'decide on values',
+        replaceFrom: 'decide on',
+        replaceTo: 'output',
+      },
+      {
+        type: 'consistency:term',
+        severity: 'major' as const,
+        description:
+          'This section says “Byzantine Consensus”; chapter 2 calls the same problem “Byzantine Agreement”.',
+        requiredFix: 'Pick one name and use it in both places.',
+        source: 'consistency' as const,
+      },
+      {
+        type: 'citation',
+        severity: 'minor' as const,
+        description: 'One citation key was not found in your sources and was removed.',
+        requiredFix: 'Add the missing source or cite another one.',
+        source: 'citation' as const,
+      },
+    ];
+    for (const issue of issues) seedReviewCard(reviewed, issue, runId);
+    db.outlineNodes.set(reviewed.id, {
+      ...(reviewed as OutlineNode & { projectId: string }),
+      reviewSummary: {
+        okToKeep: false,
+        issueCount: issues.length,
+        suggestedEdits: [
+          'Add a proof sketch for termination.',
+          'Use one name for the consensus problem in chapters 1 and 2.',
+        ],
+        retrievalQueries: [
+          'partial synchrony termination proof Byzantine consensus',
+          'Dwork Lynch Stockmeyer consensus in the presence of partial synchrony',
+        ],
+        runId,
+        reviewedAt: '2026-08-16T09:30:00Z',
+      },
+    });
+  }
+  const clean = db.outlineNodes.get('sec-1-2');
+  if (clean) {
+    db.outlineNodes.set(clean.id, {
+      ...(clean as OutlineNode & { projectId: string }),
+      reviewSummary: {
+        okToKeep: true,
+        issueCount: 0,
+        suggestedEdits: [],
+        retrievalQueries: [],
+        runId,
+        reviewedAt: '2026-08-16T09:30:00Z',
+      },
+    });
+  }
+}
 
 export function seedDatabase(): void {
   db.reset();

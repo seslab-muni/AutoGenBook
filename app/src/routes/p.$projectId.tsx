@@ -18,19 +18,22 @@ import { SourcesDialog } from '@/features/sources/components/sources-dialog';
 
 export interface ProjectSearch {
   node?: string;
-  tab?: 'copilot' | 'citations' | 'review' | 'settings';
+  /** `rewrite`: open the section with the prompt window on Rewrite ("Regenerate again" on a run page). */
+  copilot?: 'rewrite';
+  /** The instruction to put in that window. */
+  instruction?: string;
 }
 
-type ProjectTab = NonNullable<ProjectSearch['tab']>;
-const TABS: readonly ProjectTab[] = ['copilot', 'citations', 'review', 'settings'];
-
+// Old links may still carry `?tab=copilot|review|citations|settings` from when the right pane had
+// tabs: it is an unknown search value now, dropped here, and the studio opens as usual.
 function validateSearch(search: Record<string, unknown>): ProjectSearch {
   const result: ProjectSearch = {};
   if (typeof search.node === 'string') {
     result.node = search.node;
   }
-  if (typeof search.tab === 'string' && (TABS as readonly string[]).includes(search.tab)) {
-    result.tab = search.tab as ProjectTab;
+  if (search.copilot === 'rewrite') {
+    result.copilot = 'rewrite';
+    if (typeof search.instruction === 'string') result.instruction = search.instruction;
   }
   return result;
 }
@@ -66,7 +69,7 @@ function ProjectLayout() {
   const { data: liveProject } = useQuery(projects.detail(projectId));
 
   const current = liveProject ?? project;
-  // Mounted once here (rather than in AppHeader/CopilotPanel individually) so the SSE
+  // Mounted once here (rather than in AppHeader individually) so the SSE
   // subscription and outline/header wiring stay alive across the whole project layout,
   // not just while a particular pane happens to be mounted.
   const { runningRun, queuedRuns } = useProjectRuns(projectId);

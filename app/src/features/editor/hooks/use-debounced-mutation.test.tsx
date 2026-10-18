@@ -124,4 +124,60 @@ describe('useDebouncedMutation', () => {
     });
     expect(onSave).toHaveBeenCalledWith('unsaved edit');
   });
+
+  it('keeps one hold per reason: saving resumes only when every reason has let go', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useDebouncedMutation<string>({ delayMs: 800, onSave }));
+
+    act(() => {
+      result.current.hold(true, 'conflict');
+      result.current.hold(true, 'accept');
+      result.current.schedule('draft');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(onSave).not.toHaveBeenCalled();
+    expect(result.current.status).toBe('dirty');
+
+    // One reason letting go does not lift the other's hold.
+    act(() => result.current.hold(false, 'accept'));
+    await act(async () => {
+      result.current.flush();
+      await Promise.resolve();
+    });
+    expect(onSave).not.toHaveBeenCalled();
+
+    act(() => result.current.hold(false, 'conflict'));
+    await act(async () => {
+      result.current.flush();
+      await Promise.resolve();
+    });
+    expect(onSave).toHaveBeenCalledWith('draft');
+  });
+
+  it('flushEdits resolves with nothing pending, and rejects while held with something pending', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useDebouncedMutation<string>({ delayMs: 800, onSave }));
+    await expect(result.current.flushEdits()).resolves.toBeUndefined();
+
+    act(() => {
+      result.current.hold(true, 'accept');
+      result.current.schedule('draft');
+    });
+    await expect(result.current.flushEdits()).rejects.toThrow(/on hold/);
+  });
+
+  it("cancel() clears a failed save's error state along with the pending value", async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('conflict'));
+    const { result } = renderHook(() => useDebouncedMutation<string>({ delayMs: 800, onSave }));
+    act(() => result.current.schedule('draft'));
+    await act(async () => {
+      result.current.flush();
+      await Promise.resolve();
+    });
+    expect(result.current.status).toBe('error');
+    act(() => result.current.cancel());
+    expect(result.current.status).toBe('saved');
+  });
 });

@@ -2,8 +2,13 @@
  "issues": [
   {
    "description": "Section 1 should give one more example.",
+   "end": 92,
+   "quote": "Fake generated content for Introduction (1), part 1: each to consequences yet in careful how",
+   "replace_from": "",
+   "replace_to": "",
    "required_fix": "Add a concrete example.",
    "severity": "minor",
+   "start": 0,
    "type": "coverage"
   }
  ],

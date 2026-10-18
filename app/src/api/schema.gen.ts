@@ -328,6 +328,204 @@ export interface paths {
         patch: operations["outline-update_outline_node"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Project Comments
+         * @description Whole threads; `kind`/`status` select thread roots and `limit`/`offset`/
+         *     `total` count roots (each root's replies come along).
+         */
+        get: operations["comments-list_project_comments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/comments/{comment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Comment
+         * @description One card, full payload (a suggestion's `originalMarkdown` /
+         *     `replacementMarkdown` included - the project-wide list leaves them out).
+         */
+        get: operations["comments-get_comment"];
+        put?: never;
+        post?: never;
+        /** Delete Comment */
+        delete: operations["comments-delete_comment"];
+        options?: never;
+        head?: never;
+        /** Update Comment */
+        patch: operations["comments-update_comment"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/outline/{node_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Node Comments
+         * @description Whole threads of the node, not paged (`total` counts thread roots).
+         */
+        get: operations["comments-list_node_comments"];
+        put?: never;
+        /** Create Node Comment */
+        post: operations["comments-create_node_comment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/comments/{comment_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Comment
+         * @description Resolve a thread (`{}` or `{"resolved": true}`) or reopen it
+         *     (`{"resolved": false}`). Only a thread's root can be resolved.
+         */
+        post: operations["comments-resolve_comment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/outline/{node_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Revision
+         * @description Start a copilot revision of a section (or a selected range of it).
+         *
+         *     `verb: "revise"` -> 202 `{kind: "suggestion", suggestion}` with the new
+         *     `running` suggestion card; follow it with `GET /suggestions/{id}/events/stream`
+         *     (or the node's comment list). `verb: "rewrite"` -> 202 `{kind: "run", runId,
+         *     run}`: it is a regenerate run, with the regenerate endpoint's 409s.
+         */
+        post: operations["revisions-create_revision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/suggestions/{suggestion_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Suggestion
+         * @description Apply a `pending` suggestion to the section (409 `stale` when the text
+         *     changed so that it no longer applies cleanly, 409 `not_pending`,
+         *     `node_generating`, `run_active`). Settles the thread / issues it addressed
+         *     and re-anchors the section's other cards, all in one transaction.
+         */
+        post: operations["revisions-accept_suggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/suggestions/{suggestion_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Suggestion */
+        post: operations["revisions-reject_suggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/suggestions/{suggestion_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Suggestion
+         * @description Cancel a `running` revision (author only). Idempotent for an already
+         *     `cancelled` one.
+         */
+        post: operations["revisions-cancel_suggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/suggestions/{suggestion_id}/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Suggestion Events
+         * @description Server-sent events of a revision: `progress` events (the engine's
+         *     `retrieve` / `revise` / `diff` stages), then one terminal `done`
+         *     (the suggestion is `pending`; also sent for an already accepted/rejected one),
+         *     `failed` or `cancelled` event whose data carries the final suggestion.
+         *     Same framing as the run-event stream: event `id` = `seq` (resume with
+         *     `Last-Event-ID`), periodic keep-alive pings, the stream ends after the
+         *     terminal event.
+         */
+        get: operations["revisions-stream_suggestion_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/runs": {
         parameters: {
             query?: never;
@@ -578,6 +776,146 @@ export interface components {
             /** Kb Sources */
             kb_sources?: string[] | null;
         };
+        /** Comment */
+        Comment: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Projectid
+             * Format: uuid
+             */
+            projectId: string;
+            /**
+             * Nodeid
+             * Format: uuid
+             */
+            nodeId: string;
+            kind: components["schemas"]["CommentKind"];
+            /** Authorid */
+            authorId: string | null;
+            /** Authorname */
+            authorName?: string | null;
+            anchor: components["schemas"]["CommentAnchorOut"] | null;
+            status: components["schemas"]["CommentStatus"];
+            /**
+             * Threadid
+             * Format: uuid
+             */
+            threadId: string;
+            /** Parentid */
+            parentId: string | null;
+            /** Bodymarkdown */
+            bodyMarkdown: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Editedat */
+            editedAt?: string | null;
+        };
+        /**
+         * CommentAnchorIn
+         * @description Request anchor: a W3C text-quote selector over the node's
+         *     `contentMarkdown`. `start`/`end` are Unicode code-point offsets (not UTF-16
+         *     units), `end` exclusive; both null = unknown/orphaned. The server
+         *     re-resolves it (`api.application.comment_anchors.resolve_anchor`) and
+         *     refreshes `prefix`/`suffix` from the content.
+         */
+        CommentAnchorIn: {
+            /** Quote */
+            quote: string;
+            /**
+             * Prefix
+             * @default
+             */
+            prefix?: string;
+            /**
+             * Suffix
+             * @default
+             */
+            suffix?: string;
+            /** Start */
+            start?: number | null;
+            /** End */
+            end?: number | null;
+        };
+        /**
+         * CommentAnchorOut
+         * @description Response anchor. Deliberately unable to fail: stored anchors (e.g. from
+         *     a fuzzy re-anchor, which rewrites `quote` to the text actually matched, or
+         *     the reviewer import) always serialise. None of the request rules apply;
+         *     a missing/wrong-typed `quote`/`prefix`/`suffix` becomes `""` and bad or
+         *     partial `start`/`end` degrade to null (orphaned).
+         */
+        CommentAnchorOut: {
+            /**
+             * Quote
+             * @default
+             */
+            quote?: string;
+            /**
+             * Prefix
+             * @default
+             */
+            prefix?: string;
+            /**
+             * Suffix
+             * @default
+             */
+            suffix?: string;
+            /** Start */
+            start?: number | null;
+            /** End */
+            end?: number | null;
+        };
+        /** CommentCreate */
+        CommentCreate: {
+            /** Bodymarkdown */
+            bodyMarkdown: string;
+            anchor?: components["schemas"]["CommentAnchorIn"] | null;
+            /** Parentid */
+            parentId?: string | null;
+        };
+        /**
+         * CommentKind
+         * @enum {string}
+         */
+        CommentKind: "comment" | "suggestion" | "review";
+        /** CommentResolve */
+        CommentResolve: {
+            /**
+             * Resolved
+             * @default true
+             */
+            resolved?: boolean;
+        };
+        /**
+         * CommentStatus
+         * @description Comment and review rows: `open | resolved | orphaned`. Suggestion rows:
+         *     `running` (job in flight, cancellable), `pending` (finished, awaiting
+         *     accept/reject), `accepted`, `rejected`, `failed`, `cancelled`. A DB CHECK
+         *     (`ck_node_comments_kind_status`) enforces the pairing.
+         * @enum {string}
+         */
+        CommentStatus: "open" | "resolved" | "orphaned" | "running" | "pending" | "accepted" | "rejected" | "failed" | "cancelled";
+        /** CommentUpdate */
+        CommentUpdate: {
+            /** Bodymarkdown */
+            bodyMarkdown: string;
+        };
         /**
          * ExportRequestIn
          * @description Request body of `POST /runs/{id}/exports`.
@@ -728,6 +1066,10 @@ export interface components {
             reviewerScore?: number | null;
             /** Reviewernotes */
             reviewerNotes?: string | null;
+            /** Reviewsummary */
+            reviewSummary?: {
+                [key: string]: unknown;
+            } | null;
             /** Structurelocked */
             structureLocked: boolean;
             /** Contentlocked */
@@ -735,6 +1077,18 @@ export interface components {
             sourceScope: components["schemas"]["SourceScope"];
             /** Sourceids */
             sourceIds: string[];
+            /**
+             * Opencommentcount
+             * @default 0
+             */
+            openCommentCount?: number;
+            /**
+             * Pendingsuggestioncount
+             * @default 0
+             */
+            pendingSuggestionCount?: number;
+            /** Contenthash */
+            contentHash?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -816,6 +1170,10 @@ export interface components {
             reviewerScore?: number | null;
             /** Reviewernotes */
             reviewerNotes?: string | null;
+            /** Reviewsummary */
+            reviewSummary?: {
+                [key: string]: unknown;
+            } | null;
             /** Structurelocked */
             structureLocked: boolean;
             /** Contentlocked */
@@ -823,6 +1181,18 @@ export interface components {
             sourceScope: components["schemas"]["SourceScope"];
             /** Sourceids */
             sourceIds: string[];
+            /**
+             * Opencommentcount
+             * @default 0
+             */
+            openCommentCount?: number;
+            /**
+             * Pendingsuggestioncount
+             * @default 0
+             */
+            pendingSuggestionCount?: number;
+            /** Contenthash */
+            contentHash?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -863,6 +1233,8 @@ export interface components {
             subPrompt?: string | null;
             /** Contentmarkdown */
             contentMarkdown?: string | null;
+            /** Expectedcontenthash */
+            expectedContentHash?: string | null;
             /** Contentlatex */
             contentLatex?: string | null;
             /** Reviewerscore */
@@ -906,6 +1278,17 @@ export interface components {
          * @enum {string}
          */
         OutputFormat: "markdown" | "latex" | "pdf";
+        /** Page[Comment] */
+        Page_Comment_: {
+            /** Items */
+            items: components["schemas"]["Comment"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** Page[File] */
         Page_File_: {
             /** Items */
@@ -1157,6 +1540,79 @@ export interface components {
             /** Promptmodifier */
             promptModifier?: string | null;
         };
+        /**
+         * RevisionCreate
+         * @description `POST /projects/{id}/outline/{nodeId}/revisions`.
+         *
+         *     `verb: "revise"` starts an in-process copilot job and answers with the
+         *     `running` suggestion. `verb: "rewrite"` starts a regenerate run of the
+         *     section (instruction = its prompt modifier; no scope/anchor/params/threadId)
+         *     and answers with the run.
+         */
+        RevisionCreate: {
+            /**
+             * Verb
+             * @default revise
+             * @enum {string}
+             */
+            verb?: "revise" | "rewrite";
+            /**
+             * Scope
+             * @default section
+             * @enum {string}
+             */
+            scope?: "section" | "range";
+            anchor?: components["schemas"]["CommentAnchorIn"] | null;
+            /**
+             * Instruction
+             * @default
+             */
+            instruction?: string;
+            params?: components["schemas"]["RevisionParams"];
+            /** Threadid */
+            threadId?: string | null;
+        };
+        /**
+         * RevisionParams
+         * @description The copilot's parameter chips. `fixIssueIds` are `kind=review` card ids,
+         *     `addressCommentIds` are comment-thread root ids, both of this section.
+         */
+        RevisionParams: {
+            /**
+             * Moreproofs
+             * @default false
+             */
+            moreProofs?: boolean;
+            /**
+             * Moreexamples
+             * @default false
+             */
+            moreExamples?: boolean;
+            /**
+             * Morerigorous
+             * @default false
+             */
+            moreRigorous?: boolean;
+            /**
+             * Shorter
+             * @default false
+             */
+            shorter?: boolean;
+            /**
+             * Longer
+             * @default false
+             */
+            longer?: boolean;
+            /**
+             * Citesources
+             * @default false
+             */
+            citeSources?: boolean;
+            /** Fixissueids */
+            fixIssueIds?: string[];
+            /** Addresscommentids */
+            addressCommentIds?: string[];
+        };
         /** Run */
         Run: {
             /**
@@ -1383,6 +1839,20 @@ export interface components {
             /** Llmmodel */
             llmModel: string;
         };
+        /** RunStarted */
+        RunStarted: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "run";
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+            run: components["schemas"]["Run"];
+        };
         /**
          * RunStatus
          * @enum {string}
@@ -1477,6 +1947,62 @@ export interface components {
             url?: string | null;
             /** Description */
             description?: string | null;
+        };
+        /**
+         * SuggestionAccept
+         * @description Optional body of `POST /suggestions/{id}/accept`.
+         */
+        SuggestionAccept: {
+            /** Hunkindexes */
+            hunkIndexes?: number[] | null;
+            /** Expectedcontenthash */
+            expectedContentHash?: string | null;
+        };
+        /**
+         * SuggestionAccepted
+         * @description The accepted suggestion and the node as it is now.
+         */
+        SuggestionAccepted: {
+            suggestion: components["schemas"]["Comment"];
+            node: components["schemas"]["OutlineNode"];
+        };
+        /**
+         * SuggestionProgress
+         * @description `data` of a `progress` event of `GET /suggestions/{id}/events/stream`.
+         */
+        SuggestionProgress: {
+            /** Seq */
+            seq: number;
+            /** Ts */
+            ts: string;
+            /** Stage */
+            stage: string;
+            /** Level */
+            level: string;
+            /** Message */
+            message: string;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** SuggestionStarted */
+        SuggestionStarted: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "suggestion";
+            suggestion: components["schemas"]["Comment"];
+        };
+        /**
+         * SuggestionTerminal
+         * @description `data` of the terminal `done` / `failed` / `cancelled` event.
+         */
+        SuggestionTerminal: {
+            /** Status */
+            status: string;
+            suggestion?: components["schemas"]["Comment"] | null;
         };
         /**
          * TargetAudience
@@ -2466,6 +2992,407 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OutlineNode"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-list_project_comments": {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["CommentKind"] | null;
+                status?: components["schemas"]["CommentStatus"] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Comment_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-get_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-delete_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-update_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-list_node_comments": {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["CommentKind"] | null;
+                status?: components["schemas"]["CommentStatus"] | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Comment_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-create_node_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "comments-resolve_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CommentResolve"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "revisions-create_revision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionStarted"] | components["schemas"]["RunStarted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "revisions-accept_suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SuggestionAccept"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "revisions-reject_suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "revisions-cancel_suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "revisions-stream_suggestion_events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description `text/event-stream`. `event: progress` messages carry a `SuggestionProgress`; the last message is `event: done|failed|cancelled` carrying a `SuggestionTerminal`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionProgress"] | components["schemas"]["SuggestionTerminal"];
                 };
             };
             /** @description Validation Error */

@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from api.application.outline import OutlineService
+from api.application.revision_apply import content_hash
 from api.domain.models import OutlineNode as OutlineNodeDomain
 from api.domain.outline import OutlineTree
 from api.presentation.deps import get_outline_service
@@ -48,13 +49,22 @@ def to_schema(node: OutlineNodeDomain) -> OutlineNode:
         rag_citations=node.rag_citations,
         reviewer_score=node.reviewer_score,
         reviewer_notes=node.reviewer_notes,
+        review_summary=node.review_summary,
         structure_locked=node.structure_locked,
         content_locked=node.content_locked,
         source_scope=node.source_scope,
         source_ids=node.source_ids,
+        open_comment_count=node.open_comment_count,
+        pending_suggestion_count=node.pending_suggestion_count,
         created_at=node.created_at,
         updated_at=node.updated_at,
     )
+
+
+def with_hash(schema: OutlineNode, node: OutlineNodeDomain) -> OutlineNode:
+    """Single-node responses carry `contentHash` (one hash of one text)."""
+    schema.content_hash = content_hash(node.content_markdown or "")
+    return schema
 
 
 def tree_to_schema(tree: OutlineTree) -> OutlineNodeTree:
@@ -138,7 +148,7 @@ async def get_outline_node(
     service: OutlineService = Depends(get_outline_service),
 ) -> OutlineNode:
     node = await service.get(project_id, node_id)
-    return to_schema(node)
+    return with_hash(to_schema(node), node)
 
 
 @router.patch("/{node_id}", response_model=OutlineNode)
@@ -150,7 +160,7 @@ async def update_outline_node(
 ) -> OutlineNode:
     changes = body.model_dump(exclude_unset=True)
     node = await service.update(project_id, node_id, changes)
-    return to_schema(node)
+    return with_hash(to_schema(node), node)
 
 
 @router.delete("/{node_id}", status_code=status.HTTP_204_NO_CONTENT)

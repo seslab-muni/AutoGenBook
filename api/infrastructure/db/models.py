@@ -334,6 +334,9 @@ class OutlineNodeRecord(Base):
     )
     reviewer_score: Mapped[float | None] = mapped_column(sa.Numeric, nullable=True)
     reviewer_notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Issue #182: latest reviewer verdict of this section (see
+    # `OutlineNode.review_summary`); NULL = never reviewed.
+    review_summary: Mapped[dict | None] = mapped_column(_jsonb(), nullable=True)
     structure_locked: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=True, server_default=sa.true()
     )
@@ -368,6 +371,142 @@ class OutlineNodeRecord(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
+
+
+class NodeCommentRecord(Base):
+    """Margin cards of an outline node (issue #182): comments, suggestions and
+    reviewer issues. Soft delete via `deleted_at`. `kind`/`status` are plain
+    text + CHECK (not Postgres enums): the value sets will grow."""
+
+    __tablename__ = "node_comments"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "kind IN ('comment', 'suggestion', 'review')", name="ck_node_comments_kind"
+        ),
+        sa.CheckConstraint(
+            "(kind IN ('comment', 'review') AND status IN ('open', 'resolved', 'orphaned'))"
+            " OR (kind = 'suggestion' AND status IN ('running', 'pending', 'accepted',"
+            " 'rejected', 'failed', 'cancelled'))",
+            name="ck_node_comments_kind_status",
+        ),
+        sa.Index(
+            "ix_node_comments_node_id_active",
+            "node_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_node_comments_project_id_active",
+            "project_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index("ix_node_comments_thread_id", "thread_id"),
+        sa.Index("ix_node_comments_parent_id", "parent_id"),
+        # Issue #182 (revision service): at most one revision job runs per
+        # node. The DB is the arbiter, so two racing POST .../revisions cannot
+        # both start (and, with several API replicas, neither can slip past a
+        # per-process check).
+        sa.Index(
+            "uq_node_comments_running_suggestion",
+            "node_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'suggestion' AND status = 'running' AND deleted_at IS NULL"),
+            sqlite_where=sa.text("kind = 'suggestion' AND status = 'running' AND deleted_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("outline_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # NULL for the copilot / the reviewer.
+    author_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    anchor: Mapped[dict | None] = mapped_column(_jsonb(), nullable=True)
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # The root row's id (a root row's own id); no FK, so a root can be inserted
+    # with `thread_id = id` in one statement.
+    thread_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, nullable=False)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid, sa.ForeignKey("node_comments.id", ondelete="CASCADE"), nullable=True
+    )
+    body_markdown: Mapped[str] = mapped_column(
+        sa.Text, nullable=False, default="", server_default=""
+    )
+    payload: Mapped[dict] = mapped_column(
+        _jsonb(), nullable=False, default=dict, server_default="{}"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
+        nullable=False,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    # Set only by a body edit (`updated_at` moves on any change).
+    edited_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+
+class RevisionJobRecord(Base):
+    """Liveness of one in-process revision job (issue #182): the suggestion row
+    `comment_id` is `running` while an API process owns the job. `owner` is that
+    process's instance id; it refreshes `heartbeat_at` every few seconds and a
+    sweeper (any replica) fails `running` suggestions whose heartbeat went stale
+    (`interrupted`). `cancel_requested` is the cross-replica cancel signal."""
+
+    __tablename__ = "revision_jobs"
+
+    comment_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("node_comments.id", ondelete="CASCADE"), primary_key=True
+    )
+    owner: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    cancel_requested: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+
+class RevisionEventRecord(Base):
+    """Progress events of a revision job (the engine's `retrieve` / `revise` /
+    `diff` stages), tailed by `GET /suggestions/{id}/events/stream`. Written
+    only by the owning process, so `seq` (1-based, per suggestion) needs no
+    allocation race handling."""
+
+    __tablename__ = "revision_events"
+    __table_args__ = (
+        sa.UniqueConstraint("comment_id", "seq", name="uq_revision_events_comment_id_seq"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    comment_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("node_comments.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    ts: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    level: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    stage: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    message: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(_jsonb(), nullable=True)
 
 
 class RunRecord(Base):

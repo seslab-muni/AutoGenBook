@@ -29,7 +29,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { DeleteNodeDialog } from '@/features/outline/components/delete-node-dialog';
-import { NodePropertiesSheet } from '@/features/outline/components/node-properties-sheet';
 import { OutlineDraftEditor } from '@/features/outline/components/outline-draft-editor';
 import {
   OutlineRow,
@@ -87,7 +86,6 @@ export function OutlinePane({
   const collapseAllAction = useOutlineStore((state) => state.collapseAll);
 
   const [deletingNode, setDeletingNode] = useState<OutlineNode | null>(null);
-  const [propertiesNodeId, setPropertiesNodeId] = useState<string | null>(null);
   const [draftEditorOpen, setDraftEditorOpen] = useState(false);
   const [unlockAllOpen, setUnlockAllOpen] = useState(false);
   const [filterInput, setFilterInput] = useState('');
@@ -253,15 +251,10 @@ export function OutlinePane({
       onToggleCollapse: handleToggleCollapse,
       onAddChild: handleAddChild,
       onDelete: setDeletingNode,
-      onOpenProperties: setPropertiesNodeId,
       onKeyNavigate: handleKeyNavigate,
     }),
     [onSelectNode, handleToggleCollapse, handleAddChild, handleKeyNavigate],
   );
-
-  const propertiesNode = propertiesNodeId
-    ? (flat.find((n) => n.id === propertiesNodeId) ?? null)
-    : null;
 
   return (
     <>
@@ -473,14 +466,6 @@ export function OutlinePane({
           if (!open) setDeletingNode(null);
         }}
         onConfirm={handleConfirmDelete}
-      />
-      <NodePropertiesSheet
-        projectId={projectId}
-        node={propertiesNode}
-        flat={flat}
-        onOpenChange={(open) => {
-          if (!open) setPropertiesNodeId(null);
-        }}
       />
       <OutlineDraftEditor
         projectId={projectId}

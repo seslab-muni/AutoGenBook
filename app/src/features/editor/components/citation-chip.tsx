@@ -14,7 +14,7 @@ interface CitationChipProps {
  * (`remarkCitations`). When a matching `RAGCitation` is found by id/citeKey
  * it shows `authorYear` (falling back to the source filename) and is
  * clickable, handing the key to `onClick` so `MarkdownView`'s caller can jump
- * to the Copilot drawer's Citations tab; otherwise it renders a muted
+ * to the sources drawer's Citations list; otherwise it renders a muted
  * "unresolved" chip so a stale/typo'd key is still visible rather than
  * silently swallowed.
  */

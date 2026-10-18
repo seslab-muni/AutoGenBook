@@ -1,74 +1,87 @@
-import { Lock } from 'lucide-react';
+import { ChevronUp } from 'lucide-react';
 
 import { PaneStatusBar } from '@/components/layout/pane-status-bar';
-import { Badge } from '@/components/ui/badge';
-import { SaveStatusBadge } from '@/features/editor/components/save-status-badge';
-import type { SaveStatus } from '@/features/editor/lib/save-status';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-
-/** Words per page assumed for the `≈ pages` estimate — the same 320 wpp the AI Studio mock used. */
-const WORDS_PER_PAGE = 320;
+import { useEditorSelectionStore } from '@/stores/editor-selection-store';
 
 interface EditorStatusBarProps {
-  /** Server-derived word count — shown as-is (never an optimistic local count) once saved. */
-  serverWords: number;
-  /** Live word count of the unsaved draft, shown instead of `serverWords` while dirty. */
-  draftWords: number;
-  isDirty: boolean;
-  equationCount: number;
-  status: SaveStatus;
-  reviewerScore?: number | null;
-  /** Issue #113: the section is content-locked (kept as-is by full runs). Editing stays enabled. */
-  contentLocked?: boolean;
+  /** Characters (code points) and whitespace-delimited words of the live draft. */
+  characters: number;
+  words: number;
+  /** `null` while the source list is still loading — shows no count rather than a wrong "0". */
+  sourceCount: number | null;
+  /** The source list failed to load; shown instead of a count. */
+  sourcesError?: boolean;
+  sourcesOpen: boolean;
+  /** `id` of the sources drawer this bar's button controls. */
+  sourcesDrawerId: string;
+  onToggleSources: () => void;
+  /** Lets the sheet return focus here when the drawer closes. */
+  sourcesButtonRef?: React.Ref<HTMLButtonElement>;
+  /** Shows the caret readout (Source view only; Write has no caret in the Markdown source). */
+  showCaret: boolean;
+  /** Closes the sources drawer — fired by Escape on the sources button while it is open. */
+  onCloseSources: () => void;
   className?: string;
 }
 
+/**
+ * The editor's status strip (issue #182): live counts on the left, the sources drawer toggle in
+ * the middle and the Source view's caret position on the right. Save status lives in the header.
+ */
 export function EditorStatusBar({
-  serverWords,
-  draftWords,
-  isDirty,
-  equationCount,
-  status,
-  reviewerScore,
-  contentLocked = false,
+  characters,
+  words,
+  sourceCount,
+  sourcesError = false,
+  sourcesOpen,
+  sourcesDrawerId,
+  onToggleSources,
+  sourcesButtonRef,
+  showCaret,
+  onCloseSources,
   className,
 }: EditorStatusBarProps) {
-  const words = isDirty ? draftWords : serverWords;
-  const pages = Math.max(1, Math.round(words / WORDS_PER_PAGE));
+  let sourcesLabel = 'Loading sources…';
+  if (sourcesError) sourcesLabel = 'Sources unavailable';
+  else if (sourceCount !== null)
+    sourcesLabel = `${sourceCount} ${sourceCount === 1 ? 'source' : 'sources'}`;
+  const fullCounts = `${characters.toLocaleString()} characters · ${words.toLocaleString()} words`;
 
   return (
-    <PaneStatusBar className={cn('justify-between font-mono', className)}>
-      <div className="flex items-center gap-3">
-        <span>{words} words</span>
-        <span className="text-muted-foreground/50">·</span>
-        <span title={`Estimated at ${WORDS_PER_PAGE} words/page`}>≈ {pages} pages</span>
-        <span className="text-muted-foreground/50">·</span>
-        <span>
-          {equationCount} equation{equationCount === 1 ? '' : 's'}
+    <PaneStatusBar className={cn('@container justify-between font-mono', className)}>
+      <span className="shrink-0" title={`${fullCounts}`}>
+        <span aria-hidden="true" className="@md:hidden">
+          {characters.toLocaleString()} ch · {words.toLocaleString()} w
         </span>
-        {reviewerScore != null ? (
-          <>
-            <span className="text-muted-foreground/50">·</span>
-            <Badge variant="secondary" className="font-mono">
-              Review {reviewerScore.toFixed(1)}
-            </Badge>
-          </>
-        ) : null}
-        {contentLocked ? (
-          <>
-            <span className="text-muted-foreground/50">·</span>
-            <Badge
-              variant="outline"
-              className="gap-1 font-mono"
-              title="Content locked — the next full run keeps this section as-is; what you edit here is what it sees."
-            >
-              <Lock className="size-3" aria-hidden="true" />
-              Locked
-            </Badge>
-          </>
-        ) : null}
-      </div>
-      <SaveStatusBadge status={status} />
+        <span className="sr-only @md:not-sr-only">{fullCounts}</span>
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        className="h-5 shrink-0 font-mono"
+        ref={sourcesButtonRef}
+        aria-expanded={sourcesOpen}
+        aria-controls={sourcesDrawerId}
+        onClick={onToggleSources}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && sourcesOpen) onCloseSources();
+        }}
+      >
+        {sourcesLabel}
+        <ChevronUp className={cn('transition-transform', sourcesOpen && 'rotate-180')} />
+      </Button>
+      <span className="min-w-0 flex-1 truncate text-right">
+        {showCaret ? <CaretReadout /> : null}
+      </span>
     </PaneStatusBar>
   );
+}
+
+/** Subscribes to the selection store on its own so a caret move re-renders only this readout. */
+function CaretReadout() {
+  const selection = useEditorSelectionStore((state) => state.selection);
+  return selection ? `Ln ${selection.line}, Col ${selection.column}` : null;
 }

@@ -10,12 +10,16 @@ from api.domain.models import (
     ArtifactKind,
     File,
     FileKind,
+    CommentKind,
+    CommentStatus,
     LlmModelInfo,
+    NodeComment,
     OutlineNode,
     Project,
     Run,
     RunArtifact,
     RunEvent,
+    RunKind,
     RunStatus,
     Source,
     User,
@@ -120,9 +124,22 @@ class OutlineRepository(Protocol):
 
     async def add(self, node: OutlineNode) -> OutlineNode: ...
 
+    # `commit=False` flushes but leaves the transaction open; finish it with
+    # `commit()` (re-anchoring, review rows and the content write are atomic).
     async def update(
-        self, node: OutlineNode, *, fields: Sequence[str] | None = None
+        self,
+        node: OutlineNode,
+        *,
+        fields: Sequence[str] | None = None,
+        commit: bool = True,
     ) -> OutlineNode: ...
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
+
+    # `get` with a row lock (`FOR UPDATE`) and a fresh read.
+    async def get_for_update(self, node_id: uuid.UUID) -> OutlineNode | None: ...
 
     async def delete_subtree(self, project_id: uuid.UUID, root_id: uuid.UUID) -> None: ...
 
@@ -140,6 +157,101 @@ class OutlineRepository(Protocol):
     async def count(self, project_id: uuid.UUID) -> int: ...
 
     async def clear_content_locked(self, project_id: uuid.UUID) -> int: ...
+
+
+class CommentRepository(Protocol):
+    async def get(
+        self, comment_id: uuid.UUID, *, include_deleted: bool = False
+    ) -> NodeComment | None: ...
+
+    # Whole threads: the roots matching the filters plus all their live replies.
+    async def list_threads_for_node(
+        self,
+        node_id: uuid.UUID,
+        *,
+        kind: CommentKind | None = None,
+        status: CommentStatus | None = None,
+    ) -> list[NodeComment]: ...
+
+    # limit/offset page the matching roots; returns (rows, total matching roots).
+    async def list_threads_for_project(
+        self,
+        project_id: uuid.UUID,
+        *,
+        kind: CommentKind | None = None,
+        status: CommentStatus | None = None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[NodeComment], int]: ...
+
+    # For a reply, locks and re-checks the live root in the same transaction
+    # (NotFound if it was deleted meanwhile) and reopens a resolved root.
+    async def add(self, comment: NodeComment, *, commit: bool = True) -> NodeComment: ...
+
+    async def update(
+        self, comment: NodeComment, *, fields: Sequence[str], commit: bool = True
+    ) -> NodeComment: ...
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
+
+    # Rows whose anchor must follow the node's text (see the implementation).
+    async def list_anchored_for_node(self, node_id: uuid.UUID) -> list[NodeComment]: ...
+
+    # Bulk `(id, anchor, status | None)` write; no commit unless asked.
+    async def update_anchors(
+        self,
+        updates: Sequence[tuple[uuid.UUID, dict | None, CommentStatus | None]],
+        *,
+        commit: bool = False,
+    ) -> None: ...
+
+    # `review` roots of the node incl. soft-deleted, and live reply counts.
+    async def list_reviews_for_node(
+        self, node_id: uuid.UUID
+    ) -> tuple[list[NodeComment], dict[uuid.UUID, int]]: ...
+
+    async def bulk_update(self, rows: Sequence[dict]) -> None: ...
+
+    async def add_many(self, comments: Sequence[NodeComment]) -> None: ...
+
+    async def supersede(self, comment_ids: Sequence[uuid.UUID]) -> None: ...
+
+    async def set_status_many(
+        self, comment_ids: Sequence[uuid.UUID], status: CommentStatus
+    ) -> None: ...
+
+    async def get_many(self, comment_ids: Sequence[uuid.UUID]) -> list[NodeComment]: ...
+
+    async def list_threads(self, thread_ids: Sequence[uuid.UUID]) -> list[NodeComment]: ...
+
+    async def list_thread(self, thread_id: uuid.UUID) -> list[NodeComment]: ...
+
+    async def transition_suggestion(
+        self,
+        comment_id: uuid.UUID,
+        expected: CommentStatus,
+        *,
+        status: CommentStatus,
+        payload: dict | None = None,
+        body_markdown: str | None = None,
+        commit: bool = True,
+        include_deleted: bool = False,
+    ) -> bool: ...
+
+    async def count_running_suggestions(
+        self, *, node_id: uuid.UUID | None = None, author_id: uuid.UUID | None = None
+    ) -> int: ...
+
+    async def soft_delete_thread(self, thread_id: uuid.UUID) -> None: ...
+
+    async def soft_delete(self, comment_id: uuid.UUID) -> None: ...
+
+    # {node_id: (open_comment_count, pending_suggestion_count)}, one grouped query.
+    async def counts_for_project(
+        self, project_id: uuid.UUID
+    ) -> dict[uuid.UUID, tuple[int, int]]: ...
 
 
 class RunRepository(Protocol):
@@ -184,6 +296,7 @@ class RunRepository(Protocol):
         offset: int,
         *,
         statuses: Sequence[RunStatus] | None = None,
+        kinds: Sequence[RunKind] | None = None,
     ) -> tuple[list[Run], int]: ...
 
     # 1-based position of `run` among its project's other `queued` runs,

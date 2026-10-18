@@ -156,6 +156,52 @@ class RetrievalSettings:
     web_k: int = 5
 
 
+def llm_settings_from_env(env: Mapping[str, str], *, base_url: str | None = None) -> LLMSettings:
+    """`LLMSettings` from the environment (the one place the variables are
+    parsed). `base_url`, when non-empty, wins over the environment."""
+    resolved_url = (
+        (base_url or "").strip()
+        or _env_str(env, "AUTOGENBOOK_LLM_BASE_URL")
+        or _env_str(env, "OPENROUTER_BASE_URL")
+        or DEFAULT_OPENROUTER_BASE_URL
+    )
+    # Key precedence follows the API (`api/core/settings.py:resolved_llm_api_key`,
+    # which mirrors the old client): OPENROUTER_API_KEY, then AUTOGENBOOK_LLM_API_KEY.
+    api_key = (
+        _env_str(env, "OPENROUTER_API_KEY")
+        or _env_str(env, "AUTOGENBOOK_LLM_API_KEY")
+        or _env_str(env, "OPENAI_API_KEY")
+        or None
+    )
+    model = _env_str(env, "AUTOGENBOOK_LLM_MODEL", DEFAULT_MODEL)
+    mini = _env_str(env, "AUTOGENBOOK_LLM_MINI_MODEL", model)
+    reasoning_effort = _env_str(env, "AUTOGENBOOK_LLM_REASONING_EFFORT").lower() or None
+    if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+        raise ConfigError(f"AUTOGENBOOK_LLM_REASONING_EFFORT must be one of {', '.join(REASONING_EFFORTS)}")
+    pricing_cache = _env_str(env, "AUTOGENBOOK_PRICING_CACHE")
+    if pricing_cache:
+        pricing_cache_path: Path | None = Path(pricing_cache).expanduser()
+    elif _env_str(env, "HOME"):
+        pricing_cache_path = Path(env["HOME"]).expanduser() / ".cache" / "autogenbook" / "openrouter_pricing.json"
+    else:
+        pricing_cache_path = None
+    return LLMSettings(
+        base_url=resolved_url,
+        api_key=api_key,
+        model=model,
+        mini_model=mini,
+        force_mini=_env_bool(env, "AUTOGENBOOK_FORCE_MINI_MODEL", False),
+        timeout_s=_env_float(env, "OPENROUTER_REQUEST_TIMEOUT_S", 300.0),
+        max_retries=max(0, _env_int(env, "OPENROUTER_MAX_RETRIES", 3)),
+        http_referer=_env_str(env, "OPENROUTER_HTTP_REFERER") or None,
+        x_title=_env_str(env, "OPENROUTER_X_TITLE") or None,
+        pricing_disabled=_env_bool(env, "OPENROUTER_PRICING_DISABLE", False),
+        pricing_timeout_s=_env_float(env, "OPENROUTER_PRICING_TIMEOUT", 30.0),
+        pricing_cache_path=pricing_cache_path,
+        reasoning_effort=reasoning_effort,
+    )
+
+
 @dataclass(frozen=True)
 class PresentationSettings:
     tex: bool = False
@@ -228,49 +274,10 @@ class RunConfig:
             # Contract 3.1: a relative -j resolves against -o, not the cwd.
             json_path = out_dir / json_path
 
-        base_url = (
-            (args.llm_base_url or "").strip()
-            or _env_str(env, "AUTOGENBOOK_LLM_BASE_URL")
-            or _env_str(env, "OPENROUTER_BASE_URL")
-            or DEFAULT_OPENROUTER_BASE_URL
-        )
-        # Key precedence follows the API (`api/core/settings.py:resolved_llm_api_key`,
-        # which mirrors the old client): OPENROUTER_API_KEY, then AUTOGENBOOK_LLM_API_KEY.
-        api_key = (
-            _env_str(env, "OPENROUTER_API_KEY")
-            or _env_str(env, "AUTOGENBOOK_LLM_API_KEY")
-            or _env_str(env, "OPENAI_API_KEY")
-            or None
-        )
-        model = _env_str(env, "AUTOGENBOOK_LLM_MODEL", DEFAULT_MODEL)
-        mini = _env_str(env, "AUTOGENBOOK_LLM_MINI_MODEL", model)
-        reasoning_effort = _env_str(env, "AUTOGENBOOK_LLM_REASONING_EFFORT").lower() or None
-        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
-            raise ConfigError(f"AUTOGENBOOK_LLM_REASONING_EFFORT must be one of {', '.join(REASONING_EFFORTS)}")
+        llm = llm_settings_from_env(env, base_url=args.llm_base_url)
+        base_url, api_key = llm.base_url, llm.api_key
         cache_dir_raw = _env_str(env, "AUTOGENBOOK_KB_EXTRACT_CACHE_DIR")
         extract_cache_dir = Path(cache_dir_raw).expanduser().resolve() if cache_dir_raw else None
-        pricing_cache = _env_str(env, "AUTOGENBOOK_PRICING_CACHE")
-        if pricing_cache:
-            pricing_cache_path: Path | None = Path(pricing_cache).expanduser()
-        elif _env_str(env, "HOME"):
-            pricing_cache_path = Path(env["HOME"]).expanduser() / ".cache" / "autogenbook" / "openrouter_pricing.json"
-        else:
-            pricing_cache_path = None
-        llm = LLMSettings(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            mini_model=mini,
-            force_mini=_env_bool(env, "AUTOGENBOOK_FORCE_MINI_MODEL", False),
-            timeout_s=_env_float(env, "OPENROUTER_REQUEST_TIMEOUT_S", 300.0),
-            max_retries=max(0, _env_int(env, "OPENROUTER_MAX_RETRIES", 3)),
-            http_referer=_env_str(env, "OPENROUTER_HTTP_REFERER") or None,
-            x_title=_env_str(env, "OPENROUTER_X_TITLE") or None,
-            pricing_disabled=_env_bool(env, "OPENROUTER_PRICING_DISABLE", False),
-            pricing_timeout_s=_env_float(env, "OPENROUTER_PRICING_TIMEOUT", 30.0),
-            pricing_cache_path=pricing_cache_path,
-            reasoning_effort=reasoning_effort,
-        )
 
         kb_dir = Path(args.kb_dir).expanduser().resolve() if args.kb_dir else None
         dense = _env_str(env, "AUTOGENBOOK_DENSE", "auto").lower()

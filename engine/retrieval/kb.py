@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 
 import hashlib
+import logging
 import json
 import pickle
 import re
@@ -73,6 +74,33 @@ class KnowledgeBase:
             digest.update(str(stat.st_mtime_ns).encode())
         digest.update(tag.encode("utf-8"))
         return digest.hexdigest()
+
+    @classmethod
+    def load_cached(cls, kb_dir: Path, cache_dir: Path) -> "KnowledgeBase | None":
+        """The index a run saved in `cache_dir` for `kb_dir`, or None. Never
+        reads or extracts the KB's files and does not verify their fingerprint:
+        for revisions the index of the run that wrote the text is the right one."""
+        kb_dir = kb_dir.expanduser().resolve()
+        key = hashlib.sha256(str(kb_dir).encode("utf-8")).hexdigest()[:16]
+        data_path = cache_dir / f"engine_kb_{key}.pkl"
+        if not data_path.is_file():
+            return None
+        try:
+            with data_path.open("rb") as handle:
+                kb = pickle.load(handle)
+            if not isinstance(kb, cls):
+                return None
+            # An index pickled by another engine version may unpickle yet not work: smoke-test it.
+            if kb.chunks:
+                _ = kb.chunks[0].index_text, kb.chunks[0].cite_key, kb.chunks[0].rel_path
+            if kb.lexical is not None:
+                kb.lexical.search("test", lang="en", top=1, mask=None)
+        except Exception as exc:  # noqa: BLE001 - a broken or incompatible cache is simply absent
+            logging.getLogger(__name__).warning("saved knowledge-base index %s is unusable (%s: %s)", data_path.name, type(exc).__name__, exc)
+            return None
+        kb.loaded_from_cache = True
+        kb.root = kb_dir
+        return kb
 
     @classmethod
     def build(

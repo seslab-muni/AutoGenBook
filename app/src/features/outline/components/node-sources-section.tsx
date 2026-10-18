@@ -40,7 +40,7 @@ function impactSentence(node: OutlineNode, flat: readonly OutlineNode[]): string
 }
 
 /**
- * The node properties sheet's "Sources" section (issue #138): which knowledge-base files this
+ * The editor header's Chapter options "Sources" section (issue #138): which knowledge-base files this
  * node's leaf sections retrieve from — inherited from the nearest scoped ancestor, every project
  * source, or an explicit selection picked in `SourceScopePicker`.
  */
@@ -64,7 +64,7 @@ export function NodeSourcesSection({ projectId, node, flat }: NodeSourcesSection
   const impact = node.sourceScope !== 'inherit' ? impactSentence(node, flat) : null;
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-2.5" data-sources-section>
       <div className="space-y-1">
         <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
           <Database className="size-3.5 text-muted-foreground" />

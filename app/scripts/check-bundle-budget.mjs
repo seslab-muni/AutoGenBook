@@ -2,9 +2,12 @@
 // Enforces the bundle-size budgets from issue #23: the eagerly-loaded entry chunk must stay
 // under 300 kB gzipped, and the whole JS+CSS bundle (every chunk `rollup-plugin-visualizer`
 // reports — lazy route chunks included, static assets like fonts excluded, since those are
-// never bundled through Rollup) under 1 MB gzipped. Both are overridable via env vars so the
-// numbers can be retuned without touching this file (the issue itself says "adjust after the
-// first measurement").
+// never bundled through Rollup) under 1152 kB gzipped (1 MB until the editable Write view, issue
+// #182 phase 5, added its editor as one lazily loaded chunk: 1012.9 kB before; the review fixes
+// (verification in context, the link popover, the clipboard guard) grew it, and the ceiling is the
+// measured total rounded up to the next 16 kB; the entry chunk's 300 kB is unchanged). Both are overridable
+// via env vars so the numbers can be retuned without touching this file (the issue itself says
+// "adjust after the first measurement").
 //
 // Reads two files `pnpm build` produces (see `vite.config.ts`):
 //   - dist/.vite/manifest.json  — Vite's manifest; `index.html`'s entry names the entry chunk file.
@@ -21,7 +24,7 @@ import { gzipSync } from 'node:zlib';
 
 const DIST_DIR = path.resolve(import.meta.dirname, '../dist');
 const MAIN_CHUNK_BUDGET_BYTES = Number(process.env.BUNDLE_MAIN_CHUNK_BUDGET_KB ?? 300) * 1024;
-const TOTAL_BUDGET_BYTES = Number(process.env.BUNDLE_TOTAL_BUDGET_KB ?? 1024) * 1024;
+const TOTAL_BUDGET_BYTES = Number(process.env.BUNDLE_TOTAL_BUDGET_KB ?? 1152) * 1024;
 
 function sumLeafGzip(node, nodeParts) {
   if (node.uid !== undefined) {
@@ -29,6 +32,26 @@ function sumLeafGzip(node, nodeParts) {
   }
   return (node.children ?? []).reduce((total, child) => total + sumLeafGzip(child, nodeParts), 0);
 }
+
+/** Every module the visualizer reports, across all chunks, as its full path (parent names joined). */
+function moduleNames(node, parents = [], out = []) {
+  const here = [...parents, node.name ?? ''];
+  if (node.uid !== undefined) out.push(here.join('/'));
+  for (const child of node.children ?? []) moduleNames(child, here, out);
+  return out;
+}
+
+/**
+ * Modules that must not be in the bundle: the editor's setup is a trimmed copy
+ * (`src/features/editor/lib/editor-setup.ts`, aliased over `@uiw/codemirror-extensions-basic-setup` in
+ * `vite.config.ts`) so the completion popup and the lint keymap stay out. If the alias stops applying
+ * (a rename upstream, a config change), those modules come back silently; this makes it loud.
+ */
+const FORBIDDEN_MODULES = [
+  'codemirror-extensions-basic-setup',
+  '@codemirror+lint',
+  '@codemirror/lint',
+];
 
 function formatKb(bytes) {
   return `${(bytes / 1024).toFixed(1)} kB`;
@@ -80,6 +103,34 @@ async function main() {
   console.log(`Total:       ${formatKb(totalBytes)} (budget ${formatKb(TOTAL_BUDGET_BYTES)})`);
 
   const failures = [];
+  const names = moduleNames(stats.tree);
+  for (const forbidden of FORBIDDEN_MODULES) {
+    if (names.some((name) => name.includes(forbidden))) {
+      failures.push(
+        `the bundle contains ${forbidden}: the trimmed editor setup is not being used (see FORBIDDEN_MODULES)`,
+      );
+    }
+  }
+  // The editable Write view's editor (ProseMirror) is its own chunk, fetched only when a Write view
+  // is first made editable: nothing may import it statically (the entry, the studio, the read-only
+  // view and the Source view must not pay for it), which is also what the raised total budget
+  // above assumes.
+  const editorChunks = stats.tree.children
+    .filter((node) => moduleNames(node).some((name) => name.includes('prosemirror-view')))
+    .map((node) => node.name);
+  const editorKeys = Object.entries(manifest)
+    .filter(([, value]) => editorChunks.includes(value.file))
+    .map(([key]) => key);
+  if (editorKeys.length === 0)
+    failures.push('no chunk contains prosemirror-view (is the editor still lazy-loaded?)');
+  for (const [key, value] of Object.entries(manifest)) {
+    const staticImports = (value.imports ?? []).filter((target) => editorKeys.includes(target));
+    if (staticImports.length > 0) {
+      failures.push(
+        `${key} imports the editor chunk statically; it must only be loaded with import()`,
+      );
+    }
+  }
   if (mainChunk.gzipBytes > MAIN_CHUNK_BUDGET_BYTES) {
     failures.push(
       `entry chunk ${formatKb(mainChunk.gzipBytes)} exceeds budget ${formatKb(MAIN_CHUNK_BUDGET_BYTES)}`,

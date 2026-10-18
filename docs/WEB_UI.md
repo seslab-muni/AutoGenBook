@@ -13,7 +13,7 @@ Playwright e2e/a11y suite).
 | --- | --- | --- |
 | `/login` | `routes/login.tsx` | Email/password sign-in; redirects to `/` (or `?redirect=`) on success. |
 | `/` | `routes/index.tsx` → `features/projects` | Projects hub: search/filter, create/duplicate/delete a project. |
-| `/p/$projectId` | `routes/p.$projectId.index.tsx` | The studio: outline pane (left), editor pane (center), copilot/citations/review tabs (right). Dialogs for sources, export, settings, and starting a run are mounted here, each gated by `useUiStore`'s `activeModal`. |
+| `/p/$projectId` | `routes/p.$projectId.index.tsx` | The studio: outline pane (left), editor pane (center), the margin workspace (right: comments, review issues and the copilot's suggestions). Dialogs for sources, export, settings, and starting a run are mounted here, each gated by `useUiStore`'s `activeModal`. |
 | `/p/$projectId/runs/$runId` | `routes/p.$projectId.runs.$runId.tsx` → `features/runs` | Run detail: live status, event log, artifacts, cost summary. Header actions include Cancel (while active), Regenerate again (for a `regenerate_section` run), and Resume (issue #124 — only when `run.retryable`; the only place this action appears). |
 
 **Account dialog (per-user LLM key).** The header's account menu has an
@@ -29,21 +29,732 @@ submitted - the API never returns it.
 
 **Content locks (issue #113).** In the studio's outline pane a drafted leaf
 section can be *content-locked* from its row's hover action or context menu
-(“Lock content — keep as-is on the next run”), from the properties sheet's
-“Lock content” switch, or unlocked from the Copilot panel's inline hint. A
+(“Lock content — keep as-is on the next run”) or from the editor header's lock
+button (“Lock content: keep as-is on full runs”). A
 locked row shows a persistent lock badge, the pane's status bar counts
 `N locked`, and an “Unlock all” toolbar action (with a confirm) appears once
 anything is locked. The start-run dialog shows “N of M sections are locked.
 They will be kept as-is and used as context for the rest.” with an “Unlock all
-and regenerate everything” shortcut; the Copilot panel disables regeneration
-for a locked node and offers to unlock it; the editor's status bar shows a
-`Locked` badge but stays editable — what you edit is what the next run keeps
+and regenerate everything” shortcut; a *Rewrite* of a locked node is refused by the
+API (its 409 reason is shown in the prompt window; unlock from the header button),
+while *Revise* works on a locked node, since the lock only protects the text against
+runs; the editor's header lock button shows
+as pressed but the section stays editable — what you edit is what the next run keeps
 and hands to later sections as context. The rule for *when* a node may be
 locked (leaf only, non-blank content) lives in
 `src/features/outline/content-lock.ts`, mirroring the API's 409/422 checks;
 the API contract is in `docs/WEB_API_REFERENCE.md` (`contentLocked`,
 `POST .../outline/unlock-all`). This is distinct from `structureLocked`, which
 only controls whether the CLI may split a node.
+
+**Editor header, Chapter options and status bar (issue #182, phase 1).** Once a
+section is selected, `features/editor/components/manuscript-sheet.tsx` renders
+a header (left to right): the content-lock icon button
+(`lock-content-button.tsx`, same enablement rules as the outline row; a button
+that cannot act is `aria-disabled`, not `disabled`, so its tooltip stays
+reachable), a **Write / Source** toggle group (Source is the CodeMirror
+`SectionEditor`; Write is the rendered manuscript view, editable in place since phase 5 (see
+*The editable Write view* below), read-only where a section cannot be edited — the
+persisted `editor-store` view is `'write' | 'source'`, a stored legacy
+`'preview'` migrates to `'write'`), a **Chapter options** chip opening a popover
+(`chapter-options-popover.tsx`) with the section's standing generation brief —
+target pages, equation density, math level, summary, sub-prompt — plus the
+source scope (`NodeSourcesSection`), saved as you edit (sliders/text debounced,
+a pending edit is flushed when the popover closes or the section changes), a
+**Copilot** icon button that opens the prompt window at section scope (it is
+`aria-disabled`, with its reason in the tooltip, for a container node only; for a
+LaTeX-only section it opens the window locked to Rewrite, since the server anchors
+and revises Markdown; it is what keyboard focus returns to when the window closes), and, pinned
+at the far right, a **More** menu (Copy Markdown, Download section .md, Open in
+run) followed by the save status. Below the `xl` breakpoint the Chapter options
+and save-status labels collapse to icons. There is no Properties sheet any more:
+the outline row's gear button and the context menu's *Properties* item were
+removed with it.
+
+The editor's status bar (`editor-status-bar.tsx`) shows `N characters · M words`
+of the live draft on the left (characters are Unicode code points), an
+**`N sources`** button in the middle and, in the Source view, the caret position
+`Ln x, Col y` (column in code points) on the right (in the read-only Write view, which has
+no caret of its own; since phase 2 it publishes the Markdown position of the
+text selection, so the readout appears there once something is selected). The caret and selection live in
+`stores/editor-selection-store.ts` as `{from, to, line, column}` with `from`/`to`
+as code-point offsets over the Markdown source, so a caret move re-renders only
+the status bar readout. The sources button toggles a non-modal drawer that sits
+between the editor and the bar (`sources-drawer.tsx`) listing the section's
+effective sources — the resolved scope (own selection, inherited from an
+ancestor, or all project sources), each source's chunk count and how many
+passages of it the last run cited (`ragCitations` matched on file name; not a live
+count), with sources whose indexing failed marked as not searched — and a
+*Change scope* link that closes the drawer and opens Chapter options focused on
+its Sources section. Escape pressed inside the drawer, or on the sources button,
+closes it. What left the status bar compared to before: the `≈ N pages` estimate
+and the `N equations` count (dropped), the reviewer score badge (now in the margin's
+review summary strip, when a run produced one) and the `Locked` badge (now the pressed state of the
+header's lock button). The save status moved to the header.
+
+**Margin workspace: anchors, comments and highlights (issue #182, phase 2).**
+Human comments live in the margin, a `bg-muted` column (376px by default; on wide screens a
+handle on its left edge resizes it between 300 and 640px, remembered in `useUiStore.marginWidth`;
+the narrow-screen side sheet keeps the default) that replaces the
+old right pane's role.
+
+*Right column.* `features/editor/margin/right-pane.tsx` is the close button and the slot
+the open section portals its margin into (`MarginHostContext`), because the sheet owns
+the comment data and the text geometry. There is no Margin | Copilot switch, no tabs and
+no legacy drawer any more (see *The legacy drawer is gone*). Below 1280px
+(`components/layout/use-right-pane.ts`, hook `useRightColumn`) the column is a managed,
+non-modal **side sheet** over the editor's right edge: it opens from the toolbar button
+or when a comment or prompt is started, closes with its close button, on a press outside
+it (dialogs and menus it opened are exempt, and so are the copilot's own entry points, the
+header Copilot button and the selection bar, which open the sheet themselves: closing it
+first moved the editor under the pointer and lost the click) and on Escape from anywhere
+(an open dialog owns that Escape; a composer and the prompt window stop their own), and
+while it is open the editor pane gets matching right padding so the text being commented
+on stays visible. Its open state is the unpersisted `ui-store.rightOverlayOpen`, so
+opening it on a narrow screen never changes the saved wide-screen preference
+(`marginOpen`).
+
+*Data.* `api/queries/comments.ts` (`comments.forNode`, create/update/delete/resolve
+mutations): resolve and delete are optimistic (the card or badge moves at once,
+errors roll back and toast the server's message); create and edit take
+`{ optimistic: false }` from the cards, because their composers stay open until the
+server answers. Every write refetches the node's threads and the outline lists, and a
+successful `contentMarkdown` save also refetches the node's comments (the server
+re-anchors on save). MSW mocks (`mocks/handlers.ts`) implement the endpoints,
+including a stand-in for that re-anchoring. Outline rows show **open comments**
+(yellow, round) and **pending suggestions** (amber, square) as count-only pills from
+`openCommentCount` / `pendingSuggestionCount`
+(`features/outline/components/node-count-badges.tsx`, `role="img"` with the kind in
+the accessible name and tooltip).
+
+*Anchors.* `features/editor/lib/anchors.ts` is pure TypeScript: W3C text-quote
+anchors over the Markdown source with **code-point** offsets (`CodePointIndex`
+converts to the UTF-16 offsets CodeMirror and the DOM use). `makeAnchor` records the
+quote and up to 32 code points of context. `resolveAnchor` tries the stored offsets
+(accepted only if the quote is unique), then exact matches, then a whitespace-
+normalised match, then a bounded fuzzy match, else it orphans (a false positive is
+worse). Among exact hits, context decides, never word boundaries: hits where the
+stored prefix *and* suffix both agree in full, then hits where one side does (then
+distance to the stored start); a context shorter than 32 code points means the quote
+was at the text's edge and only agrees with a hit at that edge; a quote under 12
+characters or 3 words is never accepted without one side agreeing, even as the only
+hit; ambiguity orphans. Fuzzy matching (Sellers alignment near seed hits or the stored
+offset; span capped at 1.1x the quote, snapped to word boundaries; head/tail matching
+beyond 2,000 characters) is only for quotes of 12+ characters and 3+ words.
+`mapRangeThroughChange` / `diffChange` / `mapAnchorThroughChange` shift anchors
+through edits.
+
+*Keeping anchors right while a section is open.* In the Source view
+`lib/cm-anchor-highlights.ts` is the single source of truth: one module-level
+`StateField` tracks every located range through CodeMirror's own change sets (the
+start edge is non-inclusive, so text typed right before a highlight stays outside it;
+an edit that swallows a range flags it deleted), draws the visible ones as mark
+decorations, and reports positions back after each edit (`onHighlightsMapped`).
+`hooks/use-anchor-positions.ts` merges that into React state: a new comments list
+re-resolves only rows whose `anchor` object changed (react-query keeps identity for
+unchanged ones). A row whose `anchor` changed because the server re-anchored it keeps the
+editor's position when it has one (typing inside a commented range across an autosave
+does not make the highlight or card blink), takes the server's only when it has none or
+the text was replaced from outside, and an orphan stays an orphan (never goes back to
+"pending") when the server also says it has no place. An anchor with no position is
+searched for again (fuzzy included, one at a time, never in render) a
+moment after the text last changed, using what the anchor looked like last (quote and
+context as edited, remembered while it was located) rather than the server's copy,
+which goes stale around the user's edits; so deleting the quoted words orphans the
+card (after that short search) and undoing brings it back. Until the search has failed
+once a card is *pending*, not orphaned; the search runs at most once per text and anchor,
+and quotes over 500 characters are matched by their first and last 200 (an alignment of
+a long quote would take far too long). The read-only Write view's text only changes from outside
+(server content), which re-resolves every anchor from its quote (`resetKey`); it has no
+edits of its own to map. The decoration field is only pushed to when the resolved
+set really differs from what it holds (never per keystroke) and never during an IME
+composition. Anchors are never PATCHed; the server re-anchors on content save.
+Section text is counted over LF: a CR LF section is normalised on load
+(`lib/eol.ts`), as CodeMirror does, and the anchors' quote and context are normalised
+the same way.
+
+*Server content changing under an open editor.* The draft is no longer seeded once.
+When the node's `contentMarkdown` changes on the server (an accepted suggestion,
+another editor) and the editor has no unsaved edits, `ManuscriptSheet` adopts it and
+re-resolves the anchors; with unsaved edits it keeps the draft, **holds autosave** (the
+save status stays unsaved, and the blur or `Ctrl+S` flush does nothing) and shows a notice
+that makes overwriting an explicit choice: *Keep mine* saves the draft over the other
+version, *Load the other version* replaces the draft without saving. Text applied from
+outside is kept out of CodeMirror's undo history (`transactionExtender` on the
+`ExternalChange` annotation), so `Ctrl+Z` cannot bring back what the other side replaced
+and autosave it, and the highlights are pushed again once the replace has landed. Cards
+reach this through `MarginCardContext`: `applyServerContent(markdown)`, `hasUnsavedEdits()`
+and `flushEdits()` (resolves when nothing is pending or in flight; rejects on a failed
+save or while saving is held), so an Accept can wait for an in-flight save, warn about
+unsaved edits and then adopt the rewritten text.
+
+*Freshness.* The open section's threads and the outline's badge counts are fetched again
+every 15 s (`COLLABORATION_POLL_MS`; paused while the tab is hidden), so a second user's
+comment, reply or badge shows up without any action. A section's own content is not
+polled: another editor's change arrives with the next refetch of the node (focus, remount).
+
+*Highlights.* Write view: `markdown-view.tsx` is memoised and its parsed element
+depends on the Markdown alone, with module-level component overrides reading chips'
+data through context, so highlight, focus, filter and citation changes never re-run
+the remark/rehype/KaTeX pipeline or replace the DOM the reader's selection lives in.
+Highlights are painted with the **CSS Custom Highlight API** (`lib/write-highlights.ts`:
+one highlight per kind plus a prioritised focused one; opaque pieces such as math and
+citation chips get a `data-anchor-hit` attribute and an outline instead; a click is
+hit-tested against the painted rectangles under the pointer, shortest range first, so a
+click beside a line's end or on a nested highlight's neighbour picks the right card and
+link/chip clicks go through). The registry is document-wide, so every `MarkdownView` adds
+to one union per kind and an instance without highlights never touches it. Where the API is missing the ranges are
+wrapped in `<mark>`s by rehype instead (`lib/rehype-anchor-source.ts`), which does
+re-run the pipeline when they change. Both use the `position.offset`s remark keeps
+(UTF-16, mapped back through `normalizeDisplayMathMapped` because `$$..$$` lines are
+rewritten before parsing). Every positioned text piece is wrapped in a
+`span[data-src-start/end]`; text whose value differs from its source (escapes,
+entities, block-quote line prefixes, collapsed whitespace) is aligned character by
+character (`lib/source-map.ts`), `remarkCitations` positions the pieces around a
+citation the same way, and fenced/indented/inline code text gets positions too. Math
+and citation chips are highlighted as a whole (display math as a block). Colours and
+underline styles are CSS variables in `index.css` (comment solid, suggestion dashed,
+review dotted, resolved double, unsent draft wavy). Measured in both themes: plain text and
+links on every fill keep at least 4.5:1 (Write light 4.66, Write dark 4.64, Source light
+7.35); in Source dark every syntax token on a highlight is no worse than the same token
+off it (the theme's own low-contrast tokens, such as its comment grey at 3.9:1, are not
+touched); every underline is at least 3:1 against the page. In dark the fill keeps the
+lightness of its surface (relative colour on `--anchor-surface`, registered with
+`@property` so `::highlight()` receives a resolved colour) and only moves hue and chroma,
+so the tint is modest there and the underline style carries the distinction. Clicking a highlight
+focuses its card and focusing a card (Tab or click) reveals and focuses its highlight.
+
+*Selection.* In the Write view every positioned text piece carries its Markdown
+offsets; `lib/dom-source-selection.ts` maps a DOM `Range` back to a source range
+(per-character alignment; boundaries in math, chips or other opaque output snap to the
+enclosing source node; element boundaries move to the nearest tagged text; edge
+whitespace trimmed) and `hooks/use-write-selection.ts` publishes it, with `Ln, Col`,
+to the selection store. `margin/selection-layer.tsx` owns everything that follows the
+selection (the store subscription, the toolbar, the shortcuts), so a selection change
+re-renders only it, never the sheet. The toolbar floats over a non-blank selection in
+either view and is hidden while the selection is out of view; it offers **Comment**
+(`Ctrl+Alt+M` with the text focused; with only a caret inside a highlight the same
+shortcut instead moves keyboard focus to that highlight's card; Escape dismisses the
+bar), **Prompt…** (`Ctrl+Alt+P`) and the quick chips (`Add proof`, `More rigorous`,
+`Shorter`, `Cite`), and never takes focus or the selection. The copilot's buttons render
+only with their handler in the card context (there is no feature flag any more), so a LaTeX-only
+section, which the server cannot anchor, shows none.
+**Keyboard-only commenting and prompting work from the Source view and from the editable Write view**: the read-only Write view has
+no caret, so there a keyboard user can read the cards but cannot start one (the header
+Copilot button, which prompts about the whole section, works in both views).
+
+*The margin.* `margin/margin-panel.tsx`: filter *All · Comments · Suggestions ·
+Review*, *Show resolved (n)* (resolved threads hidden by default), *Comment on the
+whole section*. Each card sits at the y of its anchor's first line (`geometry.ts`:
+painted ranges in Write, `coordsAtPos` in Source), stacked top-down by the pure
+`margin-layout.ts` (`layoutMargin`; the *snapped* card keeps its y and the cards above
+it are pushed up). A card is snapped when it was focused deliberately: a click on the card
+itself or Tab onto it, a highlight's focus request, a reveal. The click keeps the card where
+it is on screen - the text pane is scrolled by exactly the displacement the snap causes, so the
+text comes level with the card and nothing moves under the pointer (the focused card's `top`
+does not animate for the same reason). A click on a control inside a card (Reply, Fix with
+Copilot, Accept…) only focuses it: no snap, no scroll. Section-level and orphaned cards are pinned at the top of the text
+column (they scroll away with the text); an anchor that resolves but has no rendered
+highlight in the current view is placed by the nearest positioned block and labelled
+*Not shown in this view*. The card lane never scrolls by itself: it is translated by
+the text pane's scroll position (set on the element, no re-render), a wheel over it is
+forwarded to the text pane, and the text pane is given extra bottom space when cards
+are stacked past its last line, so the text can always be scrolled to both ends with
+every card level with its text. Anchor and card-height measuring is batched per
+animation frame (anchors far from the viewport keep their last measure until scrolled near,
+so CodeMirror's height revisions do not re-lay out 150 cards on every wheel step). The extra
+scroll space is a spacer *inside* the Write view's scroll content (CodeMirror: bottom padding of
+its content) and is recomputed whenever the geometry reports the content height changed; a
+card revealed by the panel (a suggestion started from a chip, the prompt window opening) is
+scrolled into view only when it is not already in view, and a snapped card the layout pushed
+out of sight is scrolled into view; a touch drag over the lane scrolls the text pane. Composers (new comment, reply, edit) stay open with their text until
+the server accepts it (the new comment is written into the cache from the POST response before
+it closes, so nothing disappears until the refetch), show the server's message on failure and
+ignore a second submit; unsent text lives in `useMarginStore.drafts` (keyed `node:new`,
+`node:reply:<thread>`, `node:edit:<comment>`), so it survives the composer unmounting (the
+narrow side sheet closing, the right pane being closed and opened again) and is restored on reopen, cleared
+on a successful send or an explicit cancel; after a reply or edit is sent or cancelled, a
+reply is deleted, or a delete dialog is dismissed, keyboard focus returns to the card or the
+control that opened it (to the text when the card itself goes away);
+Reply/Resolve/Edit/Delete are disabled on an optimistic row; deleting a thread always
+confirms; relative times tick (one shared timer). A LaTeX-only section (no
+`contentMarkdown`) gets no range comments (the server anchors against Markdown); only
+whole-section comments, with a note in the margin.
+
+*Card registry (`margin/card-registry.tsx`).* `MARGIN_CARD_KINDS: Record<CommentKind,
+{ label, icon, Status?, Quote?, Body }>`: `MarginCard` is the shared frame (position,
+focus, header, quote area, body) and each slot takes `{ thread, ctx, approximate }`.
+`Status` is the header's right-hand side (default: Orphaned / Whole section /
+Resolved badges), `Quote` the quote area (default: the quoted text), `Body` everything
+below. A review card puts severity/type pills in `Status` and the issue in `Body`; a
+suggestion card its working / ready / failed state in `Status`, its diff in `Quote` and
+its actions in `Body`; `ReadOnlyCardBody` is the fallback for a kind this client does not
+know. `MarginCardContext` is `{ projectId, nodeId, currentUserId,
+restoreEditorFocus, applyServerContent, hasUnsavedEdits, flushEdits, holdSaving,
+sectionNumber, serverAnchor, editBlockedReason, revisable, rewriteBlock, knownIds, startRevision,
+onSendToCopilot, onFixWithCopilot, onTryAgain, onCommentSent }`. `ComposerDraft` in `margin-store.ts` is a discriminated union
+(`comment | prompt`; every kind carries `anchor`): the margin positions and highlights any
+draft from `anchor` alone and renders it through `COMPOSER_KINDS`
+(`margin/composer-registry.tsx`), so a new kind of draft is one union member and one entry.
+The pinned items (the review strip, section-level and orphaned cards) are laid out like
+cards by `layoutMargin`, so the cards beside the text are pushed down by them instead of
+hiding under a header.
+
+*Known limits.* The CSS Custom Highlight API is absent in older browsers (the `<mark>`
+fallback re-parses the Markdown when highlights change). Text the aligner cannot map
+falls back to whole-node granularity, and a Write selection inside a KaTeX formula
+snaps to the whole formula. After a long run of edits around an orphaned anchor its
+quote may be gone for good; it is then kept as an orphan, never deleted. A CR LF
+section is saved as LF the first time it is edited, and until then a freshly created
+multi-line comment used to be orphaned server-side (the server counts the CR LF text); the
+quote and its context are now sent with CR LF, which the server matches, and it is
+re-found by its quote in the editor. `::highlight()` supports colours and text decorations
+only, and not every browser paints the underline style there, so on such a browser the kinds
+are told apart by the tint alone (the Custom Highlight API itself is feature-detected and
+the `<mark>` fallback used where it is missing, but the decoration support inside it is not
+detectable cheaply). In the Source view CodeMirror
+estimates the height of lines it has not rendered, so a card for an anchor far from the
+viewport can sit a few pixels off until the text is scrolled there.
+
+*Review cards (issue #164's design, built once here).* `margin/review-card.tsx`, filled from
+the API's `kind=review` rows: `Status` is the severity pill (**Major**, destructive tint, warning
+triangle; **Minor**, warning tint, circle: told apart by word and shape as well as colour) and the
+type chip (`consistency:term` shows as *Consistency: term*), plus *Outdated* (a newer review no
+longer reports it but replies keep it) and *Dismissed*. `Quote` is the anchored quote; `Body` the
+description, a **Required fix** inset, the optional `replaceFrom` -> `replaceTo` chips (mono, struck
+destructive tint to success tint; only when both halves are present), the provenance (*Reviewer*,
+*Consistency check*, *Citation check*) and the shared thread controls: **Reply** (the API allows
+replies under a review root), **Fix with Copilot** and **Dismiss** (the resolve endpoint; a dismissed
+issue shows with *Show resolved* and offers *Reopen*; an issue the user resolved or deleted is not
+re-created by a later import). The card's accessible name is the issue itself (`Review issue, major
+Coverage: ...`), since reviewer cards have no author.
+
+`margin/review-summary-strip.tsx` is the section verdict from `OutlineNode.reviewSummary`
+(`okToKeep`, `issueCount`, `suggestedEdits`, `retrievalQueries`, `reviewedAt`): a compact **fixed
+header above the card lane** (the cards scroll, it does not), shown with the **All** and **Review**
+filters: the pill (*Needs revision* / *OK to keep*; `okToKeep` with `issueCount` 0 says *No issues
+found*), `N major · M minor` counted over the *open* review cards (a dismissed one is not counted),
+when it was reviewed, the reviewer score if a run produced one (`reviewerScore`, never yet; it used
+to be the Review tab's badge) and two links, *Suggested edits (N)* and *Searches that would find
+missing evidence (N)*, that open a scrollable panel over the cards (one at a time; Escape closes it).
+The header sits above the lane, so the lane starts lower than the text pane: `MarginPanel` measures
+that offset and keeps cards clear of it (`layoutMargin`'s `minTop`). A section reviewed before review
+rows existed (no `reviewSummary`, no review cards, but a non-empty `reviewerNotes`) shows those old
+notes as a plain *Review notes (previous run)* panel in the same header; once cards exist the notes
+are never read. #164's collapse/expand-per-card design is **superseded** by the margin layout: a card
+is always open, and a description or required fix longer than a few lines is clamped with *Show more*,
+so one issue cannot take the whole lane. Cards with no anchor stack at the top, majors first, then
+oldest, then by id; an unknown or missing severity reads as Minor, the server's default.
+
+*The prompt window (`margin/prompt-window.tsx`).* One window, three entry points, one result (a
+suggestion card): the selection toolbar's **Prompt…** (scope locked to the range; the quick chips skip
+the window and send at once, range scope, that one parameter), the **Copilot icon in the editor
+header** (scope = the whole section) and **Try again** on a suggestion (prefilled from its
+`instruction` and `params`). It is a card in the margin at the selection (a `prompt` member of
+`ComposerDraft`): a scope pill (*Selection · N sentences* / *Section §x.y*), the instruction box,
+the parameter chips as typed fields (`more proofs`, `more examples`, `more rigorous`, `shorter` /
+`longer` (mutually exclusive), `cite sources`, `fix N issues` = the open review cards in scope as
+`fixIssueIds`, `address N comments` = the open comment threads in scope as `addressCommentIds`;
+a chip with nothing behind it is disabled; scope for a selection is what overlaps the range) and two
+verbs: **Revise** (default) and **Rewrite**, available for the whole section only, with nothing
+else set and not from a thread (the API 422s those, so the toggle refuses with the reason, shown as
+text under the toggle, not only as a tooltip). Whether a Rewrite can start at all is worked out up
+front, as the old copilot panel did, from the section and the run lane: not a leaf, content-locked,
+no `cliKey`, no resumable run, a regenerate already queued, a run busy; each with its old wording and
+way out (*Start full run*, *Unlock content*). A Rewrite replaces the section through a run, so sending
+it asks first (*Rewrite this section?*), and a refusal the API still makes is mapped to words (known
+reasons) or a generic line; a raw server string, ids included, is never shown. For a LaTeX-only
+section Revise is unavailable (with the reason) and the window opens locked to Rewrite. "Regenerate
+again" on a run page opens the section with the window on Rewrite, filled in with that run's
+instruction (`?copilot=rewrite&instruction=`, consumed once).
+`Ctrl+Enter` sends from anywhere in the window, `Escape` closes it (and forgets its text); focus
+goes into the box when it opens and back to the Copilot button (or the text) when it closes. Unsent
+text lives in `useMarginStore.drafts` and the options and verb in `promptExtras`, one pair per
+scope (`prompt:section`, or `prompt:range:<start>-<end>`): opening a window never deletes another
+scope's draft, reopening the same scope restores both, and an unfinished prompt (or a comment with
+text) is saved per section when the section is left and restored when it is opened again. A press on
+the editor that closes the narrow side sheet therefore loses nothing. Refusals are shown **inline**, in words, never as a
+status code: `section_empty`, `node_generating`, `anchor_orphaned`, `revision_in_progress`,
+`llm_key_required` (with an *Account settings* shortcut), `llm_not_configured`, `too_many_revisions`,
+`section_too_large` (suggests selecting a passage); a Rewrite's refusals (no previous run, locked
+node, queue full) are shown as the API sent them. Starting a revision first awaits
+`ctx.flushEdits()` (the server revises the *saved* text). A Rewrite that started toasts that it
+became a run, with a *View run* action, and the run is followed by its id (`trackRun`) so a short run
+that starts and ends between two polls of the run list still refreshes the outline and toasts its
+outcome. A comment (or reply, or an edit that adds the mention) that mentions `@copilot` is a prompt:
+the mention must be plain text (not in code, not in a quoted line, not `@copilot.com`); the composer's
+button then reads *Comment and ask Copilot*; the comment is created first, then a revision with
+`threadId` is started and the suggestion arrives inside that thread; `Send to Copilot` on a thread and `Fix with Copilot` on a review card do the same
+without typing (the review card sends `fixIssueIds: [id]`, with the card's range when it has one,
+else section scope). `margin/use-copilot.ts` holds all of these; everything it returns is
+referentially stable (handlers read the latest values through a ref), because the card context is
+built from it and a context that changed per keystroke re-rendered every card on every keystroke.
+Anchors sent to the server go through `lib/server-anchor.ts`: never an empty quote (a 422), offsets
+only when they match the quote's code-point length, and no offsets at all for a section the server
+stores with CR LF (the editor counts LF; the server then finds the quote itself, so for such a section
+the quote and its 32-code-point context are sent with CR LF line breaks, the form the server stores,
+or the context would not match). The prompt window builds its anchor from the passage's live range at
+the moment of sending, not from the one captured when it opened, and says so if the passage is gone.
+A request carries at
+most 25 ids per list (24 with a `threadId`, which the server adds to one of them), and the chip's label
+counts what is sent. One start at a time per section entry (chips, Send/Fix with Copilot).
+
+*Suggestions (`margin/suggestion-card.tsx`, `suggestion-diff.tsx`, `lib/diff-view.ts`).* Every state
+of the API's `kind=suggestion` row has its card: **running** (working pill with the elapsed time,
+the instruction, a Retrieve / Revise / Compare step list and the live stage line from the progress
+events, a polite live region announcing the change, **Cancel** for its author only), **pending**
+(the diff, the model's summary, `changesMade`, `warnings` and `droppedCitations`, **Accept**,
+**Reject**, **Try again** with *Edit the instruction…* / *Ask again as it was*), **failed** and
+**cancelled** (the `error.code` in words, **Try again**, **Dismiss** = delete; they stay in the margin
+until dismissed) and **accepted** / **rejected** (compact, hidden with the resolved ones by default). A
+suggestion that arrived in a comment thread renders as a block inside that thread's card with the
+same parts. The diff is built by hand from `payload.hunks` over `originalMarkdown`: removed text on a
+destructive tint with a strike-through and "Removed:" for screen readers, added text on a success
+tint, underlined, "Added:", each with a little unchanged text around it (context stops where the next
+hunk's changed text begins; for a range suggestion it never leaves the range, so the card shows the
+range's before/after). Hunk offsets are **Unicode code points** into `originalMarkdown`: every
+offset goes through `CodePointIndex` before slicing, context is never cut inside a surrogate pair, and
+a CR LF original is shown with LF. Only the first three changes show until *Show all N changes*; a
+very long change is clamped until asked for. A section suggestion with several changes has a checkbox
+per change (the selected ones go as `hunkIndexes`, *Accept 2 of 3*; the card notes that a partial accept
+leaves the linked comments and issues open, as the API does). A pending suggestion whose own range
+(the row's anchor, re-anchored with the text; `payload.anchor` is the range in the original, which
+clips the diff) is gone says it can no longer be accepted (the server refuses it as `stale`): Accept is off and *Try
+again* is the primary action; a section
+suggestion made against an older text than the section now has says it may be refused. A model
+that handed the text back unchanged shows "nothing to change" with no Accept. A finished suggestion
+from the node list has no `originalMarkdown` but keeps its hunks: its card shows the removed and added
+text without context (only the applied changes after a partial accept). Dismiss is offered only to
+the person who may delete the row (its author, or anyone for a row nobody authored); a cancelled
+suggestion says "You stopped this revision" only when `payload.cancelledBy` is the signed-in user.
+Try again on a range suggestion whose range is gone opens the window (which says the scope is now the
+section) instead of silently widening it, and "Ask again as it was" drops references to cards that
+were deleted since; *Try again > Edit the instruction…* keeps the issue and comment ids the first
+request was about (a retry never widens "fix this issue" to every open one), and moves focus into the
+prompt window it opens (the menu does not hand it back to its button). The suggestion's
+range is highlighted in both views in the suggestion style and focusing the card focuses it.
+Progress: `margin/suggestion-progress.ts`'s `useSuggestionStreams` (mounted by the open section, not
+by the cards, so a filter or the side sheet cannot lose it) follows every running suggestion by id
+- also after a reload - and on the terminal event writes the finished suggestion into the caches
+and the outline row's `pendingSuggestionCount` badge; the badge moves on start, accept, reject, cancel
+and failure without a reload.
+
+*Accept (the data-loss-sensitive part, `margin/use-suggestion-actions.ts`).* The order is fixed:
+`ctx.holdSaving()` awaits `flushEdits()` (the server accepts against the saved text) and then holds
+autosave; the accept is posted with `expectedContentHash` (and `hunkIndexes` if partial); on success the
+returned node replaces the section's cache entries and `ctx.applyServerContent(text, hash)` hands the
+editor the new text: adopted at once (kept out of the undo history, via the `ExternalChange` path) when
+nothing is unsaved; otherwise the draft stays exactly as typed, the "changed elsewhere" notice (Keep
+mine / Load the other version) is set **synchronously** and autosave stays held, and the hold's release
+does **not** flush, so text typed while the POST was in flight can never be saved over the accepted
+text. The hold is released in a `finally`; on any failure the draft is untouched, and `stale` and
+`content_conflict` (the section is also fetched again) are explained inline on the card, not toasted:
+mutations that handle their own refusal are marked `meta: { handlesErrors: true }` (start, accept,
+reject/cancel, restore, and the section's content save), and the global `MutationCache.onError` still
+reports them but raises no toast for them.
+Neither an accept nor an undo waits for ever: the save-and-hold and the request each give up after
+20 s (`requestTiming.timeoutMs`), the hold is released, the section and its comments are fetched again
+and the card says to check whether the change was applied; a hold that completes late is released at once.
+A second click (also during the save before the POST) is ignored and the buttons are disabled for the
+whole action. While the notice is up, or after a failed save (`flushEdits` keeps rejecting while the
+failed value is pending), Accept, Try again, Undo and a new revision are refused with the reason shown.
+Node fetches in flight when an accept or undo starts are cancelled, and so are the ones still in flight
+when the request has been answered, so a stale answer cannot restore the old text and hash afterwards. `Ctrl+Z` right after an accept does nothing useful (the adopted text
+is not in the editor's history, by design), so a toast, *Suggestion applied · Undo*, offers the way
+back: the same hold and adoption, a PATCH of the previous text guarded by the hash the accept returned
+(refused, with a message, if the section was edited since), and for a full accept the comment threads
+and review issues that accept had resolved are reopened. It says **Text restored**; the suggestion
+stays *accepted* on the server (an undo is an ordinary content write), and this tab marks its card
+*Accepted, then undone* until a reload.
+
+*Content hash everywhere.* The server treats a content PATCH without `expectedContentHash` as
+last-write-wins, so **every autosave** sends it: the hash of the text **the draft was based on**
+(`baseHashRef`, kept beside the baseline text and moved only through `moveBaseline`: an adoption,
+this editor's own successful save with the hash the server returned, a reply that is this editor's
+own save coming back, Keep mine), never whatever the node cache holds when the save runs; a save made on top of text the user has not seen
+(an accept that landed meanwhile) is therefore refused as a conflict instead of passing with the newer
+text's hash. The hash is the server's `contentHash` (the list rows carry none), hashing the baseline
+text (`lib/content-hash.ts`) only where a response had none. A `409 content_conflict` is never retried over: the section is fetched again and
+the existing "changed elsewhere" notice takes over (*Keep mine* saves the draft over the other
+version, now based on its hash; *Load the other version* replaces the draft). Autosave holds are kept
+per reason (`useDebouncedMutation.hold(held, reason)`), so an accept in flight and a pending
+notice cannot lift each other's hold. A node GET that began before a save is cancelled when the save
+starts (`onMutate`) and again when it succeeds (`onSuccess`), and as a second line of defence the
+adoption effect ignores a fetched node whose hash this editor has already moved past and whose
+`updatedAt` is not newer than the last one it saw (`supersededRef`, `knownUpdatedAtRef`), so a read
+that overlapped a save can never put the old text back. A save that fails for any other reason than
+a conflict shows why in an inline bar above the text (the text is kept and saved again on the next
+edit), not as a toast.
+
+*Leaving with work the server does not have.* Typed-but-unsaved text, a failed save and an unanswered
+"changed elsewhere" notice all count: choosing another section, adding a chapter or any route change
+opens a confirmation (*Stay* / *Leave and discard*), and closing the tab shows the browser's own
+prompt. *Leave and discard* sends nothing on the way out (the unmount flush is skipped, as it is
+whenever the notice is up).
+
+*The legacy drawer is gone.* Removed: `CopilotDrawer`, `CopilotPanel`, the Review tab
+(`ReviewPanel`), `SectionSourcesCard` (its job lives in Chapter options and the sources drawer),
+the Margin | Copilot switch, the `tab` search parameter (an old `?tab=review` link is dropped from the search state and from the
+address bar), `ui-store.rightPane` and the aria names that mentioned the
+copilot (`copilotOpen` / `toggleCopilot` / `copilotPane` became `marginOpen` / `toggleMargin` /
+`marginPane`; the persisted store is migrated: `copilotOpen` -> `marginOpen`, `rightPane` dropped).
+What lived only in the drawer and where it is now: regenerate with an instruction -> *Rewrite* in the
+prompt window (with the API's 409 reasons inline); quick-action presets -> the chips; the event log
+and the status footer -> the run page, which shows them and the cost; the stage timeline was
+**removed with the drawer** (a real run's `RunEvent.stage` values are stdout log tags, not pipeline
+stages, so a summary of them says nothing, and the runs page is out of scope for this issue; the run
+page's event log still shows every event with its tag); the node's source scope -> Chapter options and the sources drawer;
+the content-locked hint -> the header lock button. There is no run tray in the studio: run status
+stays on the runs page and in the row spinners, and a running revision is the running state of its
+own card.
+
+**The editable Write view (issue #182, phase 5).** The Write view is a ProseMirror editor over the
+section's Markdown whenever the section can be edited (Markdown, not being generated, a leaf; a
+content-locked section is editable, the lock only protects the text against runs). It is the same
+text the Source view edits, in the same `draft` string, through the same `handleChange` /
+`useDebouncedMutation` path: base hash, autosave holds, the error bar, the "changed elsewhere"
+notice, leave-confirm, and the flush on blur, `Ctrl+S`, view toggle and unmount are all unchanged.
+The code is `features/editor/wysiwyg/` (the model, pure and unit-tested) and `components/write-body.tsx`.
+
+*Source preservation (the guarantee).* The document is Markdown, anchors are text-quote selectors over
+it and pending suggestions carry hunks against the exact stored text, so the editor never owns the
+document: `wysiwyg/source-model.ts` does. `parse.ts` reads the section with the read-only view's own
+remark pipeline (`remark-parse`, GFM, math, over the display-math normalised text) into *segments*,
+one per top-level block: its exact source, the exact whitespace before it, and a position map per
+textblock (`inline-map.ts`: editor offset <-> source offset, UTF-16 on both sides, built from remark
+positions and the same character aligner the highlights use). Concatenating them gives the input back
+byte for byte; opening a section, moving the caret and blurring change nothing and save nothing. An edit
+is a ProseMirror transaction; `SourceModel.update` finds the top-level blocks that changed by node
+identity (ProseMirror shares every node an edit did not touch) and
+1. for typing, deleting and replacing text inside one run of text (`patch.ts`): changes the block's
+   source by *exactly that text* - an `_emphasis_` stays `_`, an entity stays `&amp;`, escapes and hard
+   breaks stay, the source change is the minimal one anchors are mapped through;
+2. for everything else (Enter, joining, marks, lists, quotes, input rules, paste): writes only the changed
+   blocks with the serializer (`serialize.ts`) in the document's own style (emphasis/strong delimiters and
+   hard-break form detected from the text, list marker, numbering and tightness kept per list, setext
+   headings and indented code kept), and leaves every other block's source slice and the whitespace
+   around it untouched; the gap before a new block is the neighbouring gap (at least one blank line);
+3. **verifies what it wrote, in context**: a block's source is parsed again with the same pipeline and must
+   mean what the edited block means (`equivalence.ts`: marker characters, tightness, escapes and edge
+   whitespace do not count; marks and text do; a formula, a citation, a reference or an automatic
+   link equals its literal text, nothing else does - typed `<b>` or `![a](u)` is not HTML or an image).
+   Then the written blocks are parsed again *together with the blocks next to them* (the block before,
+   the gap, the written blocks, the gap, the block after) and must give the same blocks: a list item
+   deleted down to `-` must not turn the paragraph above into a heading, a line typed under a list must
+   not become part of it, `$$` or a code fence typed as a paragraph must not swallow the rest. When
+   that fails the blocks are first kept apart by a blank line, then written by the serializer instead
+   of from memory or by patching, then with stronger escapes (a `\` before punctuation, an entity, a
+   line that would become a heading/list/quote/fence; then the inline syntax characters; then all
+   punctuation; also emphasis written outside the punctuation at its edge and indented code written
+   fenced); a block that cannot be written at any level makes the edit *refused* (the transaction is
+   dropped, the DOM redrawn from the state, a toast says to use Source) - never saved as something
+   else. Plain prose edits (letters, digits, spaces and mild punctuation inside a word or between words,
+   away from the start of a line, next to nothing that is Markdown syntax) cannot change what anything
+   means and are written without any parse; that is what keeps a keystroke in a 60 kB block at about a
+   millisecond. Any other key in such a block costs a parse of the block and of its neighbours (about
+   70 ms for 60 kB; neighbours over 48 kB are not re-read, a blank line between blocks is trusted).
+Undo and redo give the source back exactly in the common case (a block, or a group of blocks with the
+whitespace around them, that returns to a recent shape gets its recorded source, not the serializer's; a
+long run of typing keeps the version it began from). The memory for that is bounded by size (a few
+megabytes) and count, so on very large blocks or after very many changes the oldest shapes are gone and an
+undo gives a source that means the same but may be written differently (an escape, a marker). The same
+text written escaped and unescaped at different times is told apart by what replaced it (undo prefers
+what an edit or a redo took away, redo what an undo took away); two writings of the same text that were
+both recorded can still be confused. `parse(serialize(...))` is covered by property tests over random
+documents, including a fuzz that compares the editor with an independent parse of the whole resulting
+source after every step (blank-line gaps and single-newline gaps, `$`, `[@`, `\` and edge whitespace in play):
+the bytes outside the edited block are identical, the maps equal a fresh read of the new source, and undo
+restores the bytes.
+
+*Exact limits of the guarantee.* (1) Edited blocks may change *that block's* source where Markdown
+leaves a choice and the edit was not a plain text edit: entities (`&amp;` -> `&`), redundant escapes,
+the extra characters of an emphasis style other than the document's (an `_` that would touch a letter
+is written `*`), spaces at the start or end of a line (a space at the start of a line means nothing and
+four would be code: they are not written, the editor still shows them), and the other items of a *list
+or quote that is one top-level block* (the unit of rewriting is the top-level block, so an item's
+neighbours are rewritten in the document's style when an item is restructured; typing in an item never
+does that). (2) The whitespace around a block that was split, joined, added or removed is the
+neighbour's (or a blank line); a block that is written next to one with a single newline may widen that
+gap to a blank line to stay a block of its own. Two lists left adjacent with the same marker get different
+markers: the later one, even outside the edited window - then only the marker characters of its items are
+rewritten, nothing else of it (a list shown as an atom, such as a task list, is never rewritten: the new
+list takes another marker instead); indented code that would be read as part of a list or quote above
+it is written fenced. (3) An empty top-level paragraph has no source (Enter at the end of a block changes
+nothing until something is typed), nor has one of only spaces or line breaks; an empty paragraph inside a
+quote or item has none either, apart from an empty item. (4) A CR LF section is saved as LF the first time
+it is edited (as in Source). (5) Text typed as `$x$` or `[@key]` stays literal text - it is the formula or
+the citation only when the section is read again (reload, another view, external replacement); leaving
+the editor changes nothing, in the document, the draft or the undo history. The rule for dollar signs: a
+`$...$` (or `$$...$$`) on one line with something other than space inside its edges is a formula, any other
+`$` gets a backslash (`costs \$5 and \$6`). (6) Emphasis cannot close against punctuation directly followed
+by a letter in Markdown (`**「重要」**です`): the punctuation at the edge of emphasised text is written
+outside the emphasis (`「**重要**」です`), so the mark is not on it when the section is read again; where even
+that is impossible (emphasised code touching a letter) the edit is refused. (7) Text that would read back
+as a construct the editor shows as an atom is escaped to stay text: `<` before a letter, `!`, `/` or `?`,
+`![a](u)`, and `[foo]`, `[text][foo]` or `[^1]` when the section defines that label. An address typed
+right before emphasis or an atom is written between angle brackets (`<https://x.y>`) or with its dot
+escaped (`www\.x.y`), so that it ends where it ends. (8) A table, HTML or other block atom pasted inside
+a list item or a quote becomes the text of its source there (an atom's source cannot carry the prefix of
+a container); at the top level it stays an atom. The few other edits that cannot be written (`Backspace`,
+a mark, a paste in an unusual neighbourhood: about one in a thousand in the fuzz) are refused with one
+toast, not a series.
+
+*Atoms (what stays raw).* Whatever the editor cannot represent faithfully is an atom carrying its exact
+source, drawn by the read-only view's own renderers (KaTeX, citation chips, callouts, tables) and
+edited in Source: inline - math (`$..$`, `$$..$$`), citations (`[@key]`, `\cite{key}`; one atom per
+token even with several keys), raw HTML, footnote references, images, reference links, autolinks and
+bare URLs, and the text of a `delete`; blocks - display math, **tables (atoms in this phase)**,
+callouts (`> **Theorem ..**` and the other four kinds), HTML, footnote definitions, link
+definitions, thematic breaks, task lists, and any list or quote that contains a block atom or an
+inline atom spanning lines (the whole top-level block is then one raw atom, shown as the read-only
+view shows it). A construct the parser does not know becomes a raw atom; nothing is dropped or
+normalised. Footnote and link definitions and raw HTML, which the read-only view draws as nothing,
+are shown as their source in a dashed box so they can be found. Atoms are selectable, not focusable:
+arrow keys move over them, `Enter` on a selected atom (or a double click, or the "Edit in Source"
+label on a block atom) switches to Source with the atom's source selected; nothing inside the
+editable region is a tab stop and a formula/chip/table has an accessible name
+("Formula: x^2. Press Enter to edit in Source.").
+
+*Editing.* Typing, `Enter`/`Backspace`/`Delete` (split, join, leave a list), `Shift+Enter` (hard break),
+`Tab`/`Shift+Tab` in lists only (everywhere else `Tab` belongs to the browser; `Escape` makes the next `Tab`, only that one,
+pass even in a list), `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+E` inline code, `Ctrl+K` link (a small form by the selection: Enter applies, Escape cancels, an empty address removes the link, an
+address with another scheme than `http(s):`, `mailto:`, relative or `#` is refused with a message), `Ctrl+Z`/`Ctrl+Y`/`Ctrl+Shift+Z`, `Ctrl+S` (save now), `Ctrl+Alt+M` /
+`Ctrl+Alt+P` (the selection layer's, unchanged). Markdown input rules: `#`..`######` + space, `- `/`* `/`+ `,
+`1. `, `> `, ```` ``` ```` + space, `**x**`, `*x*`, `_x_`, `~~x~~`, `` `x` ``; Backspace right after a rule
+undoes it. Paste: plain text is read as Markdown with the app's parser (blocks that begin on a new line stay
+blocks, between the text around the caret; a fragment keeps its edge spaces; in a code block it is
+inserted as it is); HTML goes through the schema (text, paragraphs, headings, lists, quotes, code, bold,
+italic, links with an `http:`, `https:`, `mailto:`, relative or `#` address; other links, scripts, styles,
+images, forms and tables degrade to their text). Raw HTML that is *in the Markdown* stays as an HTML atom
+with its exact source, and the editor's own copy of an atom pastes back as that atom - but only
+with this page's token and a source that reads back as the same kind of atom: HTML from anywhere else
+has every `data-md-*` attribute stripped first, so a forged attribute cannot put markup into the draft.
+Typed `<b>` is text (escaped). Copy puts Markdown on the clipboard. The editable region is a
+labelled multiline textbox (`role="textbox"`, "Section text"), with a visible focus ring, in both themes.
+
+*Highlights, selection, margin, anchors.* All card kinds are drawn over text through the same CSS Custom
+Highlight registry as the read-only view (`lib/write-highlights.ts`'s `paintHighlights`; `<mark>` decorations
+where the API is missing); atoms get `data-anchor-hit`. Source ranges become editor ranges through the
+position map (`SourceModel.rangesForSource`), so a range over a formula, a citation or a table is drawn on
+the atom. Clicking a highlight focuses its card (the same hit-test as the read-only view). The editor
+publishes its own selection to `editor-selection-store` as code-point offsets over the Markdown (the
+status bar's `Ln, Col` shows in Write now; `useWriteSelection` is off while the editor owns the
+selection), so the selection toolbar's Comment/Prompt…/chips make anchors with exact Markdown
+ranges. Margin geometry is `writeGeometry(region, locate)`; `data-markdown-root` is on the editor's
+root. While typing, `EditorController` tracks every located range through each *source* change with
+`mapRangeThroughChange` - the Source view's own rules (text typed right before a range stays outside,
+inside grows it, deleting its words flags it) - and reports them with `onHighlightsMapped`, so
+`use-anchor-positions` behaves as in Source: an edit that writes a block again reports its separate hunks (a
+character-level diff of the old and new source, line-level first for very large blocks), and each range is mapped through
+them from the last to the first, so text the edit did not touch keeps its anchor (bold on a word puts the opening
+markers inside an anchor over it and the closing ones at its edge, outside it, as Source would); local positions are the truth while dirty, a refetch
+moves nothing, deleting the quote orphans the card after the short search, `Ctrl+Z` brings it back.
+
+*External replacement.* A `value` that is not one the editor produced (an accepted suggestion, "Load the
+other version", another user's change) replaces the content with a fresh editor state: nothing of it is in
+the undo history (so `Ctrl+Z` cannot bring back what the other side replaced and autosave it), the
+anchors are re-resolved from their quotes by the sheet (`resetKey`), the caret stays at its source
+offset. The editor's own texts handed back late by the owner are recognised and ignored. During an IME
+composition neither highlight painting nor decoration updates touch the DOM, and a replacement waits for
+`compositionend`.
+
+*Switching views.* One draft string: nothing can be lost by toggling, and unsaved edits are carried (the
+autosave timer keeps running; leave-confirm and the flush on unmount are unchanged). The selection is
+carried through source offsets (Write -> Source selects the same range, Source -> Write puts the caret
+there) and revealed only when something was selected or the editor had focus (a caret that was merely
+reported does not move the text); the scroll position is carried as the same fraction of the scroll range
+(roughly: the two views estimate heights differently); the undo history of each view starts empty when it
+opens. "Edit in Source" on an atom is the same switch with the atom's source selected and revealed.
+
+*First paint and loading.* The editor is its own chunk (`markdown-editor`): ProseMirror plus the model,
+fetched when a Write view is first made editable. The read-only view paints first (it is the same
+typography, in the same scroll container, so nothing moves) and is replaced when the chunk has loaded; the
+read-only view, the Source view and the studio never load it (`check-bundle-budget.mjs` fails if anything
+imports the chunk statically). Until then it is a busy, read-only textbox that already takes focus: characters,
+Enter and Backspace typed meanwhile are kept and replayed into the editor when it exists, and a click that
+put the caret in the text gives the editor the focus and the caret. If the chunk cannot be fetched the
+section stays read-only with a notice and *Reload page* (it saves first); the browser remembers a failed
+dynamic import for the page's lifetime, so a retry in place can never succeed - Source remains the way to
+edit, and the stale-build recovery (`lib/stale-build.ts`) already reloads once by itself after a deploy.
+Sections that cannot be edited (generating, a container node, LaTeX-only) stay the read-only view.
+`VITE_WRITE_EDITING=0` (`false`, `off`; a build-time variable read in `features/editor/lib/write-editing.ts`
+only, default on) turns the editable Write view off altogether: the Write view is then exactly the
+read-only renderer and the chunk is never requested.
+
+*Performance.* Only the edited block is written or verified per keystroke: the model's share is about
+0.2-1 ms for plain prose in a block of any size (a source splice, no parse; the first read of a 100 kB section
+takes about 100 ms), and a parse of the block and its neighbours for a key that is Markdown syntax; the rest is the browser's. Measured in a production build with Chromium and real keyboard typing in a
+100 kB section (about 370 blocks, 600 formulas, 130 comment cards): about 21 ms
+per key wall clock (including Chromium's input handling and the test driver), against 11 ms in the
+Source view, no task over 50 ms; key press to painted frame p50 22 ms / p95 34 ms (Source 19 / 28 ms).
+Without the three measures below the same section cost 43 ms per key. (1) Blocks away from the viewport
+have `content-visibility: auto` (the browser otherwise lays out and hit-tests tens of thousands of KaTeX
+nodes on every key: 38 ms against 19 ms), so the margin places a card whose text is in a block the browser
+has not laid out at that block's position (`MarginGeometry.measure`'s `locate`, proportional inside the
+block) until it is drawn; measured over a whole 29,000 px scroll range with 24 comments every visible card
+was level with its text. Lists are indented with padding, not margin, because markers hang outside the
+list's box and `content-visibility` clips them. (2) React saves the focused element's selection before
+every commit by walking the whole contenteditable, which is made not to apply to the editor's element
+(`keepReactOutOfTheEditor` in `wysiwyg/controller.ts`: its `contentEditable` property reads `"inherit"`
+while the attribute stays `"true"`; it cost about 6 ms per key). (3) Formulas are rendered as HTML only (no
+MathML copy; the atom carries its accessible name) and the status bar's counts are deferred
+(`useDeferredValue`, which also helps Source).
+
+*Very large blocks.* A section that is one 60 kB paragraph, or one list of 600 items, used to cost the model
+about 71 ms (110 ms for the list) per key and kept a copy of the block per key (+118 MB after 700 keys). Plain
+prose now costs about 0.3 ms in the model for either, whatever the size (`perf.test.ts` guards it with
+generous limits), and the memory for an exact undo is bounded by size (a few megabytes) whatever the number
+of keys, so the heap stays flat (35 MB at 0, 300 and 700 keys in Chromium). A key that is Markdown syntax in
+such a block still parses it (about 70 ms for 60 kB). In Chromium, production build, key press to painted
+frame for those two documents is p50 99 ms / 62 ms (p95 218 / 122 ms), against 369 / 567 ms (p95 868 /
+1075 ms) in the Source view for the same text; the editor's own JavaScript is a few milliseconds of that,
+the rest is the browser's layout of a single huge block (which the read-only view has too).
+
+*Library choice and the budget.* Compared (gzipped, summed per module like `check-bundle-budget.mjs`, in this
+build on top of the 1012.9 kB baseline, each as a lazy chunk with its own demo glue only): bare ProseMirror
+(state, view, model, transform, commands, history, keymap, inputrules, schema-list) +88.6 kB; Milkdown
+(core, commonmark, gfm, history) +148.0 kB; Tiptap (StarterKit + Markdown) +197.1 kB (standalone esbuild
+bundles: 65 / 136 / 138 kB). Milkdown and Tiptap re-serialise the whole document with their own Markdown
+serializers, which is exactly what the guarantee above forbids, so a block-preserving model would have been
+written on top of them anyway; bare ProseMirror driven by the app's existing remark pipeline is the
+smallest and gives the control. With the model, serializer, atoms and glue the chunk added +122.2 kB
+(1135.1 kB total at first); after the review fixes (context verification, the link form, the clipboard guard) the
+total is 1145.7 kB, and `BUNDLE_TOTAL_BUDGET_KB` is 1152 (the next 16 kB); the entry chunk is 188.9 kB (budget 300). Dependencies added: `prosemirror-model`,
+`-state`, `-view`, `-transform`, `-commands`, `-history`, `-keymap`, `-inputrules`, `-schema-list`.
+
+*Development hooks.* Outside production builds the editor's element carries `__md = { view, core }`
+(`EditorDebugElement`) for browser checks and the route tests that drive it; `window.__mockDb` and
+`window.__queryClient` exist in mock mode (`VITE_USE_MOCKS=1`) to put content in the mock database and have
+the app read it.
+
+*Known limits.* Tables, callouts and other atoms are edited in Source; lists or quotes that contain such a
+thing are one raw atom. The unit of rewriting is the top-level block (see the limits above). A formula
+typed as text is a formula only when the section is read again. Typing and deleting inside a textblock are made
+from the browser's `beforeinput` event with the range it reports (`handleBeforeInput` in `controller.ts`), not by
+reading the DOM back: ProseMirror's reader can run in the middle of Chromium's own editing command, before it has
+moved the caret, which put the next character in front of the previous one (`e found thatW`) on the first edit
+after loading. Composition (IME), spell-check replacements, drops and the rest still go through ProseMirror's
+own reading. Files dropped on the editor are ignored. The editor tells Grammarly-style helpers to stay out
+(`data-gramm="false"` and friends) and says `translate="yes"`. `keepReactOutOfTheEditor` is checked on a probe
+element first and skipped (the editor is slower on long sections, nothing else) where the property cannot be
+shadowed; `react-selection.test.tsx` fails if React stops walking a focused contenteditable on commit (the workaround
+is then unnecessary) or if the shield stops keeping it out.
+
+*Editor setup and the bundle.* The build aliases `@uiw/codemirror-extensions-basic-setup` to
+`lib/editor-setup.ts` (`vite.config.ts`), a copy of its extension list without the autocompletion
+popup and the lint keymap, which a Markdown source editor never uses and which kept 22 kB gzipped
+(the completion machinery of `@codemirror/autocomplete`, of which only `closeBrackets` is kept, and
+`@codemirror/lint`) in the
+bundle. Line numbers, undo history, the default, search (the `Ctrl+F` panel), history, fold and
+close-brackets keymaps, bracket matching and closing, selection drawing, rectangular selection and
+the match/active-line highlights are unchanged. `@codemirror/commands`, `search` and `autocomplete`
+(already installed as peers of `@uiw/react-codemirror`) are now declared as direct dependencies
+because that file imports them. The alias is applied in the build, the dev server and the tests
+(`test.server.deps.inline` runs `@uiw/react-codemirror` through Vite); `lib/editor-setup.test.tsx`
+checks that the upstream import name resolves to the trimmed copy and pins search, undo/redo, bracket
+closing and Tab indentation; and `scripts/check-bundle-budget.mjs` fails if
+`codemirror-extensions-basic-setup` or `@codemirror/lint` appear in the bundle, so an upstream rename
+or a config change cannot bring them back silently.
 
 `routes/__root.tsx` mounts the app shell once (theme toggle, toaster, the
 `NewProjectDialog` — reachable from both the hub and the studio header) and
@@ -58,8 +769,8 @@ Three places own state, and nothing is copied between them:
 | Owner | Holds | Examples |
 | --- | --- | --- |
 | TanStack Query (`src/api/queries/*`) | Server state — anything that came from the API. | Projects, sources, outline nodes, runs, files. Cache invalidation is hierarchical (`src/api/queries/keys.ts`), so mutating a project cascades to its sources/outline/runs. |
-| Route search params (`routes/p.$projectId.tsx`'s `ProjectSearch`) | Shareable/URL state. | The selected outline node (`?node=`) and the right-pane tab (`?tab=`) — refreshing or sharing the URL preserves them. |
-| `src/stores/ui-store.ts` (Zustand) | Client-only UI state that isn't server data or shareable. | Outline/copilot pane visibility and width, which modal (if any) is open. Pane visibility/width persist to `localStorage`; the open modal always resets to closed on reload. |
+| Route search params (`routes/p.$projectId.tsx`'s `ProjectSearch`) | Shareable/URL state. | The selected outline node (`?node=`) — refreshing or sharing the URL preserves it. |
+| `src/stores/ui-store.ts` (Zustand) | Client-only UI state that isn't server data or shareable. | Outline/margin pane visibility and width (`outlineOpen`, `marginOpen`, `outlineWidth`), which modal (if any) is open. Pane visibility/width persist to `localStorage`; the open modal always resets to closed on reload. |
 
 Theme is a fourth, separate case: `next-themes` (`app/providers.tsx`) owns
 it entirely — it applies/removes the `dark` class, resolves `system` against
@@ -94,6 +805,15 @@ error." as its description and a longer display time; the run detail page
 (`routes/p.$projectId.runs.$runId.tsx`) shows the same message with the
 CLI's original exception text (`errorDetail`, when the API rewrote the
 message) collapsed underneath as "Original error".
+
+**Suggestion streaming.** A revision (issue #182 phase 4) has its own stream,
+`subscribeSuggestionEvents` in the same file: `GET /suggestions/{id}/events/stream`
+(`progress` events, then one terminal `done` / `failed` / `cancelled`). The browser's own
+`EventSource` reconnects with `Last-Event-ID` after an error (events already seen are dropped by
+`seq`); after two errors in a row, or a connection the browser gave up on, the stream is abandoned
+and the suggestion row is polled (`GET /comments/{id}`) until it leaves `running`, so a proxy that
+kills event streams only costs the live stage line. The stream is read-only (the progress events are
+persisted by the API, so any replica serves it); the terminal event carries the finished suggestion.
 
 ## Known limitations
 

@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { renderRouterApp } from '@/test/router-test-utils';
@@ -20,6 +21,12 @@ describe('Studio editor pane (routed, MSW-backed) — section download absent', 
       ),
     ).toBeInTheDocument();
 
-    expect(screen.queryByRole('link', { name: /download section \.md/i })).not.toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(await screen.findByRole('button', { name: 'More actions' }, LONG));
+    expect(await screen.findByRole('menuitem', { name: /copy markdown/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('menuitem', { name: /download section \.md/i }),
+    ).not.toBeInTheDocument();
   }, 15000);
 });

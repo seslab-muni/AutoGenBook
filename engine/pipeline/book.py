@@ -66,6 +66,7 @@ from engine.runner import PipelineOutcome
 from engine.spec.book_txt import BookSpec, parse_book_txt
 from engine.spec.language import detect_language, language_name, normalize_language
 from engine.spec.models import graph_from_structure, normalize_structure
+from engine.util.anchors import resolve_quote
 from engine.util.fs import atomic_write_bytes, atomic_write_json, atomic_write_text, read_json, sha256_file
 
 OUTLINE = Agent("book/outline", BookOutline, "book.outline")
@@ -600,6 +601,7 @@ class BookRun:
             node = graph.nodes[key]
             locked = self._materialize_lock(key, node, lock_data.get(key))
             if locked is not None:
+                self._anchor_reviews(key)  # review files left by an earlier run must index the lock's text
                 self.locked.add(key)
                 self.snapshot[key] = locked
                 changed = True
@@ -912,7 +914,7 @@ class BookRun:
                 "document_kind": self.doc_type,
                 "heading_rule": heading_rule(self.graph, key, allow=self.cfg.body_headings),
                 "retrieved_context": context,
-                "review_json": dumps(review.model_dump()),
+                "review_json": dumps(review.for_reviser()),
                 "section_body": body,
             }
             revision = await self.agents["reviser"].run(self.ctx.llm, values, node_key=key)
@@ -962,6 +964,7 @@ class BookRun:
         body = self._drop_invalid_citations(key, body)
         path = self.paths.section(key)
         atomic_write_text(path, body.rstrip() + "\n")
+        self._anchor_reviews(key)
         self.graph.nodes[key]["content_file_path"] = str(path.resolve())
         self.graph.save(self.paths.graph)
         self.meta.set(key, {"summary": summary, "key_terms": key_terms[:20], "citations": cited_keys(body, self.index)[:20]})
@@ -981,6 +984,57 @@ class BookRun:
         }])
         self.sink.emit("generate", f"Section {key}: removed {len(bad)} citation(s) of unknown keys", level="warning", node_key=key)
         return strip_citations(body, bad, self.index)
+
+    def _anchor_reviews(self, key: str) -> None:
+        """Resolve each issue's `quote` against the section text exactly as it
+        now lies on disk and write `start`/`end` (code points; the API reads
+        the whole file as `content_markdown`). Called after every write of
+        `sections/<key>.md`, so offsets never refer to an earlier draft: a
+        quote that no longer occurs gets null offsets, never stale ones."""
+        reviews = []
+        for revised in (False, True):
+            review_path = self.paths.review(key, revised=revised)
+            data = read_json(review_path)
+            if isinstance(data, dict):
+                reviews.append((review_path, data))
+        if not reviews:
+            return
+        path = self.paths.section(key)
+        try:
+            # exactly what `graph_import` stores: universal newlines, UTF-8
+            text: str | None = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None  # unreadable (e.g. a locked file that is not UTF-8): no offsets
+        for review_path, data in reviews:
+            touched = False
+            for issue in data.get("issues") or []:
+                if not isinstance(issue, dict):
+                    continue
+                quote = issue.get("quote")
+                if not (isinstance(quote, str) and quote.strip()):
+                    if issue.get("start") is not None or issue.get("end") is not None:
+                        issue["start"] = issue["end"] = None  # never keep offsets of another text
+                        touched = True
+                    continue
+                anchor = resolve_quote(text, quote) if text is not None else {"start": None}
+                touched = True
+                if anchor["start"] is None:
+                    issue["start"] = issue["end"] = None
+                    continue
+                # The quote becomes the text actually matched, so that
+                # text[start:end] == quote. A literal replacement pair is kept
+                # only if it still applies to that text.
+                matched = anchor["quote"]
+                source = str(issue.get("replace_from") or "")
+                if source and source not in matched:
+                    inner = resolve_quote(matched, source, fuzzy=False)
+                    if inner["start"] is None:
+                        issue["replace_from"] = issue["replace_to"] = ""
+                    else:
+                        issue["replace_from"] = inner["quote"]
+                issue["quote"], issue["start"], issue["end"] = matched, anchor["start"], anchor["end"]
+            if touched:
+                atomic_write_json(review_path, data)
 
     def _merge_review_issues(self, key: str, issues: list[dict[str, Any]], **extra: Any) -> None:
         base = read_json(self.paths.review(key, revised=True)) or read_json(self.paths.review(key)) or {"ok_to_keep": True, "issues": []}
@@ -1077,7 +1131,7 @@ class BookRun:
             "document_kind": self.doc_type,
             "heading_rule": heading_rule(self.graph, key, allow=self.cfg.body_headings),
             "retrieved_context": "(the section's citations stay valid; do not add new ones)",
-            "review_json": dumps(review.model_dump()),
+            "review_json": dumps(review.for_reviser()),
             "section_body": body,
         }
         revision = await self.agents["reviser"].run(self.ctx.llm, values, node_key=key)
@@ -1085,6 +1139,7 @@ class BookRun:
         if revised.strip():
             revised = self._drop_invalid_citations(key, revised)
             atomic_write_text(path, revised.rstrip() + "\n")
+            self._anchor_reviews(key)
             meta = self.meta.get(key) or {}
             self.meta.set(key, {**meta, "summary": revision.summary or meta.get("summary", ""), "citations": cited_keys(revised, self.index)[:20]})
             self.sink.emit("generate", f"Consistency fix applied to section '{self.graph.title(key)}'", node_key=key)

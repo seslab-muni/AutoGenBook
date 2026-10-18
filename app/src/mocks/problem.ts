@@ -9,8 +9,10 @@ export function problemResponse(
   instance: string,
   detail?: string,
   code?: string,
+  extra: Record<string, unknown> = {},
 ) {
-  const body: Problem = {
+  const body: Problem & Record<string, unknown> = {
+    ...extra,
     type: 'about:blank',
     title,
     status,

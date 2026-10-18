@@ -15,6 +15,27 @@ interface UseDebouncedMutationResult<T> {
   schedule: (value: T) => void;
   /** Cancels any pending timer and saves immediately if a value is pending. */
   flush: () => void;
+  /**
+   * While held, nothing is saved (timers and `flush` do nothing) and the pending value stays pending
+   * (status stays `dirty`): used while the user has to decide between their edits and an incoming
+   * change from elsewhere, so an autosave cannot make the decision for them. Holds are kept per
+   * `reason` (default `'default'`): saving resumes only when every reason has released its hold, so
+   * an accept in flight and a pending conflict notice cannot lift each other's.
+   */
+  hold: (held: boolean, reason?: string) => void;
+  /**
+   * Saves what is pending and resolves once nothing is pending or in flight (also when nothing was).
+   * Rejects if a save fails (the value stays pending, so the next call tries again and a draft that
+   * cannot be saved is never reported as flushed), or if saving is held while something is pending.
+   */
+  flushEdits: () => Promise<void>;
+  /** Resolves once no save is in flight (at once if none is); never rejects, whatever the save did. */
+  whenIdle: () => Promise<void>;
+  /**
+   * Drops a value that is waiting to be saved (its timer included); one already in flight finishes.
+   * A failed save's error state goes with it (the caller has decided what happens to that text).
+   */
+  cancel: () => void;
 }
 
 /**
@@ -33,6 +54,9 @@ export function useDebouncedMutation<T>({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<{ value: T } | null>(null);
   const savingRef = useRef(false);
+  const heldRef = useRef(new Set<string>());
+  const waitersRef = useRef<{ resolve: () => void; reject: (error: unknown) => void }[]>([]);
+  const idleWaitersRef = useRef<(() => void)[]>([]);
 
   // Latest `onSave`/`save` behind refs, updated in an effect rather than during
   // render: `save` recurses (a value scheduled mid-flight saves right after),
@@ -53,7 +77,7 @@ export function useDebouncedMutation<T>({
   }, []);
 
   const save = useCallback(() => {
-    if (savingRef.current || pendingRef.current === null) return;
+    if (heldRef.current.size > 0 || savingRef.current || pendingRef.current === null) return;
     const { value } = pendingRef.current;
     pendingRef.current = null;
     savingRef.current = true;
@@ -62,15 +86,22 @@ export function useDebouncedMutation<T>({
       .current(value)
       .then(() => {
         savingRef.current = false;
+        for (const idle of idleWaitersRef.current.splice(0)) idle();
         if (pendingRef.current !== null) {
           saveRef.current();
         } else {
           setStatus('saved');
+          for (const waiter of waitersRef.current.splice(0)) waiter.resolve();
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         savingRef.current = false;
+        for (const idle of idleWaitersRef.current.splice(0)) idle();
+        // The value stays pending (unless something newer replaced it): a failed save leaves the
+        // draft unsaved, and `flushEdits` must keep saying so instead of resolving over it.
+        pendingRef.current ??= { value };
         setStatus('error');
+        for (const waiter of waitersRef.current.splice(0)) waiter.reject(error);
       });
   }, []);
 
@@ -96,9 +127,43 @@ export function useDebouncedMutation<T>({
     save();
   }, [clearTimer, save]);
 
+  const hold = useCallback((held: boolean, reason = 'default') => {
+    if (held) heldRef.current.add(reason);
+    else heldRef.current.delete(reason);
+  }, []);
+
+  const flushEdits = useCallback(() => {
+    if (heldRef.current.size > 0 && pendingRef.current !== null) {
+      return Promise.reject(
+        new Error('Saving is on hold until the conflicting change is resolved.'),
+      );
+    }
+    if (!savingRef.current && pendingRef.current === null) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      waitersRef.current.push({ resolve, reject });
+      clearTimer();
+      save();
+    });
+  }, [clearTimer, save]);
+
+  const whenIdle = useCallback(
+    () =>
+      savingRef.current
+        ? new Promise<void>((resolve) => idleWaitersRef.current.push(resolve))
+        : Promise.resolve(),
+    [],
+  );
+
+  const cancel = useCallback(() => {
+    clearTimer();
+    pendingRef.current = null;
+    setStatus((current) => (current === 'dirty' || current === 'error' ? 'saved' : current));
+    if (!savingRef.current) for (const waiter of waitersRef.current.splice(0)) waiter.resolve();
+  }, [clearTimer]);
+
   // Cancel any in-flight timer on unmount — a caller that wants to persist
   // last-second edits should call `flush()` itself before unmounting.
   useEffect(() => clearTimer, [clearTimer]);
 
-  return { status, schedule, flush };
+  return { status, schedule, flush, cancel, hold, flushEdits, whenIdle };
 }

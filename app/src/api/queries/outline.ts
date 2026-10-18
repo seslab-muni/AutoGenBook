@@ -9,9 +9,11 @@ import type {
   OutlineTreeReplace,
   Page,
 } from '@/api/types';
+import { sha256Hex } from '@/lib/content-hash';
 import { assignPositions, descendantIds, nextOrderIndex } from '@/features/outline/model';
 import { mergeSourceScope } from '@/features/outline/source-scope';
 
+import { COLLABORATION_POLL_MS } from './comments';
 import { projectKeys } from './keys';
 
 type OutlineFlatSnapshot = [readonly unknown[], Page<OutlineNode> | undefined][];
@@ -68,6 +70,8 @@ export const outline = {
   flat: (projectId: string, params: { limit?: number; offset?: number } = {}) =>
     queryOptions({
       queryKey: [...projectKeys.outlineList(projectId, 'flat'), params],
+      // The row badges (open comments, pending suggestions) change when other people act.
+      refetchInterval: COLLABORATION_POLL_MS,
       queryFn: async () => {
         const page = await unwrap(
           apiClient.GET('/api/v1/projects/{project_id}/outline', {
@@ -194,9 +198,48 @@ export function useCreateOutlineNodeMutation(projectId: string) {
  * rolls back on error. On success: updates the node's own cache entry and
  * invalidates the flat/tree list views.
  */
-export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) {
+/**
+ * Fields the server recomputes from a PATCH (`OutlineService.update`), per field of the request:
+ * a node's cache entry takes these from the response alongside the fields the PATCH sent.
+ */
+const SERVER_DERIVED_FIELDS: Partial<Record<keyof OutlineNodeUpdate, (keyof OutlineNode)[]>> = {
+  contentMarkdown: ['contentLocked', 'actualWords', 'status', 'contentHash'],
+  contentLatex: ['contentLocked', 'actualWords', 'status'],
+  targetPages: ['wordBudget'],
+  parentId: ['parentId', 'orderIndex', 'sectionNumber', 'level'],
+  orderIndex: ['parentId', 'orderIndex', 'sectionNumber', 'level'],
+  sourceScope: ['sourceScope', 'sourceIds'],
+  sourceIds: ['sourceScope', 'sourceIds'],
+};
+
+/**
+ * The `contentHash` of the section text this client last saw the server hold (the single-node
+ * cache entry, which every content PATCH and accepted suggestion keeps current): what an autosave or
+ * an accept sends as `expectedContentHash`. Falls back to hashing the cached server text (exactly as
+ * the server stored it, line endings included) where a response carried no hash; `undefined` when
+ * the section is not cached or hashing is unavailable.
+ */
+export async function baseContentHash(
+  queryClient: QueryClient,
+  projectId: string,
+  nodeId: string,
+): Promise<string | undefined> {
+  const node = queryClient.getQueryData<OutlineNode>(projectKeys.outlineNode(projectId, nodeId));
+  if (!node) return undefined;
+  if (node.contentHash) return node.contentHash;
+  return (await sha256Hex(node.contentMarkdown)) ?? undefined;
+}
+
+export function useUpdateOutlineNodeMutation(
+  projectId: string,
+  nodeId: string,
+  { handlesErrors = false }: { handlesErrors?: boolean } = {},
+) {
   const queryClient = useQueryClient();
   return useMutation({
+    // The editor's autosave shows its own failures (the save badge, a message under the toolbar, the
+    // "changed elsewhere" notice for a conflict); a raw toast on top would contradict Keep mine.
+    ...(handlesErrors ? { meta: { handlesErrors: true } } : {}),
     mutationFn: (body: OutlineNodeUpdate) =>
       unwrap(
         apiClient.PATCH('/api/v1/projects/{project_id}/outline/{node_id}', {
@@ -206,15 +249,25 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
       ),
     onMutate: async (body) => {
       await queryClient.cancelQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
+      // A section fetch that started before this save must not land after it and put the old text
+      // (and its hash) back over what the save returns.
+      if (body.contentMarkdown !== undefined) {
+        await queryClient.cancelQueries({ queryKey: projectKeys.outlineNode(projectId, nodeId) });
+      }
       const previous = snapshotFlat(queryClient, projectId);
       patchFlat(queryClient, projectId, (items) => {
         const current = items.find((item) => item.id === nodeId);
         if (!current) return items;
 
         const contentMarkdown = body.contentMarkdown ?? current.contentMarkdown;
+        // A request-only guard, not a node field.
+        const { expectedContentHash: _guard, ...fields } = body;
+        void _guard;
         const merged: OutlineNode = {
           ...current,
-          ...body,
+          ...fields,
+          // The list rows carry no hash; the one the server returns arrives with the response.
+          ...(body.contentMarkdown !== undefined ? { contentHash: null } : {}),
           parentId: body.parentId ?? current.parentId,
           orderIndex: body.orderIndex ?? current.orderIndex,
           title: body.title ?? current.title,
@@ -261,10 +314,39 @@ export function useUpdateOutlineNodeMutation(projectId: string, nodeId: string) 
     onError: (_error, _body, context) => {
       if (context) restoreFlat(queryClient, context.previous);
     },
-    onSuccess: (node) => {
-      queryClient.setQueryData(projectKeys.outlineNode(projectId, nodeId), node);
+    onSuccess: async (node, body) => {
+      // A section fetch that started while this save was in flight answers with the text from before
+      // it: cancelled here (the `onMutate` cancel only covers fetches that began earlier), so it can
+      // neither land after the save nor be adopted by the editor as "the server's version".
+      if (body.contentMarkdown !== undefined) {
+        await queryClient.cancelQueries({ queryKey: projectKeys.outlineNode(projectId, nodeId) });
+      }
+      // Merge only what this PATCH sent (plus what the server derives from it) over the cached
+      // node: two PATCHes can be in flight at once (an autosave and a lock toggle), and a late
+      // response carrying the other one's older fields must not overwrite them.
+      const touched = new Set<keyof OutlineNode>(
+        (Object.keys(body) as (keyof OutlineNodeUpdate)[]).filter(
+          (key) => key !== 'expectedContentHash',
+        ) as (keyof OutlineNode)[],
+      );
+      for (const key of Object.keys(body) as (keyof OutlineNodeUpdate)[]) {
+        for (const derived of SERVER_DERIVED_FIELDS[key] ?? []) touched.add(derived);
+      }
+      queryClient.setQueryData<OutlineNode>(projectKeys.outlineNode(projectId, nodeId), (old) => {
+        if (!old) return node;
+        const merged: Record<string, unknown> = { ...old, updatedAt: node.updatedAt };
+        for (const key of touched) merged[key] = node[key];
+        return merged as unknown as OutlineNode;
+      });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'flat') });
       void queryClient.invalidateQueries({ queryKey: projectKeys.outlineList(projectId, 'tree') });
+      // The server re-anchors the section's comments on every content save (issue #182): pick up
+      // their new positions, and the open/orphaned status that goes with them.
+      if (body.contentMarkdown !== undefined) {
+        void queryClient.invalidateQueries({
+          queryKey: projectKeys.nodeComments(projectId, nodeId),
+        });
+      }
     },
   });
 }
@@ -360,24 +442,6 @@ export function useDeleteOutlineNodeMutation(projectId: string) {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
-    },
-  });
-}
-
-/** On success: invalidates the outline (node status flips to `drafting`) and the project's run list. */
-export function useRegenerateOutlineNodeMutation(projectId: string, nodeId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (promptModifier?: string) =>
-      unwrap(
-        apiClient.POST('/api/v1/projects/{project_id}/outline/{node_id}/regenerate', {
-          params: { path: { project_id: projectId, node_id: nodeId } },
-          body: promptModifier !== undefined ? { promptModifier } : {},
-        }),
-      ),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: projectKeys.outline(projectId) });
-      void queryClient.invalidateQueries({ queryKey: projectKeys.runs(projectId) });
     },
   });
 }
